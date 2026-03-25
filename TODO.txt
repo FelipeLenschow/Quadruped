@@ -1,0 +1,19 @@
+Add a input variable to controll the swing height and the base height
+Add a point cloud of the terrain as input
+Add a friction variable to controll the friction of the terrain
+Add a noise variable to controll the noise of the sensors
+Add a way to recouver from a fall
+- Add friction variation of the actuators
+- Add a foot height reward
+- Add a robot variation during training
+- Make the foot height not influence the standing phase
+Add a automatic rename to trained agents via launcher
+Add a way to change the timestep from trainer via launcher
+
+
+
+
+
+cp5: Added sensor noise
+cp6: Added friction, foot height reward, robot variation
+cp7: penalize for lifting foot while standing
