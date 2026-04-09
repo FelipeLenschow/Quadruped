@@ -1,0 +1,157 @@
+import os
+import torch
+import torch.nn as nn
+import numpy as np
+
+# Rotation helper
+def quat_to_rot_matrix(q):
+    """(w, x, y, z) -> [3,3] matrix"""
+    w, x, y, z = q
+    return np.array([
+        [1 - 2*y**2 - 2*z**2, 2*x*y - 2*w*z, 2*x*z + 2*w*y],
+        [2*x*y + 2*w*z, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*w*x],
+        [2*x*z - 2*w*y, 2*y*z + 2*w*x, 1 - 2*x**2 - 2*y**2]
+    ])
+
+class RunningStandardScaler(nn.Module):
+    def __init__(self, size, device):
+        super().__init__()
+        self.register_buffer("running_mean", torch.zeros(size))
+        self.register_buffer("running_variance", torch.ones(size))
+        self.register_buffer("current_count", torch.ones(()))
+
+    def forward(self, x):
+        return (x - self.running_mean) / torch.sqrt(self.running_variance + 1e-8)
+
+class PolicyMLP(nn.Module):
+    def __init__(self, obs_dim, layers, action_dim):
+        super().__init__()
+        network_layers = []
+        last_dim = obs_dim
+        for l in layers:
+            network_layers.append(nn.Linear(last_dim, l))
+            network_layers.append(nn.ELU())
+            last_dim = l
+        self.net_container = nn.Sequential(*network_layers)
+        self.policy_layer = nn.Linear(last_dim, action_dim)
+
+    def forward(self, x):
+        x = self.net_container(x)
+        return self.policy_layer(x)
+
+class PolicyRunner:
+    def __init__(self, checkpoint_path, device="cpu"):
+        self.device = device
+        self.obs_dim, self.layers = self._inspect_checkpoint(checkpoint_path)
+        self.action_dim = 12
+        self.action_scale = 0.25
+        
+        print(f"[PolicyRunner] Initializing with OBS_DIM={self.obs_dim}, layers={self.layers}")
+        
+        self.policy = PolicyMLP(self.obs_dim, self.layers, self.action_dim).to(self.device).eval()
+        self.scaler = RunningStandardScaler(self.obs_dim, self.device).to(self.device)
+        
+        self._load_checkpoint(checkpoint_path)
+
+    def _inspect_checkpoint(self, path):
+        """Detect obs_dim and layer sizes from checkpoint keys and shapes."""
+        obs_dim = 236
+        layers = [512, 256, 128] # Default fallback
+        try:
+            data = torch.load(path, map_location="cpu")
+            policy_state = data.get("policy", {})
+            
+            # Detect OBS_DIM from first layer
+            for k, v in policy_state.items():
+                if "net" in k and "0.weight" in k:
+                    obs_dim = v.shape[1]
+                    break
+            
+            # Detect layers
+            layer_sizes = []
+            i = 0
+            while True:
+                key = f"net_container.{i}.weight"
+                if key in policy_state:
+                    layer_sizes.append(policy_state[key].shape[0])
+                    i += 2 # Skip activation
+                else:
+                    break
+            if layer_sizes:
+                layers = layer_sizes
+                
+        except Exception as e:
+            print(f"[PolicyRunner] Warning: Inspection failed: {e}")
+        return obs_dim, layers
+
+    def _load_checkpoint(self, path):
+        print(f"[PolicyRunner] Loading checkpoint weights...")
+        data = torch.load(path, map_location=self.device)
+        
+        # Load policy
+        policy_state = data.get("policy", {})
+        # Map keys robustly
+        net_keys = {}
+        for k, v in policy_state.items():
+            if "net" in k or "policy" in k:
+                # Remove prefixes like '_model.' if present
+                clean_key = k.split("_model.")[-1]
+                net_keys[clean_key] = v
+        
+        self.policy.load_state_dict(net_keys, strict=False)
+        
+        # Load scaler
+        scaler_state = data.get("running_standard_scaler") or data.get("state_preprocessor")
+        if scaler_state:
+            self.scaler.load_state_dict(scaler_state)
+            print("[PolicyRunner] Loaded obs scaler")
+
+    def build_obs(self, state, commands, last_actions, desired_qpos, mj_to_isaac):
+        """
+        Generic observation builder that works with LowState (Real or Mock).
+        state: object with imu.quaternion, base_lin_vel, imu.gyroscope, motorState[...]
+        """
+        # Base quaternion (w, x, y, z)
+        quat = state.imu.quaternion
+        R = quat_to_rot_matrix(quat)
+
+        # Body frame velocities
+        lin_vel_b = state.base_lin_vel
+        ang_vel_b = state.imu.gyroscope
+
+        # Projected gravity
+        gravity_w = np.array([0.0, 0.0, -1.0])
+        proj_grav = R.T @ gravity_w
+
+        # Joint states
+        num_joints = len(mj_to_isaac)
+        mj_qpos = np.array([state.motorState[i].q for i in range(num_joints)])
+        mj_qvel = np.array([state.motorState[i].dq for i in range(num_joints)])
+        jpos_isaac = mj_qpos[mj_to_isaac]
+        jvel_isaac = mj_qvel[mj_to_isaac]
+
+        obs_parts = [
+            lin_vel_b,
+            ang_vel_b,
+            proj_grav,
+            commands,
+            jpos_isaac - desired_qpos,
+            jvel_isaac,
+            last_actions,
+        ]
+
+        if self.obs_dim != 49:
+            # Height scan fallback for simulation (not available on real robot without sensor)
+            h_val = 0.0 - state.base_pos[2] if hasattr(state, "base_pos") else -0.3
+            hscan = np.full(187, h_val, dtype=np.float32)
+            obs_parts.append(hscan)
+
+        obs = np.concatenate(obs_parts).astype(np.float32)
+        return obs
+
+    def get_action(self, obs_np):
+        obs_t = torch.from_numpy(obs_np).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            obs_norm = self.scaler(obs_t)
+            action_t = self.policy(obs_norm)
+        return action_t.squeeze(0).cpu().numpy()
