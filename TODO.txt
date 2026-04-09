@@ -9,6 +9,7 @@ Add a way to recouver from a fall
 - Make the foot height not influence the standing phase
 Add a automatic rename to trained agents via launcher
 Add a way to change the timestep from trainer via launcher
+Add a way to open 3 robots at once in mujoco
 
 
 

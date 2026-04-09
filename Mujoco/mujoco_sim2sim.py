@@ -59,7 +59,7 @@ args = parser.parse_args()
 
 # ── Constants matching Isaac Lab training ──────────────────────────────────────
 
-OBS_DIM = 49
+OBS_DIM = int(os.environ.get("QUADRUPED_OBS_DIM", 236))
 ACTION_DIM = 12
 ACTION_SCALE = 0.25
 DECIMATION = 20  # physics steps per policy step
@@ -295,7 +295,7 @@ def build_obs(
     desired_qpos: np.ndarray,
     num_joints: int,
 ) -> np.ndarray:
-    """Build a 49-dim obs vector matching Isaac Lab's _get_observations()."""
+    """Build a 236-dim obs vector matching Isaac Lab's _get_observations()."""
 
     # Base quaternion (w, x, y, z) in MuJoCo
     quat = data.qpos[3:7]
@@ -318,17 +318,22 @@ def build_obs(
     jpos_isaac = mj_qpos[mj_to_isaac]  # [12]
     jvel_isaac = mj_qvel[mj_to_isaac]  # [12]
 
-    obs = np.concatenate(
-        [
-            lin_vel_b,  # [3]
-            ang_vel_b,  # [3]
-            proj_grav,  # [3]
-            commands,  # [4]  vx, vy, wz, 0
-            jpos_isaac - desired_qpos,  # [12] Position relative to default (fixed)
-            jvel_isaac,  # [12]
-            last_actions,  # [12]
-        ]
-    )  # total = 49
+    obs_parts = [
+        lin_vel_b,  # [3]
+        ang_vel_b,  # [3]
+        proj_grav,  # [3]
+        commands,  # [4]  vx, vy, wz, 0
+        jpos_isaac - desired_qpos,  # [12] Position relative to default (fixed)
+        jvel_isaac,  # [12]
+        last_actions,  # [12]
+    ]
+
+    if OBS_DIM != 49:
+        # Height scan (flat plane at z=0)
+        hscan = np.full(187, 0.0 - data.qpos[2], dtype=np.float32)
+        obs_parts.append(hscan)
+
+    obs = np.concatenate(obs_parts)
     return obs.astype(np.float32)
 
 
@@ -510,7 +515,9 @@ def main():
         print(
             f"[Sim2Sim] act_net not found: {act_net_path} — Falling back to unitree_quadruped.pt"
         )
-        act_net = torch.jit.load(str(Path(__file__).parent / "unitree_quadruped.pt"), map_location="cpu").eval()
+        act_net = torch.jit.load(
+            str(Path(__file__).parent / "unitree_quadruped.pt"), map_location="cpu"
+        ).eval()
 
     pos_err_hist = np.zeros((3, 12), dtype=np.float32)
     vel_hist = np.zeros((3, 12), dtype=np.float32)

@@ -4,22 +4,46 @@ import glob
 import subprocess
 
 
+TASKS_DIR = "IsaacLab_Tasks"
+
+
 def run_cli_menu():
     print("\n" + "=" * 50)
     print(" Quadruped Unified Launcher")
     print("=" * 50 + "\n")
 
-    # 0. Selection: Walk or Handstand
-    print("Select Module:")
-    print("  [1] Walk")
-    print("  [2] Handstand")
-    mod_idx = input("Enter choice [1-2] (default 1): ").strip()
-    if mod_idx == "2":
-        selected_module = "Handstand"
-    else:
-        selected_module = "Walk"
+    # 0. Selection: Dynamic Module Detection
+    if not os.path.exists(TASKS_DIR):
+        print(f"[ERROR] Tasks directory '{TASKS_DIR}' not found.")
+        sys.exit(1)
 
-    print(f"\n--- Operating on {selected_module} ---\n")
+    available_modules = [
+        d
+        for d in os.listdir(TASKS_DIR)
+        if os.path.isdir(os.path.join(TASKS_DIR, d)) and not d.startswith(".")
+    ]
+    available_modules.sort()
+
+    if not available_modules:
+        print(f"[ERROR] No task modules found in {TASKS_DIR}/")
+        sys.exit(1)
+
+    print("Select Module:")
+    for i, m in enumerate(available_modules):
+        print(f"  [{i+1}] {m}")
+
+    mod_idx = input(f"Enter choice [1-{len(available_modules)}] (default 1): ").strip()
+    try:
+        idx = int(mod_idx) - 1
+        if not (0 <= idx < len(available_modules)):
+            idx = 0
+    except ValueError:
+        idx = 0
+
+    selected_module_name = available_modules[idx]
+    selected_module_path = os.path.join(TASKS_DIR, selected_module_name)
+
+    print(f"\n--- Operating on {selected_module_name} ---\n")
 
     # 1. Action
     tp = input(
@@ -69,19 +93,9 @@ def run_cli_menu():
         _, selected_terrain = TERRAIN_CHOICES[ter_idx]
 
     # 4. Num Envs
-    if action == "train":
-        default_envs = "2000"
-    elif action == "isaac":
-        default_envs = "6"
-    elif action == "mujoco":
-        default_envs = "1"
-    else:
-        default_envs = "100"
     num_envs = input(
-        f"\nEnter number of environments (default {default_envs}): "
+        "\nEnter number of environments (leave blank to use config default): "
     ).strip()
-    if not num_envs:
-        num_envs = default_envs
 
     selected_ckpt = None
     teleop = False
@@ -90,7 +104,7 @@ def run_cli_menu():
     # 5. Checkpoint Selection
     checkpoint_paths = glob.glob(
         os.path.join(
-            selected_module,
+            selected_module_path,
             "logs",
             "skrl",
             "quadruped_direct",
@@ -105,7 +119,7 @@ def run_cli_menu():
 
     if needs_ckpt and not checkpoint_paths:
         print(
-            f"\n[ERROR] No best_agent.pt checkpoints found in {selected_module}/logs/skrl/quadruped_direct/"
+            f"\n[ERROR] No best_agent.pt checkpoints found in {selected_module_path}/logs/skrl/quadruped_direct/"
         )
         sys.exit(1)
 
@@ -149,7 +163,8 @@ def run_cli_menu():
         headless = h_input != "n"
 
     return (
-        selected_module,
+        selected_module_name,
+        selected_module_path,
         action,
         selected_robot_cfg,
         selected_terrain,
@@ -161,18 +176,18 @@ def run_cli_menu():
 
 
 if __name__ == "__main__":
-    module, action, robot_cfg, terrain_cfg, num_envs, ckpt, teleop, headless = (
+    module_name, module_path, action, robot_cfg, terrain_cfg, num_envs, ckpt, teleop, headless = (
         run_cli_menu()
     )
 
     print(f"\n{'='*50}")
-    print(f"Launching {action.upper()} Mode for {module}!")
+    print(f"Launching {action.upper()} Mode for {module_name}!")
     if robot_cfg:
         print(f"Robot:    {robot_cfg}")
     else:
         print(f"Robots:   A1 + Go1 + Go2 (Sim2Sim)")
     print(f"Terrain:  {terrain_cfg}")
-    print(f"Envs:     {num_envs}")
+    print(f"Envs:     {num_envs if num_envs else 'Config Default'}")
     if action in ("isaac", "mujoco"):
         print(f"Checkpoint: {ckpt}")
         print(f"Teleop:   {teleop}")
@@ -182,14 +197,36 @@ if __name__ == "__main__":
 
     # Prepare environment
     env = os.environ.copy()
-    env["QUADRUPED_TERRAIN"] = terrain_cfg
     env["QUADRUPED_TELEOP"] = "1" if teleop else "0"
     if robot_cfg:
         env["QUADRUPED_ROBOT"] = robot_cfg
 
     # Ensure the correct source directory is in PYTHONPATH so 'import Quadruped.tasks' works
-    source_dir = os.path.abspath(os.path.join(module, "source", "Quadruped"))
-    env["PYTHONPATH"] = source_dir + os.pathsep + env.get("PYTHONPATH", "")
+    source_dir = os.path.abspath(os.path.join(module_path, "source", "Quadruped"))
+    if os.path.exists(source_dir):
+        env["PYTHONPATH"] = source_dir + os.pathsep + env.get("PYTHONPATH", "")
+
+    # Dynamic observation space detection
+    if ckpt and os.path.exists(ckpt):
+        try:
+            import torch
+
+            data = torch.load(ckpt, map_location="cpu")
+            # skrl stores weights in 'policy.net.0.weight' or 'policy.net_container.0.weight'
+            # We check the input dimension (last element of shape)
+            policy_state = data.get("policy", {})
+            obs_dim = 236  # Default
+            for k, v in policy_state.items():
+                if "net" in k and hasattr(v, "shape") and len(v.shape) == 2:
+                    obs_dim = v.shape[1]
+                    break
+            print(f"[INFO] Detected observation dimension from checkpoint: {obs_dim}")
+            env["QUADRUPED_OBS_DIM"] = str(obs_dim)
+        except Exception as e:
+            print(f"[WARNING] Could not inspect checkpoint dimensions: {e}")
+
+    # Prepare environment
+    env["QUADRUPED_TERRAIN"] = terrain_cfg
 
     if action == "train":
         script_path = os.path.join("scripts", "skrl", "train.py")
@@ -198,10 +235,10 @@ if __name__ == "__main__":
             sys.executable,
             script_path,
             f"--task={task}",
-            f"--num_envs={num_envs}",
         ]
+        if num_envs:
+            cmd.append(f"--num_envs={num_envs}")
         if ckpt:
-            # Checkpoint is already relative to root, needs to be relative to module or absolute
             abs_ckpt = os.path.abspath(ckpt)
             cmd.append(f"--checkpoint={abs_ckpt}")
         if headless:
@@ -228,11 +265,12 @@ if __name__ == "__main__":
             sys.executable,
             script_path,
             f"--task={task}",
-            f"--num_envs={num_envs}",
         ]
+        if num_envs:
+            cmd.append(f"--num_envs={num_envs}")
         if ckpt:
             abs_ckpt = os.path.abspath(ckpt)
             cmd.append(f"--checkpoint={abs_ckpt}")
 
-    print(f"[INFO] Executing in {module}: {' '.join(cmd)}")
-    subprocess.run(cmd, env=env, cwd=module)
+    print(f"[INFO] Executing in {module_path}: {' '.join(cmd)}")
+    subprocess.run(cmd, env=env, cwd=module_path)
