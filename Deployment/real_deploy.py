@@ -23,7 +23,7 @@ except ImportError:
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-CHECKPOINT = "checkpoints/best_agent.pt"
+CHECKPOINT = "policy_walk_jit.pt"
 ACTUATOR_NET = "unitree_quadruped.pt"
 DECIMATION = 20
 ACTION_SCALE = 0.25
@@ -36,13 +36,23 @@ ISAAC_TO_REAL = [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8]
 REAL_TO_ISAAC = [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8] # Inverted mapping
 
 def main():
-    # 1. Initialize Policy Runner
-    if not os.path.exists(CHECKPOINT):
-        print(f"[Error] Checkpoint not found: {CHECKPOINT}")
+    # Default to the JIT file in the Deployment folder
+    checkpoint_abs = os.path.join(os.path.dirname(__file__), CHECKPOINT)
+    if not os.path.exists(checkpoint_abs):
+        print(f"[Error] Checkpoint not found: {checkpoint_abs}")
         return
     
-    runner = PolicyRunner(CHECKPOINT)
-    act_net = torch.jit.load(ACTUATOR_NET, map_location="cpu").eval()
+    # Set OBS_DIM based on the policy type (Walk=49, Stairs=236)
+    os.environ["QUADRUPED_OBS_DIM"] = "49" if "walk" in CHECKPOINT else "236"
+    runner = PolicyRunner(checkpoint_abs)
+    
+    # Load Actuator Net
+    act_net_abs = os.path.join(os.path.dirname(__file__), ACTUATOR_NET)
+    if os.path.exists(act_net_abs):
+        act_net = torch.jit.load(act_net_abs, map_location="cpu").eval()
+    else:
+        print(f"[Warning] ActuatorNet not found at {act_net_abs}. Falling back to PD.")
+        act_net = None
 
     # 2. Initialize Unitree SDK
     UDP_ADDR = "192.168.123.10"

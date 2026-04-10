@@ -2,6 +2,7 @@
 """
 MuJoCo Sim2Sim: uses a standalone PolicyRunner and a Mock Unitree SDK.
 Allows the exact same deployment logic to be used in simulation and hardware.
+Aligned with Gazebo Sim2Sim for consistent I/O.
 """
 
 import argparse
@@ -143,8 +144,12 @@ def main():
 
     # Load policy and ActuatorNet
     runner = PolicyRunner(args.checkpoint)
+    
+    # Try local first, then shared Deployment folder
     act_net_path = Path(__file__).parent / f"unitree_{args.robot}.pt"
-    if not act_net_path.exists(): act_net_path = Path(__file__).parent / "unitree_quadruped.pt"
+    if not act_net_path.exists():
+        act_net_path = Path(__file__).parent.parent / "Deployment" / "unitree_quadruped.pt"
+    
     print(f"[Sim2Sim] Loading ActuatorNet: {act_net_path}")
     act_net = torch.jit.load(str(act_net_path), map_location="cpu").eval()
 

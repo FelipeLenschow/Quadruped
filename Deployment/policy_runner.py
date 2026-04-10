@@ -42,8 +42,38 @@ class PolicyMLP(nn.Module):
 class PolicyRunner:
     def __init__(self, checkpoint_path, device="cpu"):
         self.device = device
-        self.obs_dim, self.layers = self._inspect_checkpoint(checkpoint_path)
-        self.action_dim = 12
+        self.checkpoint_path = checkpoint_path
+        self.is_jit = checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path)
+        
+        if self.is_jit:
+            print(f"[PolicyRunner] Loading JIT model from {checkpoint_path}")
+            self.policy_jit = torch.jit.load(checkpoint_path, map_location=device)
+            # Detect obs_dim from JIT model if possible, or fallback
+            self.obs_dim = self._detect_jit_obs_dim(self.policy_jit)
+            self.action_dim = 12
+        else:
+            self.obs_dim, self.layers = self._inspect_checkpoint(checkpoint_path)
+            self.action_dim = 12
+            self.action_scale = 0.25
+            
+            print(f"[PolicyRunner] Initializing with OBS_DIM={self.obs_dim}, layers={self.layers}")
+            
+            self.policy = PolicyMLP(self.obs_dim, self.layers, self.action_dim).to(self.device).eval()
+            self.scaler = RunningStandardScaler(self.obs_dim, self.device).to(self.device)
+            
+            self._load_checkpoint(checkpoint_path)
+
+    def _check_is_jit(self, path):
+        try:
+            torch.jit.load(path, map_location="cpu")
+            return True
+        except:
+            return False
+
+    def _detect_jit_obs_dim(self, model):
+        # Infer obs_dim from the model's forward signature or weight shape if possible
+        # For now, we rely on the environment variable or common defaults
+        return int(os.environ.get("QUADRUPED_OBS_DIM", 49))
         self.action_scale = 0.25
         
         print(f"[PolicyRunner] Initializing with OBS_DIM={self.obs_dim}, layers={self.layers}")
@@ -146,12 +176,20 @@ class PolicyRunner:
             hscan = np.full(187, h_val, dtype=np.float32)
             obs_parts.append(hscan)
 
+        # Debug print once
+        if not hasattr(self, "_obs_debug_done"):
+            print(f"[PolicyRunner] Obs Parts Lengths: {[len(p) for p in obs_parts]} (Sum: {sum(len(p) for p in obs_parts)})")
+            self._obs_debug_done = True
+
         obs = np.concatenate(obs_parts).astype(np.float32)
         return obs
 
     def get_action(self, obs_np):
         obs_t = torch.from_numpy(obs_np).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            obs_norm = self.scaler(obs_t)
-            action_t = self.policy(obs_norm)
+            if self.is_jit:
+                action_t = self.policy_jit(obs_t)
+            else:
+                obs_norm = self.scaler(obs_t)
+                action_t = self.policy(obs_norm)
         return action_t.squeeze(0).cpu().numpy()

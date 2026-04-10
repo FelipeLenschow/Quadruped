@@ -50,12 +50,15 @@ def run_cli_menu():
         "Select Action:\n  [1] Train\n"
         "  [2] Play IsaacSim\n"
         "  [3] Play MuJoCo\n"
-        "Enter choice [1-3] (default 2): "
+        "  [4] Play Gazebo\n"
+        "Enter choice [1-4] (default 2): "
     ).strip()
     if tp == "1":
         action = "train"
     elif tp == "3":
         action = "mujoco"
+    elif tp == "4":
+        action = "gazebo"
     else:
         action = "isaac"
 
@@ -115,7 +118,7 @@ def run_cli_menu():
     )
     checkpoint_paths.sort(reverse=True)
 
-    needs_ckpt = action in ("isaac", "mujoco")
+    needs_ckpt = action in ("isaac", "mujoco", "gazebo")
 
     if needs_ckpt and not checkpoint_paths:
         print(
@@ -155,7 +158,7 @@ def run_cli_menu():
             except ValueError:
                 selected_ckpt = None
 
-    if action in ("isaac", "mujoco"):
+    if action in ("isaac", "mujoco", "gazebo"):
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
     else:
@@ -188,7 +191,7 @@ if __name__ == "__main__":
         print(f"Robots:   A1 + Go1 + Go2 (Sim2Sim)")
     print(f"Terrain:  {terrain_cfg}")
     print(f"Envs:     {num_envs if num_envs else 'Config Default'}")
-    if action in ("isaac", "mujoco"):
+    if action in ("isaac", "mujoco", "gazebo"):
         print(f"Checkpoint: {ckpt}")
         print(f"Teleop:   {teleop}")
     else:
@@ -255,6 +258,22 @@ if __name__ == "__main__":
         cmd = [
             sys.executable,
             abs_mujoco_script,
+            f"--checkpoint={abs_ckpt}",
+            f"--robot={robot_key}",
+        ]
+    elif action == "gazebo":
+        robot_key = {
+            "UNITREE_A1_CFG": "a1",
+            "UNITREE_GO1_CFG": "go1",
+            "UNITREE_GO2_CFG": "go2",
+        }.get(robot_cfg or "", "go1")
+        abs_gazebo_script = os.path.abspath(os.path.join("Gazebo", "gazebo_sim2sim.py"))
+        abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
+        # Gazebo bindings are built for the system python (3.10)
+        # env_isaacsim is 3.11+ and incompatible.
+        cmd = [
+            "/usr/bin/python3",
+            abs_gazebo_script,
             f"--checkpoint={abs_ckpt}",
             f"--robot={robot_key}",
         ]
