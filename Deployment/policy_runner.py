@@ -40,9 +40,11 @@ class PolicyMLP(nn.Module):
         return self.policy_layer(x)
 
 class PolicyRunner:
-    def __init__(self, checkpoint_path, device="cpu"):
+    def __init__(self, checkpoint_path, obs_dim=None, robot_type="go1", device="cpu"):
         self.device = device
         self.checkpoint_path = checkpoint_path
+        self.robot_type = robot_type
+        self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 49))
         self.is_jit = checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path)
         
         if self.is_jit:

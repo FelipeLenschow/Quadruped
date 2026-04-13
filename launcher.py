@@ -64,19 +64,18 @@ def run_cli_menu():
 
     # 2. Robot selection
     selected_robot_cfg = None
-    if action != "isaac":
+    if action != "isaac" and action != "train":
         ROBOT_CHOICES = {
-            "1": ("All (A1, Go1, and Go2)", "RANDOM"),
-            "2": ("Unitree A1", "UNITREE_A1_CFG"),
-            "3": ("Unitree Go1", "UNITREE_GO1_CFG"),
-            "4": ("Unitree Go2", "UNITREE_GO2_CFG"),
+            "1": ("Unitree A1", "UNITREE_A1_CFG"),
+            "2": ("Unitree Go1", "UNITREE_GO1_CFG"),
+            "3": ("Unitree Go2", "UNITREE_GO2_CFG"),
         }
         print("\nSelect Robot Configuration:")
         for key, (name, _) in ROBOT_CHOICES.items():
             print(f"  [{key}] {name}")
-        rob_idx = input("Enter choice [1-4] (default 1): ").strip()
+        rob_idx = input("Enter choice [1-3] (default 2 for Go1): ").strip()
         if not rob_idx or rob_idx not in ROBOT_CHOICES:
-            rob_idx = "1"
+            rob_idx = "2"
         _, selected_robot_cfg = ROBOT_CHOICES[rob_idx]
 
     # 3. Terrain
@@ -209,6 +208,29 @@ if __name__ == "__main__":
     if os.path.exists(source_dir):
         env["PYTHONPATH"] = source_dir + os.pathsep + env.get("PYTHONPATH", "")
 
+    # Environment Sanitization for ROS 2 Bridges (MuJoCo/Gazebo)
+    # This prevents pollution from Isaac Sim's site-packages (Python 3.11)
+    # when we want to use the system ROS 2 (Python 3.10)
+    if action in ("mujoco", "gazebo"):
+        # Ensure ROS 2 standard paths are present (Humble uses dist-packages)
+        ros_python_path = "/opt/ros/humble/local/lib/python3.10/dist-packages"
+        if ros_python_path not in env.get("PYTHONPATH", ""):
+            env["PYTHONPATH"] = ros_python_path + os.pathsep + env.get("PYTHONPATH", "")
+
+        # Add fallback just in case
+        fallback_path = "/opt/ros/humble/lib/python3.10/site-packages"
+        if fallback_path not in env.get("PYTHONPATH", ""):
+            env["PYTHONPATH"] = env.get("PYTHONPATH", "") + os.pathsep + fallback_path
+
+        # Unset virtualenv variables that might confuse the system python
+        env.pop("VIRTUAL_ENV", None)
+        env.pop("PYTHONHOME", None)
+        # VDI Fixes for Gazebo/ROS 2
+        env["FORCE_SOFTWARE_RENDER"] = "1"
+        env["GZ_PARTITION"] = "quadruped_sim"
+        # GZ_HEADLESS=1 can be used to disable GUI for performance
+        # env["GZ_HEADLESS"] = "1" 
+
     # Dynamic observation space detection
     if ckpt and os.path.exists(ckpt):
         try:
@@ -252,14 +274,17 @@ if __name__ == "__main__":
             "UNITREE_GO1_CFG": "go1",
             "UNITREE_GO2_CFG": "go2",
         }.get(robot_cfg or "", "go1")
-        # MuJoCo script is in the Mujoco/ directory
-        abs_mujoco_script = os.path.abspath(os.path.join("Mujoco", "mujoco_sim2sim.py"))
+        # Use Unified Policy Bridge
+        bridge_script = os.path.abspath(os.path.join("Deployment", "policy_bridge.py"))
         abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
         cmd = [
-            sys.executable,
-            abs_mujoco_script,
+            "/usr/bin/python3",
+            bridge_script,
             f"--checkpoint={abs_ckpt}",
             f"--robot={robot_key}",
+            f"--obs_dim={env.get('QUADRUPED_OBS_DIM', '49')}",
+            "--backend=sim",
+            "--sim=mujoco"
         ]
     elif action == "gazebo":
         robot_key = {
@@ -267,15 +292,17 @@ if __name__ == "__main__":
             "UNITREE_GO1_CFG": "go1",
             "UNITREE_GO2_CFG": "go2",
         }.get(robot_cfg or "", "go1")
-        abs_gazebo_script = os.path.abspath(os.path.join("Gazebo", "gazebo_sim2sim.py"))
+        # Use Unified Policy Bridge
+        bridge_script = os.path.abspath(os.path.join("Deployment", "policy_bridge.py"))
         abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
-        # Gazebo bindings are built for the system python (3.10)
-        # env_isaacsim is 3.11+ and incompatible.
         cmd = [
             "/usr/bin/python3",
-            abs_gazebo_script,
+            bridge_script,
             f"--checkpoint={abs_ckpt}",
             f"--robot={robot_key}",
+            f"--obs_dim={env.get('QUADRUPED_OBS_DIM', '49')}",
+            "--backend=sim",
+            "--sim=gazebo"
         ]
     else:  # play
         script_path = os.path.join("scripts", "skrl", "play.py")

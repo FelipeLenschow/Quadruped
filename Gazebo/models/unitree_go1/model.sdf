@@ -311,7 +311,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -386,7 +386,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -460,7 +460,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -561,7 +561,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -636,7 +636,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -710,7 +710,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -811,7 +811,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -886,7 +886,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -960,7 +960,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -1061,7 +1061,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -1136,7 +1136,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -1210,7 +1210,7 @@
         </limit>
         <dynamics>
           <damping>0.1</damping>
-          <friction>0.1</friction>
+          <friction>0.05</friction>
           <spring_reference>0</spring_reference>
           <spring_stiffness>0</spring_stiffness>
         </dynamics>
@@ -1471,101 +1471,80 @@
     <frame name='rh_lowerleg_rotor' attached_to='rh_lowerleg_rotor_joint'>
       <pose>0 0 0 0 0 0</pose>
     </frame>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
       <joint_name>rf_haa_joint</joint_name>
-      <topic>/model/go1/joint/rf_haa_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
     </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
       <joint_name>lf_haa_joint</joint_name>
-      <topic>/model/go1/joint/lf_haa_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
     </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
-      <joint_name>rh_haa_joint</joint_name>
-      <topic>/model/go1/joint/rh_haa_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
+      <joint_name>lf_haa_joint</joint_name>
     </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
+      <joint_name>rf_haa_joint</joint_name>
+    </plugin>
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
       <joint_name>lh_haa_joint</joint_name>
-      <topic>/model/go1/joint/lh_haa_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
     </plugin>
-
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
-      <joint_name>rf_hfe_joint</joint_name>
-      <topic>/model/go1/joint/rf_hfe_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
+      <joint_name>rh_haa_joint</joint_name>
     </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
       <joint_name>lf_hfe_joint</joint_name>
-      <topic>/model/go1/joint/lf_hfe_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
     </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
-      <joint_name>rh_hfe_joint</joint_name>
-      <topic>/model/go1/joint/rh_hfe_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
+      <joint_name>rf_hfe_joint</joint_name>
     </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
       <joint_name>lh_hfe_joint</joint_name>
-      <topic>/model/go1/joint/lh_hfe_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
     </plugin>
-
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
-      <joint_name>rf_kfe_joint</joint_name>
-      <topic>/model/go1/joint/rf_kfe_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
+      <joint_name>rh_hfe_joint</joint_name>
     </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
       <joint_name>lf_kfe_joint</joint_name>
-      <topic>/model/go1/joint/lf_kfe_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
     </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
-      <joint_name>rh_kfe_joint</joint_name>
-      <topic>/model/go1/joint/rh_kfe_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
+      <joint_name>rf_kfe_joint</joint_name>
     </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
       <joint_name>lh_kfe_joint</joint_name>
-      <topic>/model/go1/joint/lh_kfe_joint/cmd_pos</topic>
-      <p_gain>40</p_gain>
-      <i_gain>0</i_gain>
-      <d_gain>2</d_gain>
+    </plugin>
+    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce">
+      <joint_name>rh_kfe_joint</joint_name>
     </plugin>
 
     <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
         <topic>/model/go1/joint_state</topic>
+        <update_frequency>200</update_frequency>
+        <joint_name>lf_haa_joint</joint_name>
+        <joint_name>lf_hfe_joint</joint_name>
+        <joint_name>lf_kfe_joint</joint_name>
+        <joint_name>rf_haa_joint</joint_name>
+        <joint_name>rf_hfe_joint</joint_name>
+        <joint_name>rf_kfe_joint</joint_name>
+        <joint_name>lh_haa_joint</joint_name>
+        <joint_name>lh_hfe_joint</joint_name>
+        <joint_name>lh_kfe_joint</joint_name>
+        <joint_name>rh_haa_joint</joint_name>
+        <joint_name>rh_hfe_joint</joint_name>
+        <joint_name>rh_kfe_joint</joint_name>
     </plugin>
+
     <plugin filename="gz-sim-odometry-publisher-system" name="gz::sim::systems::OdometryPublisher">
-        <odom_topic>/model/go1/odometry</odom_topic>
-        <odom_frame>odom</odom_frame>
-        <robot_base_frame>base</robot_base_frame>
-        <publish_odom_tf>true</publish_odom_tf>
+      <odom_frame>odom</odom_frame>
+      <robot_base_frame>base</robot_base_frame>
+      <odom_publish_frequency>200</odom_publish_frequency>
+      <dimensions>3</dimensions>
+    </plugin>
+
+    <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+      <publish_link_pose>false</publish_link_pose>
+      <use_sensor_names>true</use_sensor_names>
+      <publish_collision_pose>false</publish_collision_pose>
+      <publish_visual_pose>false</publish_visual_pose>
+      <publish_nested_model_pose>true</publish_nested_model_pose>
+      <update_frequency>50</update_frequency>
     </plugin>
   </model>
 </sdf>

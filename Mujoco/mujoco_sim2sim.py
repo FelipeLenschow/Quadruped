@@ -21,32 +21,8 @@ import mujoco.viewer
 # Add root to sys.path so we can import Deployment
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from Deployment.policy_runner import PolicyRunner
+# Logger removed - use ROS 2 bag/plotjuggler instead
 from unitree_sdk_mock import MockUDP, LowState, LowCmd
-
-# ── CLI ────────────────────────────────────────────────────────────────────────
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--checkpoint", required=True, help="Path to best_agent.pt")
-parser.add_argument(
-    "--robot",
-    default="go1",
-    choices=["go1", "a1", "go2"],
-    help="Robot model to load from MuJoCo Menagerie",
-)
-parser.add_argument(
-    "--duration",
-    type=float,
-    default=0.0,
-    help="Run for N seconds then exit (0 = run forever)",
-)
-parser.add_argument("--no-render", action="store_true", help="Run headless (no viewer)")
-parser.add_argument(
-    "--vx",
-    type=float,
-    default=0.0,
-    help="Initial forward velocity command (for testing)",
-)
-args = parser.parse_args()
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -111,6 +87,14 @@ def resolve_joint_order(model) -> np.ndarray:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", required=True, help="Path to best_agent.pt")
+    parser.add_argument("--robot", default="go1", choices=["go1", "a1", "go2"])
+    parser.add_argument("--duration", type=float, default=0.0)
+    parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--vx", type=float, default=0.0)
+    args = parser.parse_args()
+
     scene_xml = ensure_mjcf(args.robot)
     model = mujoco.MjModel.from_xml_path(str(scene_xml))
     data = mujoco.MjData(model)
@@ -223,6 +207,7 @@ def main():
             if i % 5 == 0 and i < DECIMATION - 1: state = udp.Recv()
 
         last_actions[:] = actions
+        ros_logger.log(state, commands, last_actions, ISAAC_JOINT_NAMES)
         step_count += 1
         if step_count % 50 == 0:
             print(f"\r[Step {step_count:6d}] h={data.qpos[2]:.3f} vx={state.base_lin_vel[0]:+.2f}  ", end="", flush=True)

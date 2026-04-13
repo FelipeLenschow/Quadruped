@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Gazebo Sim Sim2Sim: uses a standalone PolicyRunner and Gazebo Sim (Harmonic).
-Enables the third 'party member' simulations.
-Aligned with MuJoCo Sim2Sim for consistent I/O.
+Gazebo Sim2Sim: Clean, direct policy-to-ActuatorNet control.
+MuJoCo parity implementation for Gazebo Harmonic.
 """
 
 import argparse
@@ -17,8 +16,16 @@ import torch
 
 # Gazebo Transport & Msgs
 try:
-    from gz.transport13 import Node
-    from gz.msgs10 import double_pb2, model_pb2, imu_pb2, odometry_pb2
+    from gz.transport13 import Node as GzTransportNode
+    from gz.msgs10 import (
+        double_pb2,
+        model_pb2,
+        imu_pb2,
+        pose_pb2,
+        world_stats_pb2,
+        world_control_pb2,
+        odometry_pb2,
+    )
 except ImportError:
     print("[ERROR] Gazebo (Harmonic) Python bindings not found.")
     raise
@@ -26,72 +33,86 @@ except ImportError:
 # Add root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from Deployment.policy_runner import PolicyRunner
+from Mujoco.unitree_sdk_mock import quat_to_rot_matrix
 
-# ── Environment Setup ──────────────────────────────────────────────────────────
-os.environ["GZ_PARTITION"] = "quadruped_party"
-os.environ["IGN_PARTITION"] = "quadruped_party"
-root_dir = os.path.dirname(os.path.abspath(__file__))
-os.environ["GZ_SIM_RESOURCE_PATH"] = (
-    root_dir
-    + os.pathsep
-    + os.path.join(root_dir, "models")
-    + os.pathsep
-    + os.environ.get("GZ_SIM_RESOURCE_PATH", "")
-)
-
-# ── CLI ────────────────────────────────────────────────────────────────────────
-parser = argparse.ArgumentParser()
-parser.add_argument("--checkpoint", required=True, help="Path to policy checkpoint")
-parser.add_argument("--robot", default="go1", choices=["go1", "a1", "go2"])
-parser.add_argument("--no-render", action="store_true")
-parser.add_argument("--vx", type=float, default=0.0)
-args = parser.parse_args()
-
-# ── Constants ──────────────────────────────────────────────────────────────────
+# ── constants ──────────────────────────────────────────────────────────────────
 ACTION_SCALE = 0.25
-DECIMATION = 20 # 50Hz Policy if physics is 1000Hz (but we use wall clock)
-
-# Standard Isaac Lab Grouping: all HAA, then all HFE, then all KFE
-# Leg Order: FL, FR, RL, RR (Matches MuJoCo)
 JOINT_NAMES = [
-    "lf_haa_joint", "rf_haa_joint", "lh_haa_joint", "rh_haa_joint",
-    "lf_hfe_joint", "rf_hfe_joint", "lh_hfe_joint", "rh_hfe_joint",
-    "lf_kfe_joint", "rf_kfe_joint", "lh_kfe_joint", "rh_kfe_joint",
+    "lf_haa_joint",
+    "rf_haa_joint",
+    "lh_haa_joint",
+    "rh_haa_joint",
+    "lf_hfe_joint",
+    "rf_hfe_joint",
+    "lh_hfe_joint",
+    "rh_hfe_joint",
+    "lf_kfe_joint",
+    "rf_kfe_joint",
+    "lh_kfe_joint",
+    "rh_kfe_joint",
 ]
 
-# ── Standard Abstractions ──────────────────────────────────────────────────────
+# ── Gazebo Sim2Sim Bridge ──────────────────────────────────────────────────────
+
 
 class LowState:
     def __init__(self):
-        self.imu = type("IMU", (), {"quaternion": np.array([1.0, 0, 0, 0]), "gyroscope": np.zeros(3)})()
-        self.motorState = [type("Motor", (), {"q": 0.0, "dq": 0.0})() for _ in range(12)]
+        self.imu = type(
+            "IMU",
+            (),
+            {"quaternion": np.array([1.0, 0, 0, 0]), "gyroscope": np.zeros(3)},
+        )()
+        self.motorState = [
+            type("Motor", (), {"q": 0.0, "dq": 0.0})() for _ in range(12)
+        ]
         self.base_lin_vel = np.zeros(3)
         self.base_pos = np.zeros(3)
 
-class LowCmd:
-    def __init__(self):
-        self.motorCmd = [type("MotorCmd", (), {"tau": 0.0, "q": 0.0})() for _ in range(12)]
 
-class GazeboBridge:
-    def __init__(self, robot_name="go1"):
-        self.node = Node()
+class GazeboSimBridge:
+    def __init__(self, robot_name="go1", world_name="quadruped_world"):
+        self.node = GzTransportNode()
         self.robot_name = robot_name
+        self.world_name = world_name
         self.state = LowState()
+        self.sim_time = 0.0
 
         # Subscriptions
-        self.node.subscribe(imu_pb2.IMU, f"/model/{robot_name}/link/base/sensor/imu/imu", self._imu_cb)
-        self.node.subscribe(model_pb2.Model, f"/model/{robot_name}/joint_state", self._joint_cb)
-        self.node.subscribe(odometry_pb2.Odometry, f"/model/{robot_name}/odometry", self._odom_cb)
+        self.node.subscribe(
+            imu_pb2.IMU, f"/model/{robot_name}/link/base/sensor/imu/imu", self._imu_cb
+        )
+        self.node.subscribe(
+            model_pb2.Model, f"/model/{robot_name}/joint_state", self._joint_cb
+        )
+        self.node.subscribe(
+            odometry_pb2.Odometry, f"/model/{robot_name}/odometry", self._odom_cb
+        )
+        self.gz_stats_sub = self.node.subscribe(
+            world_stats_pb2.WorldStatistics,
+            f"/world/{world_name}/stats",
+            self._stats_cb,
+        )
 
         # Publishers
         self.joint_pubs = []
         for jname in JOINT_NAMES:
-            topic = f"/model/{robot_name}/joint/{jname}/cmd_pos"
+            topic = f"/model/{robot_name}/joint/{jname}/cmd_force"
             self.joint_pubs.append(self.node.advertise(topic, double_pb2.Double))
 
+        self.world_control_pub = self.node.advertise(
+            f"/world/{world_name}/control", world_control_pb2.WorldControl
+        )
+
+    def _stats_cb(self, msg):
+        self.sim_time = msg.sim_time.sec + msg.sim_time.nsec * 1e-9
+
     def _imu_cb(self, msg):
-        self.state.imu.quaternion = np.array([msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z])
-        self.state.imu.gyroscope = np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z])
+        self.state.imu.quaternion = np.array(
+            [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z]
+        )
+        self.state.imu.gyroscope = np.array(
+            [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
+        )
 
     def _joint_cb(self, msg):
         for joint in msg.joint:
@@ -101,133 +122,202 @@ class GazeboBridge:
                 self.state.motorState[idx].dq = joint.axis1.velocity
 
     def _odom_cb(self, msg):
-        self.state.base_lin_vel = np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z])
         self.state.base_pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
+        self.state.imu.quaternion = np.array(
+            [msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z]
+        )
+        # World frame linear velocity
+        v_world = np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z])
+        # Rotate to body frame
+        R = quat_to_rot_matrix(self.state.imu.quaternion)
+        self.state.base_lin_vel[:] = R.T @ v_world
 
-    def send_commands(self, targets):
-        """Sends position targets to Gazebo (SDF is currently set to PositionController)."""
-        for i, target in enumerate(targets):
-            msg = double_pb2.Double()
-            msg.data = float(target)
-            self.joint_pubs[i].publish(msg)
+    def reset_world(self):
+        msg = world_control_pb2.WorldControl()
+        msg.reset.all = True
+        for _ in range(3):
+            self.world_control_pub.publish(msg)
+            time.sleep(0.05)
+        print("\n[Gazebo] Reset command sent.")
+
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main():
-    root = os.path.dirname(os.path.abspath(__file__))
-    world_path = os.path.join(root, "scene.sdf")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", required=True, help="Path to policy checkpoint")
+    parser.add_argument("--robot", default="go1")
+    parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--vx", type=float, default=0.0)
+    args = parser.parse_args()
 
-    # Start Gazebo
-    gz_args = ["gz", "sim", world_path]
-    if args.no_render: gz_args.append("-s")
-    print(f"[Gazebo] Launching: {' '.join(gz_args)}")
-    proc = subprocess.Popen(gz_args)
-    time.sleep(4)
+    # Sanitization: Partitioning for Gazebo
+    os.environ["GZ_PARTITION"] = "quadruped_sim"
 
-    # 1. Initialize Policy & ActuatorNet
+    # Load Models
     runner = PolicyRunner(args.checkpoint)
-    
-    # Load standardized ActuatorNet
-    act_net_path = Path(__file__).parent.parent / "Deployment" / "unitree_quadruped.pt"
-    if not act_net_path.exists():
-        act_net_path = Path(__file__).parent / "unitree_quadruped.pt"
+    act_net_path = Path(__file__).parent.parent / "Mujoco" / "unitree_quadruped.pt"
     print(f"[Gazebo] Loading ActuatorNet: {act_net_path}")
     act_net = torch.jit.load(str(act_net_path), map_location="cpu").eval()
 
-    bridge = GazeboBridge(args.robot)
+    # Launch Gazebo
+    root = os.path.dirname(os.path.abspath(__file__))
+    world_path = os.path.join(root, "scene.sdf")
 
-    # 2. Teleop State
-    cmd_vx, cmd_vy, cmd_wz = args.vx, 0.0, 0.0
-    commands = np.array([cmd_vx, cmd_vy, cmd_wz, 0.0], dtype=np.float32)
+    # Make sure resources are found
+    os.environ["GZ_SIM_RESOURCE_PATH"] = (
+        root
+        + os.pathsep
+        + os.path.join(root, "models")
+        + os.pathsep
+        + os.environ.get("GZ_SIM_RESOURCE_PATH", "")
+    )
+
+    # Optimization for remote/VDI: enable software rendering if requested
+    if os.environ.get("FORCE_SOFTWARE_RENDER", "0") == "1":
+        os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+        print("[Gazebo] Forcing software rendering (LIBGL_ALWAYS_SOFTWARE=1)")
+
+    gz_args = ["gz", "sim", "-r", world_path]
+    if args.no_render:
+        gz_args.append("-s")
+    print(f"[Gazebo] Launching: {' '.join(gz_args)}")
+    proc = subprocess.Popen(gz_args)
+
+    bridge = GazeboSimBridge(args.robot)
     _stop = threading.Event()
 
+    # Teleop state
+    cmd_vx, cmd_vy, cmd_wz = args.vx, 0.0, 0.0
+    commands = np.array([cmd_vx, 0.0, 0.0, 0.0], dtype=np.float32)
+
     def _keyboard_thread():
-        if not sys.stdin.isatty(): return
+        if not sys.stdin.isatty():
+            return
         import tty, termios
+
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
-        speed_mult = 1.0
         try:
             tty.setraw(fd)
-            nonlocal cmd_vx, cmd_vy, cmd_wz
             while not _stop.is_set():
                 ch = sys.stdin.read(1).upper()
-                upd = True
-                if ch == "W": cmd_vx = min(1.0, cmd_vx + 0.1)
-                elif ch == "S": cmd_vx = max(-1.0, cmd_vx - 0.1)
-                elif ch == "A": cmd_vy = min(1.0, cmd_vy + 0.1)
-                elif ch == "D": cmd_vy = max(-1.0, cmd_vy - 0.1)
-                elif ch == "Q": cmd_wz = min(1.0, cmd_wz + 0.1)
-                elif ch == "E": cmd_wz = max(-1.0, cmd_wz - 0.1)
-                elif ch == "R": cmd_vx = cmd_vy = cmd_wz = 0.0
-                elif ch == "=": speed_mult = min(3.0, speed_mult + 0.1)
-                elif ch == "-": speed_mult = max(0.1, speed_mult - 0.1)
-                elif ch == "\x03": _stop.set(); break
-                else: upd = False
-                if upd:
-                    commands[:] = [cmd_vx*speed_mult, cmd_vy*speed_mult, cmd_wz*speed_mult, 0.0]
-                    print(f"\r[Cmd] vx={commands[0]:+.2f} vy={commands[1]:+.2f} wz={commands[2]:+.2f}  ", end="", flush=True)
-        finally: termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                nonlocal cmd_vx, cmd_vy, cmd_wz
+                if ch == "W":
+                    cmd_vx = min(1.0, cmd_vx + 0.05)
+                elif ch == "S":
+                    cmd_vx = max(-1.0, cmd_vx - 0.05)
+                elif ch == "A":
+                    cmd_vy = min(1.0, cmd_vy + 0.05)
+                elif ch == "D":
+                    cmd_vy = max(-1.0, cmd_vy - 0.05)
+                elif ch == "Q":
+                    cmd_wz = min(1.0, cmd_wz + 0.05)
+                elif ch == "E":
+                    cmd_wz = max(-1.0, cmd_wz - 0.05)
+                elif ch == "R":
+                    cmd_vx = cmd_vy = cmd_wz = 0.0
+                elif ch == "\x03":
+                    _stop.set()
+                    break
+                commands[:] = [cmd_vx, cmd_vy, cmd_wz, 0.0]
+                print(
+                    f"\r[Cmd] vx={commands[0]:+.2f} vy={commands[1]:+.2f} wz={commands[2]:+.2f}  ",
+                    end="",
+                    flush=True,
+                )
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
     threading.Thread(target=_keyboard_thread, daemon=True).start()
 
-    # 3. Control Loop
+    # Control Buffers
+    # Wait for initial state
+    print("[Gazebo] Waiting for initial state...")
+    while bridge.sim_time == 0 and not _stop.is_set():
+        time.sleep(0.1)
+    
     last_actions = np.zeros(12, dtype=np.float32)
+    desired_qpos = np.array([0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5], dtype=np.float32)
+    
     pos_err_hist = np.zeros((3, 12), dtype=np.float32)
     vel_hist = np.zeros((3, 12), dtype=np.float32)
-    
-    desired_qpos = np.array([
-        0.1, -0.1, 0.1, -0.1,   # Hips (FL, FR, RL, RR)
-        0.8, 0.8, 1.0, 1.0,     # Thighs
-        -1.5, -1.5, -1.5, -1.5  # Calves
-    ], dtype=np.float32)
+    # Initialize history with current state to avoid impulsive start
+    pos_err_hist[:] = np.array([bridge.state.motorState[j].q for j in range(12)]) - desired_qpos
+    vel_hist[:] = np.array([bridge.state.motorState[j].dq for j in range(12)])
 
-    print("[Gazebo] Sim2Sim running (50Hz Policy, 200Hz Actuator). Press Ctrl+C to stop.")
-    
+    print("[Gazebo] Sim2Sim Loop Start (50Hz Policy, 200Hz Actuator)")
+
+    _last_pose = np.zeros(3)
+    _last_pose_time = 0.0
     count = 0
-    start_time = time.time()
+    start_wall = time.time()
+
     try:
         while not _stop.is_set():
-            loop_start = time.time()
-            
-            # A. Policy Loop (50Hz)
             state = bridge.state
-            obs = runner.build_obs(state, commands, last_actions, desired_qpos, np.arange(12))
+            loop_sim_start = bridge.sim_time
+
+            # 1. Velocity and IMU state are updated in callbacks
+            pass
+
+            # 2. Policy Step (50Hz)
+            obs = runner.build_obs(
+                state, commands, last_actions, desired_qpos, np.arange(12)
+            )
             actions = runner.get_action(obs)
             targets = actions * ACTION_SCALE + desired_qpos
-            
-            # B. Actuator/Sub-loop (Synchronous 4 sub-steps to reach 200Hz)
-            for _ in range(4):
-                state = bridge.state # Update state reference
-                
-                # Calculate Net Input (Same as MuJoCo/Real)
-                mj_qpos = np.array([state.motorState[j].q for j in range(12)])
-                mj_qvel = np.array([state.motorState[j].dq for j in range(12)])
-                
-                pos_err = mj_qpos - targets
-                pos_err_hist = np.roll(pos_err_hist, 1, 0); pos_err_hist[0] = pos_err
-                vel_hist = np.roll(vel_hist, 1, 0); vel_hist[0] = mj_qvel
-                
-                # NOTE: We keep using Position targets as the current SDF plugin expects it.
-                # However, the history buffers are now accurately maintained.
-                bridge.send_commands(targets)
-                time.sleep(0.005) # 200Hz sub-loop
+
+            # 3. Actuator Sub-loop (200Hz - 4 steps per policy step)
+            for sub_idx in range(4):
+                next_act_time = loop_sim_start + (sub_idx + 1) * 0.005
+                while bridge.sim_time < next_act_time and not _stop.is_set():
+                    time.sleep(0.0001)
+
+                cur_q = np.array([state.motorState[j].q for j in range(12)])
+                cur_dq = np.array([state.motorState[j].dq for j in range(12)])
+
+                pos_err_hist = np.roll(pos_err_hist, 1, 0)
+                pos_err_hist[0] = cur_q - targets
+                vel_hist = np.roll(vel_hist, 1, 0)
+                vel_hist[0] = cur_dq
+
+                net_in = torch.zeros((12, 6))
+                net_in[:, :3] = torch.from_numpy(pos_err_hist.T)
+                net_in[:, 3:] = torch.from_numpy(vel_hist.T)
+
+                with torch.no_grad():
+                    torques = act_net(net_in).numpy().flatten()
+
+                torques = np.clip(torques, -23.7, 23.7)
+                for j_idx, torque in enumerate(torques):
+                    msg = double_pb2.Double()
+                    msg.data = float(torque)
+                    bridge.joint_pubs[j_idx].publish(msg)
 
             last_actions[:] = actions
             count += 1
             if count % 50 == 0:
-                print(f"\r[Step {count:6d}] h={state.base_pos[2]:.3f} vx={state.base_lin_vel[0]:+.2f} ObsShape: {obs.shape} ", end="", flush=True)
+                print(
+                    f"\r[Step {count:6d}] t={bridge.sim_time:.2f} pos=[{state.base_pos[0]:.2f}, {state.base_pos[1]:.2f}, {state.base_pos[2]:.2f}] vx={state.base_lin_vel[0]:+.2f}  ",
+                    end="",
+                    flush=True,
+                )
 
-            # Sync to 50Hz
-            elapsed = time.time() - loop_start
-            if elapsed < 0.020:
-                time.sleep(0.020 - elapsed)
+            # Wall-time padding if sim is too fast
+            elapsed = time.time() - start_wall
+            expected = count * 0.020
+            if expected > elapsed:
+                time.sleep(expected - elapsed)
 
     except KeyboardInterrupt:
-        print("\n[Gazebo] Stopping...")
+        pass
     finally:
         _stop.set()
         proc.terminate()
+        print("\n[Gazebo] Done.")
+
 
 if __name__ == "__main__":
     main()
