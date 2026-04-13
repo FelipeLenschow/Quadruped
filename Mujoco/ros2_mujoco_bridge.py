@@ -226,7 +226,7 @@ class Ros2MujocoBridge(Node):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--robot', type=str, default='go1')
+    parser.add_argument('--robot', type=str, default='go2')
     args = parser.parse_args()
 
     # Determine Scene Path

@@ -202,7 +202,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--backend', type=str, default='sim', choices=['sim', 'real'])
     parser.add_argument('--checkpoint', type=str, required=True)
-    parser.add_argument('--robot', type=str, default='go1')
+    parser.add_argument('--robot', type=str, default='go2')
     parser.add_argument('--obs_dim', type=int, default=49)
     parser.add_argument('--sim', type=str, default=None, choices=['mujoco', 'gazebo'])
     args = parser.parse_args()

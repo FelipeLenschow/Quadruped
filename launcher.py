@@ -63,20 +63,26 @@ def run_cli_menu():
         action = "isaac"
 
     # 2. Robot selection
-    selected_robot_cfg = None
-    if action != "isaac" and action != "train":
+    selected_robot_cfg = "UNITREE_GO2_CFG" # Global default
+    if action == "train":
         ROBOT_CHOICES = {
             "1": ("Unitree A1", "UNITREE_A1_CFG"),
             "2": ("Unitree Go1", "UNITREE_GO1_CFG"),
             "3": ("Unitree Go2", "UNITREE_GO2_CFG"),
         }
-        print("\nSelect Robot Configuration:")
+        print("\nSelect Robot Configuration for Training:")
         for key, (name, _) in ROBOT_CHOICES.items():
             print(f"  [{key}] {name}")
-        rob_idx = input("Enter choice [1-3] (default 2 for Go1): ").strip()
+        rob_idx = input("Enter choice [1-3] (default 3 for Go2): ").strip()
         if not rob_idx or rob_idx not in ROBOT_CHOICES:
-            rob_idx = "2"
+            rob_idx = "3"
         _, selected_robot_cfg = ROBOT_CHOICES[rob_idx]
+    elif action == "isaac":
+        # Isaac Play mode (Sim2Sim) currently spawns all three for comparison
+        selected_robot_cfg = None
+    else:
+        # MuJoCo/Gazebo deployments now default to Go2 as per user requested standardization
+        selected_robot_cfg = "UNITREE_GO2_CFG"
 
     # 3. Terrain
     selected_terrain = "flat"
@@ -95,9 +101,11 @@ def run_cli_menu():
         _, selected_terrain = TERRAIN_CHOICES[ter_idx]
 
     # 4. Num Envs
-    num_envs = input(
-        "\nEnter number of environments (leave blank to use config default): "
-    ).strip()
+    num_envs = ""
+    if action not in ("mujoco", "gazebo"):
+        num_envs = input(
+            "\nEnter number of environments (leave blank to use config default): "
+        ).strip()
 
     selected_ckpt = None
     teleop = False
@@ -157,7 +165,9 @@ def run_cli_menu():
             except ValueError:
                 selected_ckpt = None
 
-    if action in ("isaac", "mujoco", "gazebo"):
+    if action in ("mujoco", "gazebo"):
+        teleop = False # Using ROS 2 teleop instead of internal WASD
+    elif action == "isaac":
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
     else:
@@ -273,7 +283,7 @@ if __name__ == "__main__":
             "UNITREE_A1_CFG": "a1",
             "UNITREE_GO1_CFG": "go1",
             "UNITREE_GO2_CFG": "go2",
-        }.get(robot_cfg or "", "go1")
+        }.get(robot_cfg or "", "go2") # Default to go2
         # Use Unified Policy Bridge
         bridge_script = os.path.abspath(os.path.join("Deployment", "policy_bridge.py"))
         abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
@@ -291,7 +301,7 @@ if __name__ == "__main__":
             "UNITREE_A1_CFG": "a1",
             "UNITREE_GO1_CFG": "go1",
             "UNITREE_GO2_CFG": "go2",
-        }.get(robot_cfg or "", "go1")
+        }.get(robot_cfg or "", "go2") # Default to go2
         # Use Unified Policy Bridge
         bridge_script = os.path.abspath(os.path.join("Deployment", "policy_bridge.py"))
         abs_ckpt = os.path.abspath(ckpt) if ckpt else ""

@@ -89,7 +89,7 @@ def resolve_joint_order(model) -> np.ndarray:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, help="Path to best_agent.pt")
-    parser.add_argument("--robot", default="go1", choices=["go1", "a1", "go2"])
+    parser.add_argument("--robot", default="go2", choices=["go1", "a1", "go2"])
     parser.add_argument("--duration", type=float, default=0.0)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--vx", type=float, default=0.0)

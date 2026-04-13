@@ -308,7 +308,7 @@ class Ros2GazeboBridge(Node):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--robot", type=str, default="go1")
+    parser.add_argument("--robot", type=str, default="go2")
     parser.add_argument("--world", type=str, default="quadruped_world")
     args = parser.parse_args()
     rclpy.init()
