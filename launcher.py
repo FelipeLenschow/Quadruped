@@ -276,30 +276,53 @@ if __name__ == "__main__":
     obs_dim = env.get("QUADRUPED_OBS_DIM", "49")
 
     def get_robot_key(cfg):
-        return {"UNITREE_A1_CFG": "a1", "UNITREE_GO1_CFG": "go1", "UNITREE_GO2_CFG": "go2"}.get(cfg or "", "go2")
+        return {
+            "UNITREE_A1_CFG": "a1",
+            "UNITREE_GO1_CFG": "go1",
+            "UNITREE_GO2_CFG": "go2",
+        }.get(cfg or "", "go2")
 
     if action == "train":
         script_path = os.path.join("scripts", "skrl", "train.py")
         cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
-        if num_envs: cmd.append(f"--num_envs={num_envs}")
-        if ckpt: cmd.append(f"--checkpoint={abs_ckpt}")
-        if headless: cmd.append("--headless")
+        if num_envs:
+            cmd.append(f"--num_envs={num_envs}")
+        if ckpt:
+            cmd.append(f"--checkpoint={abs_ckpt}")
+        if headless:
+            cmd.append("--headless")
 
     elif action == "mujoco":
         # Launch bridge directly with inline policy (zero ROS roundtrip latency)
         bridge_script = os.path.abspath(os.path.join("Mujoco", "ros2_mujoco_bridge.py"))
-        cmd = ["/usr/bin/python3", bridge_script, f"--checkpoint={abs_ckpt}", f"--robot={get_robot_key(robot_cfg)}", f"--obs_dim={obs_dim}"]
+        cmd = [
+            "/usr/bin/python3",
+            bridge_script,
+            f"--checkpoint={abs_ckpt}",
+            f"--robot={get_robot_key(robot_cfg)}",
+            f"--obs_dim={obs_dim}",
+        ]
 
     elif action == "gazebo":
         # Gazebo currently uses the ROS 2 policy_bridge wrapper
         bridge_script = os.path.abspath(os.path.join("Deployment", "policy_bridge.py"))
-        cmd = ["/usr/bin/python3", bridge_script, f"--checkpoint={abs_ckpt}", f"--robot={get_robot_key(robot_cfg)}", f"--obs_dim={obs_dim}", "--backend=sim", "--sim=gazebo"]
+        cmd = [
+            "/usr/bin/python3",
+            bridge_script,
+            f"--checkpoint={abs_ckpt}",
+            f"--robot={get_robot_key(robot_cfg)}",
+            f"--obs_dim={obs_dim}",
+            "--backend=sim",
+            "--sim=gazebo",
+        ]
 
     else:  # isaac play
         script_path = os.path.join("scripts", "skrl", "play.py")
         cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
-        if num_envs: cmd.append(f"--num_envs={num_envs}")
-        if ckpt: cmd.append(f"--checkpoint={abs_ckpt}")
+        if num_envs:
+            cmd.append(f"--num_envs={num_envs}")
+        if ckpt:
+            cmd.append(f"--checkpoint={abs_ckpt}")
 
     print(f"[INFO] Executing in {module_path}: {' '.join(cmd)}")
     subprocess.run(cmd, env=env, cwd=module_path)
