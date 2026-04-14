@@ -38,10 +38,15 @@ class PolicyBridge(Node):
         
         # Synchronization tracking
         self.timestamps = {'imu': 0, 'joint': 0, 'odom': 0}
+        self.last_sync_timestamp = -1
         
-        # Default Pose (Isaac Order)
-        self.desired_qpos = np.array([0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5], dtype=np.float32)
-        # Mapping (Default for ROS topics is Identity)
+        # Default Pose (Type-Grouped: Hips, Thighs, Calves)
+        self.desired_qpos = np.array([
+            0.1, -0.1, 0.1, -0.1,  # Hips
+            0.8, 0.8, 1.0, 1.0,    # Thighs
+            -1.5, -1.5, -1.5, -1.5 # Calves
+        ], dtype=np.float32)
+        # Mapping (ROS topic is Type-Grouped)
         self.mj_to_isaac = np.arange(12) 
         
         # 3. Backend Specific Setup
@@ -102,31 +107,24 @@ class PolicyBridge(Node):
             'quaternion': [msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z],
             'gyroscope': [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
         }
-        self.timestamps['imu'] = msg.header.stamp.sec * 1e9 + msg.header.stamp.nanosec
-        self._check_sync()
 
     def joint_cb(self, msg):
         self.joint_data = {'q': np.array(msg.position), 'dq': np.array(msg.velocity)}
-        self.timestamps['joint'] = msg.header.stamp.sec * 1e9 + msg.header.stamp.nanosec
-        self._check_sync()
+        # Joint state is the primary trigger — only fire if we have all required data
+        if self.backend == 'sim' and self.imu_data is not None:
+            self.control_loop()
 
     def teleop_cb(self, msg):
-        self.cmd_vel[0] = msg.linear.x
-        self.cmd_vel[1] = msg.linear.y
-        self.cmd_vel[2] = msg.angular.z
+        # Clamp to training distribution ranges (from QuadrupedEnvCfg):
+        # command_x_range = (-1.0, 1.0), command_y_range = (-1.0, 1.0), command_yaw_range = (-1.0, 1.0)
+        self.cmd_vel[0] = float(np.clip(msg.linear.x,  -1.0, 1.0))
+        self.cmd_vel[1] = float(np.clip(msg.linear.y,  -1.0, 1.0))
+        self.cmd_vel[2] = float(np.clip(msg.angular.z, -1.0, 1.0))
 
     def odom_cb(self, msg):
         self.base_lin_vel = [msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z]
-        self.timestamps['odom'] = msg.header.stamp.sec * 1e9 + msg.header.stamp.nanosec
-        self._check_sync()
 
-    def _check_sync(self):
-        # We now use the arrival of JointState as the primary trigger,
-        # provided we have at least some IMU and Odom data.
-        if self.backend == 'sim':
-            if self.joint_data is not None and self.imu_data is not None:
-                # Trigger control loop
-                self.control_loop()
+
 
     def control_loop(self):
         if self.backend == 'sim':
