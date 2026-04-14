@@ -1,0 +1,7 @@
+source /home/05680435969@corp.udesc.br/env_isaacsim/bin/activate
+clear && python launcher.py
+
+tensorboard --logdir=IsaacLab_Tasks/Walk_GO2/logs/skrl/quadruped_direct
+
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+ros2 run plotjuggler plotjuggler

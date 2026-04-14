@@ -63,7 +63,7 @@ def run_cli_menu():
         action = "isaac"
 
     # 2. Robot selection
-    selected_robot_cfg = "UNITREE_GO2_CFG" # Global default
+    selected_robot_cfg = "UNITREE_GO2_CFG"  # Global default
     if action == "train":
         ROBOT_CHOICES = {
             "1": ("Unitree A1", "UNITREE_A1_CFG"),
@@ -166,7 +166,7 @@ def run_cli_menu():
                 selected_ckpt = None
 
     if action in ("mujoco", "gazebo"):
-        teleop = False # Using ROS 2 teleop instead of internal WASD
+        teleop = False  # Using ROS 2 teleop instead of internal WASD
     elif action == "isaac":
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
@@ -188,9 +188,17 @@ def run_cli_menu():
 
 
 if __name__ == "__main__":
-    module_name, module_path, action, robot_cfg, terrain_cfg, num_envs, ckpt, teleop, headless = (
-        run_cli_menu()
-    )
+    (
+        module_name,
+        module_path,
+        action,
+        robot_cfg,
+        terrain_cfg,
+        num_envs,
+        ckpt,
+        teleop,
+        headless,
+    ) = run_cli_menu()
 
     print(f"\n{'='*50}")
     print(f"Launching {action.upper()} Mode for {module_name}!")
@@ -239,7 +247,7 @@ if __name__ == "__main__":
         env["FORCE_SOFTWARE_RENDER"] = "1"
         env["GZ_PARTITION"] = "quadruped_sim"
         # GZ_HEADLESS=1 can be used to disable GUI for performance
-        # env["GZ_HEADLESS"] = "1" 
+        # env["GZ_HEADLESS"] = "1"
 
     # Dynamic observation space detection
     if ckpt and os.path.exists(ckpt):
@@ -263,70 +271,35 @@ if __name__ == "__main__":
     # Prepare environment
     env["QUADRUPED_TERRAIN"] = terrain_cfg
 
+    # Final Command Assembly
+    abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
+    obs_dim = env.get("QUADRUPED_OBS_DIM", "49")
+
+    def get_robot_key(cfg):
+        return {"UNITREE_A1_CFG": "a1", "UNITREE_GO1_CFG": "go1", "UNITREE_GO2_CFG": "go2"}.get(cfg or "", "go2")
+
     if action == "train":
         script_path = os.path.join("scripts", "skrl", "train.py")
-        task = "Template-Quadruped-Direct-v0"
-        cmd = [
-            sys.executable,
-            script_path,
-            f"--task={task}",
-        ]
-        if num_envs:
-            cmd.append(f"--num_envs={num_envs}")
-        if ckpt:
-            abs_ckpt = os.path.abspath(ckpt)
-            cmd.append(f"--checkpoint={abs_ckpt}")
-        if headless:
-            cmd.append("--headless")
+        cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
+        if num_envs: cmd.append(f"--num_envs={num_envs}")
+        if ckpt: cmd.append(f"--checkpoint={abs_ckpt}")
+        if headless: cmd.append("--headless")
+
     elif action == "mujoco":
-        robot_key = {
-            "UNITREE_A1_CFG": "a1",
-            "UNITREE_GO1_CFG": "go1",
-            "UNITREE_GO2_CFG": "go2",
-        }.get(robot_cfg or "", "go2") # Default to go2
-        # Use Unified Policy Bridge
-        bridge_script = os.path.abspath(os.path.join("Deployment", "policy_bridge.py"))
-        abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
-        cmd = [
-            "/usr/bin/python3",
-            bridge_script,
-            f"--checkpoint={abs_ckpt}",
-            f"--robot={robot_key}",
-            f"--obs_dim={env.get('QUADRUPED_OBS_DIM', '49')}",
-            "--backend=sim",
-            "--sim=mujoco"
-        ]
+        # Launch bridge directly with inline policy (zero ROS roundtrip latency)
+        bridge_script = os.path.abspath(os.path.join("Mujoco", "ros2_mujoco_bridge.py"))
+        cmd = ["/usr/bin/python3", bridge_script, f"--checkpoint={abs_ckpt}", f"--robot={get_robot_key(robot_cfg)}", f"--obs_dim={obs_dim}"]
+
     elif action == "gazebo":
-        robot_key = {
-            "UNITREE_A1_CFG": "a1",
-            "UNITREE_GO1_CFG": "go1",
-            "UNITREE_GO2_CFG": "go2",
-        }.get(robot_cfg or "", "go2") # Default to go2
-        # Use Unified Policy Bridge
+        # Gazebo currently uses the ROS 2 policy_bridge wrapper
         bridge_script = os.path.abspath(os.path.join("Deployment", "policy_bridge.py"))
-        abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
-        cmd = [
-            "/usr/bin/python3",
-            bridge_script,
-            f"--checkpoint={abs_ckpt}",
-            f"--robot={robot_key}",
-            f"--obs_dim={env.get('QUADRUPED_OBS_DIM', '49')}",
-            "--backend=sim",
-            "--sim=gazebo"
-        ]
-    else:  # play
+        cmd = ["/usr/bin/python3", bridge_script, f"--checkpoint={abs_ckpt}", f"--robot={get_robot_key(robot_cfg)}", f"--obs_dim={obs_dim}", "--backend=sim", "--sim=gazebo"]
+
+    else:  # isaac play
         script_path = os.path.join("scripts", "skrl", "play.py")
-        task = "Template-Quadruped-Direct-v0"
-        cmd = [
-            sys.executable,
-            script_path,
-            f"--task={task}",
-        ]
-        if num_envs:
-            cmd.append(f"--num_envs={num_envs}")
-        if ckpt:
-            abs_ckpt = os.path.abspath(ckpt)
-            cmd.append(f"--checkpoint={abs_ckpt}")
+        cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
+        if num_envs: cmd.append(f"--num_envs={num_envs}")
+        if ckpt: cmd.append(f"--checkpoint={abs_ckpt}")
 
     print(f"[INFO] Executing in {module_path}: {' '.join(cmd)}")
     subprocess.run(cmd, env=env, cwd=module_path)
