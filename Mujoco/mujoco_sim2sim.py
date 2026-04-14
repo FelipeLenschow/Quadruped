@@ -42,10 +42,10 @@ ISAAC_JOINT_NAMES = [
 
 ASSETS_DIR = Path(__file__).parent / "mujoco_menagerie"
 MENAGERIE_URL = "https://github.com/google-deepmind/mujoco_menagerie/archive/refs/heads/main.zip"
-ROBOT_DIRS = {"go1": "unitree_go1", "a1": "unitree_a1", "go2": "unitree_go2"}
+ROBOT_DIRS = {"go2": "unitree_go2"}
 
-def ensure_mjcf(robot: str) -> Path:
-    robot_dir = ASSETS_DIR / ROBOT_DIRS[robot]
+def ensure_mjcf(robot: str = "go2") -> Path:
+    robot_dir = ASSETS_DIR / "unitree_go2"
     scene_xml = robot_dir / "scene.xml"
     if scene_xml.exists(): return scene_xml
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,48 +66,68 @@ def ensure_mjcf(robot: str) -> Path:
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def resolve_joint_order(model) -> np.ndarray:
-    mj_names = []
-    for i in range(model.njnt):
-        if model.jnt_type[i] == mujoco.mjtJoint.mjJNT_FREE: continue
-        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
-        if name: mj_names.append(name)
-    def _norm(s: str) -> str: return s.replace("_joint", "").lower()
-    mj_norm = [_norm(n) for n in mj_names]
-    mj_to_isaac = np.zeros(ACTION_DIM, dtype=np.int32)
-    for isaac_idx, isaac_name in enumerate(ISAAC_JOINT_NAMES):
-        norm = _norm(isaac_name)
-        try: mj_idx = mj_norm.index(norm)
-        except ValueError:
-            matches = [i for i, n in enumerate(mj_norm) if norm in n]
-            mj_idx = matches[0] if matches else isaac_idx
-        mj_to_isaac[isaac_idx] = mj_idx
-    return mj_to_isaac
+def resolve_joint_order(model) -> dict:
+    # Type-Grouped: [all hips, all thighs, all calves]
+    isaac_names = [
+        "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
+        "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
+        "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
+    ]
+    
+    mapping = {
+        "qpos_addr": np.zeros(12, dtype=np.int32),
+        "qvel_addr": np.zeros(12, dtype=np.int32),
+        "ctrl_idx": np.zeros(12, dtype=np.int32),
+        "names": isaac_names
+    }
+
+    for i, name in enumerate(isaac_names):
+        # 1. Joint Address
+        j_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if j_id == -1: j_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name.replace("_joint", ""))
+        if j_id == -1: raise RuntimeError(f"Joint {name} not found in MJCF")
+        mapping["qpos_addr"][i] = model.jnt_qposadr[j_id]
+        mapping["qvel_addr"][i] = model.jnt_dofadr[j_id]
+        
+        # 2. Actuator Index
+        act_name = name.replace("_joint", "")
+        a_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, act_name)
+        if a_id == -1: a_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+        mapping["ctrl_idx"][i] = a_id
+
+    return mapping
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, help="Path to best_agent.pt")
-    parser.add_argument("--robot", default="go2", choices=["go1", "a1", "go2"])
     parser.add_argument("--duration", type=float, default=0.0)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--vx", type=float, default=0.0)
     args = parser.parse_args()
 
-    scene_xml = ensure_mjcf(args.robot)
+    robot = "go2"
+    scene_xml = ensure_mjcf(robot)
     model = mujoco.MjModel.from_xml_path(str(scene_xml))
     data = mujoco.MjData(model)
     model.opt.timestep = SIM_DT
 
-    mj_to_isaac = resolve_joint_order(model)
-    isaac_to_mj = np.zeros(ACTION_DIM, dtype=np.int32)
-    for i, mi in enumerate(mj_to_isaac): isaac_to_mj[i] = mi
+    mapping = resolve_joint_order(model)
 
-    # Default pose (standard quadruped home)
-    desired_qpos_isaac = np.array([0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5], dtype=np.float32)
-    desired_qpos_mj = np.zeros(ACTION_DIM, dtype=np.float64)
-    for i, mi in enumerate(mj_to_isaac): desired_qpos_mj[mi] = desired_qpos_isaac[i]
+    # Default pose (Type-Grouped: Hips, Thighs, Calves)
+    desired_qpos_isaac = np.array([
+        0.1, -0.1, 0.1, -0.1,  # Hips
+        0.8, 0.8, 1.0, 1.0,    # Thighs
+        -1.5, -1.5, -1.5, -1.5 # Calves
+    ], dtype=np.float32)
+    desired_qpos_mj = np.zeros(model.nq, dtype=np.float64)
+    # Set base pose
+    desired_qpos_mj[2] = 0.50
+    desired_qpos_mj[3:7] = [1.0, 0.0, 0.0, 0.0]
+    # Set joint poses
+    for i, addr in enumerate(mapping["qpos_addr"]):
+        desired_qpos_mj[addr] = desired_qpos_isaac[i]
 
     # Actuator config
     for i in range(model.nu):
@@ -117,25 +137,17 @@ def main():
         model.actuator_forcerange[i, :2] = [-23.7, 23.7]
     for i in range(model.njnt):
         if model.jnt_type[i] != mujoco.mjtJoint.mjJNT_FREE:
-            model.dof_damping[model.jnt_dofadr[i]] = 0.15
-            model.dof_frictionloss[model.jnt_dofadr[i]] = 0.05
+            # Disable MuJoCo internal damping to match IsaacLab's DCMotor (damping=0.5)
+            # We apply the 0.5 damping explicitly in the PD loop
+            model.dof_damping[model.jnt_dofadr[i]] = 0.0
+            model.dof_frictionloss[model.jnt_dofadr[i]] = 0.01
 
     mujoco.mj_resetData(model, data)
-    data.qpos[7 : 7 + ACTION_DIM] = desired_qpos_mj
-    data.qpos[2] = 0.50
-    data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+    data.qpos[:] = desired_qpos_mj
     mujoco.mj_forward(model, data)
 
-    # Load policy and ActuatorNet
+    # Load policy (Go2 uses DCMotor — no ActuatorNet needed)
     runner = PolicyRunner(args.checkpoint)
-    
-    # Try local first, then shared Deployment folder
-    act_net_path = Path(__file__).parent / f"unitree_{args.robot}.pt"
-    if not act_net_path.exists():
-        act_net_path = Path(__file__).parent.parent / "Deployment" / "unitree_quadruped.pt"
-    
-    print(f"[Sim2Sim] Loading ActuatorNet: {act_net_path}")
-    act_net = torch.jit.load(str(act_net_path), map_location="cpu").eval()
 
     # Shared state for teleop
     import threading
@@ -176,38 +188,66 @@ def main():
 
     # Sim Loop
     last_actions = np.zeros(ACTION_DIM, dtype=np.float32)
+    model.opt.timestep = 0.001
+    
+    # Identity mapping: MockUDP.Recv() already returns Isaac-ordered motor states
+    isaac_identity = np.arange(12)
+    
+    # Match IsaacLab ground sliding friction (1.0)
+    FOOT_GEOMS = {20, 32, 44, 56}
+    for i in range(model.ngeom):
+        name = model.geom(i).name
+        if "floor" in name or "ground" in name:
+            model.geom_friction[i, 0] = 1.0  # sliding friction
+
+
+
     pos_err_hist = np.zeros((3, 12), dtype=np.float32)
     vel_hist = np.zeros((3, 12), dtype=np.float32)
-    udp = MockUDP(model, data, mj_to_isaac, isaac_to_mj)
+    udp = MockUDP(model, data, mapping)
     step_count = 0
     start_wall = time.time()
 
     def run_step():
         nonlocal last_actions, step_count, pos_err_hist, vel_hist
         state = udp.Recv()
-        obs = runner.build_obs(state, commands, last_actions, desired_qpos_isaac, mj_to_isaac)
+        # MockUDP returns motor states already in Isaac order, so pass identity mapping
+        obs = runner.build_obs(state, commands, last_actions, desired_qpos_isaac, isaac_identity)
         actions = runner.get_action(obs)
         targets = actions * ACTION_SCALE + desired_qpos_isaac
         
         low_cmd = LowCmd()
         for i in range(DECIMATION):
             if i % 5 == 0:
-                mj_qpos = np.array([state.motorState[j].q for j in range(12)])
-                mj_qvel = np.array([state.motorState[j].dq for j in range(12)])
-                pos_err = mj_qpos[mj_to_isaac] - targets
+                # Motor states from MockUDP are already in Isaac order
+                qpos_isaac = np.array([state.motorState[j].q for j in range(12)])
+                qvel_isaac = np.array([state.motorState[j].dq for j in range(12)])
+                pos_err = qpos_isaac - targets
                 pos_err_hist = np.roll(pos_err_hist, 1, 0); pos_err_hist[0] = pos_err
-                vel_hist = np.roll(vel_hist, 1, 0); vel_hist[0] = mj_qvel[mj_to_isaac]
-                net_in = torch.zeros((12, 6))
-                net_in[:, :3] = torch.from_numpy(pos_err_hist.T)
-                net_in[:, 3:] = torch.from_numpy(vel_hist.T)
-                with torch.no_grad(): torques = act_net(net_in).squeeze().numpy()
-                for j, mj_idx in enumerate(isaac_to_mj): low_cmd.motorCmd[mj_idx].tau = np.clip(torques[j], -23.7, 23.7)
+                vel_hist = np.roll(vel_hist, 1, 0); vel_hist[0] = qvel_isaac
+                # Aligned with IsaacLab Go2 DCMotor: stiffness=25.0, damping=0.5
+                torques = -25.0 * pos_err_hist[0] - 0.5 * vel_hist[0]
+                
+                # DCMotor velocity-dependent saturation (four-quadrant model)
+                effort_limit = 23.5
+                saturation_effort = 23.5
+                vel_limit = 30.0
+                vel_at_limit = vel_limit * (1 + effort_limit / saturation_effort)
+                vel_clamped = np.clip(vel_hist[0], -vel_at_limit, vel_at_limit)
+                t_top = saturation_effort * (1.0 - vel_clamped / vel_limit)
+                t_bot = saturation_effort * (-1.0 - vel_clamped / vel_limit)
+                max_eff = np.minimum(t_top, effort_limit)
+                min_eff = np.maximum(t_bot, -effort_limit)
+                torques = np.clip(torques, min_eff, max_eff)
+                
+                # Apply torques via Isaac-ordered index → MuJoCo ctrl index
+                for j in range(12):
+                    low_cmd.motorCmd[j].tau = torques[j]
                 udp.Send(low_cmd)
             mujoco.mj_step(model, data)
             if i % 5 == 0 and i < DECIMATION - 1: state = udp.Recv()
 
         last_actions[:] = actions
-        ros_logger.log(state, commands, last_actions, ISAAC_JOINT_NAMES)
         step_count += 1
         if step_count % 50 == 0:
             print(f"\r[Step {step_count:6d}] h={data.qpos[2]:.3f} vx={state.base_lin_vel[0]:+.2f}  ", end="", flush=True)
