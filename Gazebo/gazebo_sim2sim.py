@@ -30,9 +30,9 @@ except ImportError:
     print("[ERROR] Gazebo (Harmonic) Python bindings not found.")
     raise
 
-# Add root to sys.path
+# Add root to sys.path so we can import modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from Deployment.policy_runner import PolicyRunner
+from Controller.policy_runner import PolicyRunner
 from Mujoco.unitree_sdk_mock import quat_to_rot_matrix
 
 # ── constants ──────────────────────────────────────────────────────────────────

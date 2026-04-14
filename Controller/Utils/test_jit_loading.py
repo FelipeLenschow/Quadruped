@@ -2,11 +2,11 @@ import torch
 import numpy as np
 import os
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__)))
-from policy_runner import PolicyRunner
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from Controller.policy_runner import PolicyRunner
 
 def test_jit():
-    checkpoint = "Deployment/policy_walk_jit.pt"
+    checkpoint = "Controller/policy_walk_jit.pt"
     if not os.path.exists(checkpoint):
         print(f"Error: {checkpoint} not found")
         return

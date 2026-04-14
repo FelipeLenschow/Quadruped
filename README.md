@@ -38,7 +38,7 @@ python3 -m pip install --user torch numpy
 1. **Train** in Isaac Lab: `python launcher.py` -> Select Task -> Train.
 2. **Export** to JIT: 
    ```bash
-   python Deployment/export_jit.py --checkpoint path/to/best_agent.pt --out Deployment/policy_jit.pt
+   python Controller/export_jit.py --checkpoint path/to/best_agent.pt --out Controller/policy_jit.pt
    ```
 3. **Verify** in MuJoCo or Gazebo via the launcher.
-4. **Deploy** to a physical robot using the `Deployment/` folder.
+4. **Deploy** to a physical robot using the `Controller/` folder.

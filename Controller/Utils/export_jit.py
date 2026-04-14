@@ -37,7 +37,7 @@ def export(checkpoint_path, out_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to best_agent.pt")
-    parser.add_argument("--out", type=str, default="policy_jit.pt", help="Output path")
+    parser.add_argument("--out", type=str, default="Controller/policy_jit.pt", help="Output path")
     args = parser.parse_args()
     
     export(args.checkpoint, args.out)

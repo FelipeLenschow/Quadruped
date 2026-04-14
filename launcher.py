@@ -275,6 +275,10 @@ if __name__ == "__main__":
     abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
     obs_dim = env.get("QUADRUPED_OBS_DIM", "49")
 
+    # Final Command Assembly
+    abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
+    obs_dim = env.get("QUADRUPED_OBS_DIM", "49")
+    
     def get_robot_key(cfg):
         return {
             "UNITREE_A1_CFG": "a1",
@@ -282,47 +286,48 @@ if __name__ == "__main__":
             "UNITREE_GO2_CFG": "go2",
         }.get(cfg or "", "go2")
 
+    robot_key = get_robot_key(robot_cfg)
+
     if action == "train":
         script_path = os.path.join("scripts", "skrl", "train.py")
         cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
-        if num_envs:
-            cmd.append(f"--num_envs={num_envs}")
-        if ckpt:
-            cmd.append(f"--checkpoint={abs_ckpt}")
-        if headless:
-            cmd.append("--headless")
+        if num_envs: cmd.append(f"--num_envs={num_envs}")
+        if ckpt: cmd.append(f"--checkpoint={abs_ckpt}")
+        if headless: cmd.append("--headless")
+        subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action == "mujoco":
-        # Launch bridge directly with inline policy (zero ROS roundtrip latency)
-        bridge_script = os.path.abspath(os.path.join("Mujoco", "ros2_mujoco_bridge.py"))
-        cmd = [
-            "/usr/bin/python3",
-            bridge_script,
-            f"--checkpoint={abs_ckpt}",
-            f"--robot={get_robot_key(robot_cfg)}",
-            f"--obs_dim={obs_dim}",
-        ]
+    elif action in ("mujoco", "gazebo", "real"):
+        # Unified ROS 2 Pipeline: Bridge + Controller
+        # 1. Determine Bridge Script
+        if action == "mujoco":
+            bridge_script = os.path.abspath(os.path.join("Mujoco", "ros2_mujoco_bridge.py"))
+            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}"]
+        elif action == "gazebo":
+            bridge_script = os.path.abspath(os.path.join("Gazebo", "ros2_gazebo_bridge.py"))
+            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}"]
+        else: # real
+            bridge_script = os.path.abspath(os.path.join("Unitree", "ros2_real_bridge.py"))
+            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}"]
 
-    elif action == "gazebo":
-        # Gazebo currently uses the ROS 2 policy_bridge wrapper
-        bridge_script = os.path.abspath(os.path.join("Deployment", "policy_bridge.py"))
-        cmd = [
-            "/usr/bin/python3",
-            bridge_script,
-            f"--checkpoint={abs_ckpt}",
-            f"--robot={get_robot_key(robot_cfg)}",
-            f"--obs_dim={obs_dim}",
-            "--backend=sim",
-            "--sim=gazebo",
-        ]
+        # 2. Controller Script
+        ctrl_script = os.path.abspath(os.path.join("Controller", "policy_bridge.py"))
+        ctrl_cmd = ["/usr/bin/python3", ctrl_script, f"--checkpoint={abs_ckpt}", f"--robot={robot_key}", f"--obs_dim={obs_dim}"]
+
+        print(f"[Launcher] Starting Bridge: {' '.join(bridge_cmd)}")
+        bridge_proc = subprocess.Popen(bridge_cmd, env=env, cwd=module_path)
+        
+        print(f"[Launcher] Starting Controller: {' '.join(ctrl_cmd)}")
+        try:
+            subprocess.run(ctrl_cmd, env=env, cwd=module_path)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            print("[Launcher] Terminating bridge...")
+            bridge_proc.terminate()
 
     else:  # isaac play
         script_path = os.path.join("scripts", "skrl", "play.py")
         cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
-        if num_envs:
-            cmd.append(f"--num_envs={num_envs}")
-        if ckpt:
-            cmd.append(f"--checkpoint={abs_ckpt}")
-
-    print(f"[INFO] Executing in {module_path}: {' '.join(cmd)}")
-    subprocess.run(cmd, env=env, cwd=module_path)
+        if num_envs: cmd.append(f"--num_envs={num_envs}")
+        if ckpt: cmd.append(f"--checkpoint={abs_ckpt}")
+        subprocess.run(cmd, env=env, cwd=module_path)
