@@ -1,5 +1,8 @@
 import os
 import sys
+# Ensure absolute path of the repository is in sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import time
 import numpy as np
 import mujoco
@@ -152,7 +155,7 @@ class Ros2MujocoBridge(Node):
                     if self.inference_counter % self.inference_decimation == 0:
                         # Build state proxy
                         class StateProxy:
-                            def __init__(self, q, dq, robot_type):
+                            def __init__(self, q, dq, qpos_addr, qvel_addr):
                                 self.imu = type('obj', (object,), {
                                     'quaternion': q[3:7].tolist(),
                                     'gyroscope': dq[3:6].tolist()
@@ -168,9 +171,9 @@ class Ros2MujocoBridge(Node):
                                 self.motorState = [type('obj', (object,), {
                                     'q': q[addr],
                                     'dq': dq[v_addr]
-                                }) for addr, v_addr in zip(self.isaac_qpos_addr, self.isaac_qvel_addr)]
+                                }) for addr, v_addr in zip(qpos_addr, qvel_addr)]
                         
-                        state = StateProxy(self.data.qpos, self.data.qvel, self.robot_type)
+                        state = StateProxy(self.data.qpos, self.data.qvel, self.isaac_qpos_addr, self.isaac_qvel_addr)
                         obs = self.runner.build_obs(state, self.cmd_vel, self.last_actions, self.desired_qpos, self.mj_to_isaac)
                         actions = self.runner.get_action(obs)
                         self.last_actions[:] = actions
