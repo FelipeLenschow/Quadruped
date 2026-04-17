@@ -77,12 +77,9 @@ class Ros2GazeboBridge(Node):
         self.base_ang_vel = np.zeros(3)
         self.base_lin_vel_b = np.zeros(3)
 
-        # 3. Gazebo Transport & Subscriptions
-        self.gz_node = GzTransportNode()
+        # 3. Gazebo Transport (Deferred until physics loop for partitioning)
+        self.gz_node = None
         self.joint_pubs = []
-        for jname in JOINT_NAMES:
-            topic = f"/model/{self.robot_type}/joint/{jname}/cmd_force"
-            self.joint_pubs.append(self.gz_node.advertise(topic, double_pb2.Double))
         
         self.new_data_event = threading.Event()
         self._stop = threading.Event()
@@ -163,7 +160,7 @@ class Ros2GazeboBridge(Node):
         Gazebo clears forces every step; this ensures the robot stays powered.
         """
         while not self._stop.is_set():
-            if hasattr(self, 'joint_pubs') and self.joint_pubs:
+            if hasattr(self, 'joint_pubs') and len(self.joint_pubs) == 12:
                 torch_torques = self.latest_torques.copy()
                 for i, torque in enumerate(torch_torques):
                     msg = double_pb2.Double()
@@ -213,6 +210,15 @@ class Ros2GazeboBridge(Node):
         
         # Match our own process partition for topic discovery
         os.environ["GZ_PARTITION"] = partition
+        print(f"[Ros2GazeboBridge] Initializing GzTransportNode on partition: {partition}")
+        self.gz_node = GzTransportNode()
+        
+        # Advertise joint topics
+        self.joint_pubs = []
+        for jname in JOINT_NAMES:
+            topic = f"/model/{self.robot_type}/joint/{jname}/cmd_force"
+            self.joint_pubs.append(self.gz_node.advertise(topic, double_pb2.Double))
+
         time.sleep(5.0)
 
         # 4. Bind Subscriptions
@@ -222,11 +228,12 @@ class Ros2GazeboBridge(Node):
         self.gz_node.subscribe(world_stats_pb2.WorldStatistics, f"/world/{self.world_name}/stats", self._stats_cb)
 
         # 5. Wait for First State
-        while (self.sim_time == 0 or np.all(self.q == 0)) and not self._stop.is_set():
+        print("[Ros2GazeboBridge] Waiting for simulation to start and first joint state...")
+        while (self.sim_time == 0) and not self._stop.is_set():
             time.sleep(0.1)
         
-        print("[Ros2GazeboBridge] First joint state received. Initializing targets.")
-        self.latest_targets[:] = self.q
+        print(f"[Ros2GazeboBridge] Simulation started at t={self.sim_time:.2f}. Initializing targets.")
+        self.latest_targets[:] = self.q if not np.all(self.q == 0) else self.latest_targets
             
         pos_err_hist = np.zeros((3, 12), dtype=np.float32)
         vel_hist = np.zeros((3, 12), dtype=np.float32)

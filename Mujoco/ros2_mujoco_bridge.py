@@ -82,7 +82,7 @@ class Ros2MujocoBridge(Node):
                 self.model.dof_damping[self.model.jnt_dofadr[i]] = 0.0
                 self.model.dof_frictionloss[self.model.jnt_dofadr[i]] = 0.01
 
-        # History for PD deriv (matching simulator logic)
+        # History for PD deriv
         self.pos_err_hist = np.zeros((1, 12), dtype=np.float32)
         self.vel_hist = np.zeros((1, 12), dtype=np.float32)
 
@@ -105,13 +105,16 @@ class Ros2MujocoBridge(Node):
         print("[MujocoBridge] Robot reset to standing pose.")
 
     def _pd_torques(self, targets):
-        """Compute DCMotor PD torques matching IsaacLab's DCMotorCfg."""
+        """Compute DCMotor PD torques matching training (Kp=25, Kd=0.5)."""
         q = self.data.qpos[self.isaac_qpos_addr]
         v = self.data.qvel[self.isaac_qvel_addr]
-        pos_err = q - targets
+        
+        pos_err = targets - q  # Target - Actual
         kp, kd = 25.0, 0.5
         effort_limit, sat_effort, vel_lim = 23.5, 23.5, 30.0
-        torques = -kp * pos_err - kd * v
+        
+        torques = kp * pos_err + kd * (0 - v)
+        
         vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
         v_clamp = np.clip(v, -vel_at_lim, vel_at_lim)
         t_top = sat_effort * (1.0 - v_clamp / vel_lim)
@@ -156,11 +159,12 @@ class Ros2MujocoBridge(Node):
                     next_time = time.time()
 
     def _publish_sensors(self, now):
+        # Joint States
         js = JointState()
         js.header.stamp = now
         js.name = self.isaac_names
         js.position = self.data.qpos[self.isaac_qpos_addr].tolist()
-        js.velocity  = self.data.qvel[self.isaac_qvel_addr].tolist()
+        js.velocity = self.data.qvel[self.isaac_qvel_addr].tolist()
         self.joint_pub.publish(js)
 
         q = self.data.qpos[3:7]        # IMU

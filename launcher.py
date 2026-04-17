@@ -48,10 +48,11 @@ def run_cli_menu():
     # 1. Action
     tp = input(
         "Select Action:\n  [1] Train\n"
-        "  [2] Play IsaacSim\n"
-        "  [3] Play MuJoCo\n"
-        "  [4] Play Gazebo\n"
-        "Enter choice [1-4] (default 2): "
+        "  [2] Play IsaacSim (Internal)\n"
+        "  [3] Play MuJoCo (Bridge)\n"
+        "  [4] Play Gazebo (Bridge)\n"
+        "  [5] Play IsaacSim (Bridge)\n"
+        "Enter choice [1-5] (default 2): "
     ).strip()
     if tp == "1":
         action = "train"
@@ -59,6 +60,8 @@ def run_cli_menu():
         action = "mujoco"
     elif tp == "4":
         action = "gazebo"
+    elif tp == "5":
+        action = "isaac_bridge"
     else:
         action = "isaac"
 
@@ -102,7 +105,7 @@ def run_cli_menu():
 
     # 4. Num Envs
     num_envs = ""
-    if action not in ("mujoco", "gazebo"):
+    if action not in ("mujoco", "gazebo", "isaac_bridge"):
         num_envs = input(
             "\nEnter number of environments (leave blank to use config default): "
         ).strip()
@@ -125,7 +128,7 @@ def run_cli_menu():
     )
     checkpoint_paths.sort(reverse=True)
 
-    needs_ckpt = action in ("isaac", "mujoco", "gazebo")
+    needs_ckpt = action in ("isaac", "mujoco", "gazebo", "isaac_bridge")
 
     if needs_ckpt and not checkpoint_paths:
         print(
@@ -165,9 +168,9 @@ def run_cli_menu():
             except ValueError:
                 selected_ckpt = None
 
-    if action in ("mujoco", "gazebo"):
+    if action in ("mujoco", "gazebo", "isaac_bridge"):
         teleop = False  # Using ROS 2 teleop instead of internal WASD
-    elif action == "isaac":
+    elif action in ("isaac", "isaac_bridge"):
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
     else:
@@ -208,7 +211,7 @@ if __name__ == "__main__":
         print(f"Robots:   A1 + Go1 + Go2 (Sim2Sim)")
     print(f"Terrain:  {terrain_cfg}")
     print(f"Envs:     {num_envs if num_envs else 'Config Default'}")
-    if action in ("isaac", "mujoco", "gazebo"):
+    if action in ("isaac", "isaac_bridge", "mujoco", "gazebo"):
         print(f"Checkpoint: {ckpt}")
         print(f"Teleop:   {teleop}")
     else:
@@ -226,23 +229,43 @@ if __name__ == "__main__":
     if os.path.exists(source_dir):
         env["PYTHONPATH"] = source_dir + os.pathsep + env.get("PYTHONPATH", "")
 
-    # Environment Sanitization for ROS 2 Bridges (MuJoCo/Gazebo)
+    # Environment Sanitization for ROS 2 Bridges (MuJoCo/Gazebo/Isaac)
     # This prevents pollution from Isaac Sim's site-packages (Python 3.11)
     # when we want to use the system ROS 2 (Python 3.10)
-    if action in ("mujoco", "gazebo"):
-        # Ensure ROS 2 standard paths are present (Humble uses dist-packages)
-        ros_python_path = "/opt/ros/humble/local/lib/python3.10/dist-packages"
-        if ros_python_path not in env.get("PYTHONPATH", ""):
-            env["PYTHONPATH"] = ros_python_path + os.pathsep + env.get("PYTHONPATH", "")
+    if action in ("mujoco", "gazebo", "isaac_bridge"):
+        if action == "isaac_bridge":
+            # Use Isaac Sim's internal ROS 2 libraries (compiled for Python 3.11)
+            isaac_ros_path = "/home/05680435969@corp.udesc.br/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/rclpy"
+            if os.path.exists(isaac_ros_path):
+                env["PYTHONPATH"] = (
+                    isaac_ros_path + os.pathsep + env.get("PYTHONPATH", "")
+                )
+                # Also add the lib folder for shared objects
+                env["LD_LIBRARY_PATH"] = (
+                    os.path.join(os.path.dirname(isaac_ros_path), "lib")
+                    + os.pathsep
+                    + env.get("LD_LIBRARY_PATH", "")
+                )
+        else:
+            # Ensure ROS 2 standard paths are present (Humble uses dist-packages)
+            ros_python_path = "/opt/ros/humble/local/lib/python3.10/dist-packages"
+            if ros_python_path not in env.get("PYTHONPATH", ""):
+                env["PYTHONPATH"] = (
+                    ros_python_path + os.pathsep + env.get("PYTHONPATH", "")
+                )
 
-        # Add fallback just in case
-        fallback_path = "/opt/ros/humble/lib/python3.10/site-packages"
-        if fallback_path not in env.get("PYTHONPATH", ""):
-            env["PYTHONPATH"] = env.get("PYTHONPATH", "") + os.pathsep + fallback_path
+            # Add fallback just in case
+            fallback_path = "/opt/ros/humble/lib/python3.10/site-packages"
+            if fallback_path not in env.get("PYTHONPATH", ""):
+                env["PYTHONPATH"] = (
+                    env.get("PYTHONPATH", "") + os.pathsep + fallback_path
+                )
 
         # Unset virtualenv variables that might confuse the system python
-        env.pop("VIRTUAL_ENV", None)
-        env.pop("PYTHONHOME", None)
+        if action != "isaac_bridge":  # Keep env for Isaac
+            env.pop("VIRTUAL_ENV", None)
+            env.pop("PYTHONHOME", None)
+
         # VDI Fixes for Gazebo/ROS 2
         env["FORCE_SOFTWARE_RENDER"] = "1"
         env["GZ_PARTITION"] = "quadruped_sim"
@@ -278,7 +301,7 @@ if __name__ == "__main__":
     # Final Command Assembly
     abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
     obs_dim = env.get("QUADRUPED_OBS_DIM", "49")
-    
+
     def get_robot_key(cfg):
         return {
             "UNITREE_A1_CFG": "a1",
@@ -291,34 +314,89 @@ if __name__ == "__main__":
     if action == "train":
         script_path = os.path.join("scripts", "skrl", "train.py")
         cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
-        if num_envs: cmd.append(f"--num_envs={num_envs}")
-        if ckpt: cmd.append(f"--checkpoint={abs_ckpt}")
-        if headless: cmd.append("--headless")
+        if num_envs:
+            cmd.append(f"--num_envs={num_envs}")
+        if ckpt:
+            cmd.append(f"--checkpoint={abs_ckpt}")
+        if headless:
+            cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "real"):
+    elif action in ("mujoco", "gazebo", "real", "isaac_bridge"):
         # Unified ROS 2 Pipeline: Bridge + Controller
         # 1. Determine Bridge Script
         if action == "mujoco":
-            bridge_script = os.path.abspath(os.path.join("Mujoco", "ros2_mujoco_bridge.py"))
+            bridge_script = os.path.abspath(
+                os.path.join("Mujoco", "ros2_mujoco_bridge.py")
+            )
             bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}"]
         elif action == "gazebo":
-            bridge_script = os.path.abspath(os.path.join("Gazebo", "ros2_gazebo_bridge.py"))
+            bridge_script = os.path.abspath(
+                os.path.join("Gazebo", "ros2_gazebo_bridge.py")
+            )
             bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}"]
-        else: # real
-            bridge_script = os.path.abspath(os.path.join("Unitree", "ros2_real_bridge.py"))
+        elif action == "isaac_bridge":
+            bridge_script = os.path.abspath(
+                os.path.join("IsaacSim", "ros2_isaac_bridge.py")
+            )
+            # Isaac requires its own python with specialized path
+            bridge_cmd = [sys.executable, bridge_script, f"--robot={robot_key}"]
+            if headless:
+                bridge_cmd.append("--headless")
+        else:  # real
+            bridge_script = os.path.abspath(
+                os.path.join("Unitree", "ros2_real_bridge.py")
+            )
             bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}"]
 
         # 2. Controller Script
         ctrl_script = os.path.abspath(os.path.join("Controller", "policy_bridge.py"))
-        ctrl_cmd = ["/usr/bin/python3", ctrl_script, f"--checkpoint={abs_ckpt}", f"--robot={robot_key}", f"--obs_dim={obs_dim}"]
+        ctrl_cmd = [
+            "/usr/bin/python3",
+            ctrl_script,
+            f"--checkpoint={abs_ckpt}",
+            f"--robot={robot_key}",
+            f"--obs_dim={obs_dim}",
+        ]
 
         print(f"[Launcher] Starting Bridge: {' '.join(bridge_cmd)}")
-        bridge_proc = subprocess.Popen(bridge_cmd, env=env, cwd=module_path)
+        bridge_env = env.copy()
+        if action != "isaac_bridge":
+            # For non-Isaac bridges, we want to ensure system Python 3.10 env
+            bridge_env.pop("VIRTUAL_ENV", None)
+            bridge_env.pop("PYTHONHOME", None)
         
+        bridge_proc = subprocess.Popen(bridge_cmd, env=bridge_env, cwd=module_path)
+
         print(f"[Launcher] Starting Controller: {' '.join(ctrl_cmd)}")
+        ctrl_env = env.copy()
+        # Controller MUST use system ROS 2 / Python 3.10
+        # If we added Isaac paths to 'env', we must remove them for the controller
+        if action == "isaac_bridge":
+            isaac_ros_path = "/home/05680435969@corp.udesc.br/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/rclpy"
+            if isaac_ros_path in ctrl_env.get("PYTHONPATH", ""):
+                paths = ctrl_env["PYTHONPATH"].split(os.pathsep)
+                paths = [p for p in paths if p != isaac_ros_path]
+                ctrl_env["PYTHONPATH"] = os.pathsep.join(paths)
+            
+            # Remove LD_LIBRARY_PATH pollution
+            isaac_lib_path = os.path.join(os.path.dirname(isaac_ros_path), "lib")
+            if isaac_lib_path in ctrl_env.get("LD_LIBRARY_PATH", ""):
+                paths = ctrl_env["LD_LIBRARY_PATH"].split(os.pathsep)
+                paths = [p for p in paths if p != isaac_lib_path]
+                ctrl_env["LD_LIBRARY_PATH"] = os.pathsep.join(paths)
+            
+            # Ensure system ROS 2 paths are present
+            ros_python_path = "/opt/ros/humble/local/lib/python3.10/dist-packages"
+            if ros_python_path not in ctrl_env.get("PYTHONPATH", ""):
+                ctrl_env["PYTHONPATH"] = ros_python_path + os.pathsep + ctrl_env.get("PYTHONPATH", "")
+            
+            # For controller, we must clean the environment from Isaac's pollution
+            ctrl_env.pop("VIRTUAL_ENV", None)
+            ctrl_env.pop("PYTHONHOME", None)
+
         try:
-            subprocess.run(ctrl_cmd, env=env, cwd=module_path)
+            subprocess.run(ctrl_cmd, env=ctrl_env, cwd=module_path)
         except KeyboardInterrupt:
             pass
         finally:
@@ -328,6 +406,8 @@ if __name__ == "__main__":
     else:  # isaac play
         script_path = os.path.join("scripts", "skrl", "play.py")
         cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
-        if num_envs: cmd.append(f"--num_envs={num_envs}")
-        if ckpt: cmd.append(f"--checkpoint={abs_ckpt}")
+        if num_envs:
+            cmd.append(f"--num_envs={num_envs}")
+        if ckpt:
+            cmd.append(f"--checkpoint={abs_ckpt}")
         subprocess.run(cmd, env=env, cwd=module_path)

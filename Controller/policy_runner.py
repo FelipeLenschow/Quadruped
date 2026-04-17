@@ -41,11 +41,13 @@ class PolicyMLP(nn.Module):
 
 class PolicyRunner:
     def __init__(self, checkpoint_path, obs_dim=None, robot_type="go1", device="cpu"):
+        print(f"[PolicyRunner] __init__ called for {checkpoint_path}")
         self.device = device
         self.checkpoint_path = checkpoint_path
         self.robot_type = robot_type
         self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 49))
-        self.is_jit = checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path)
+        self.is_jit = checkpoint_path.endswith(".jit") or (checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path))
+        print(f"[PolicyRunner] is_jit detected: {self.is_jit}")
         
         if self.is_jit:
             print(f"[PolicyRunner] Loading JIT model from {checkpoint_path}")
@@ -66,24 +68,15 @@ class PolicyRunner:
             self._load_checkpoint(checkpoint_path)
 
     def _check_is_jit(self, path):
-        try:
-            torch.jit.load(path, map_location="cpu")
-            return True
-        except:
-            return False
+        # SKRL usually uses .pt for state dicts. JIT models are different.
+        # We only treat as JIT if explicitly told or if .jit extension
+        if path.endswith(".jit"): return True
+        return False
 
     def _detect_jit_obs_dim(self, model):
         # Infer obs_dim from the model's forward signature or weight shape if possible
         # For now, we rely on the environment variable or common defaults
         return int(os.environ.get("QUADRUPED_OBS_DIM", 49))
-        self.action_scale = 0.25
-        
-        print(f"[PolicyRunner] Initializing with OBS_DIM={self.obs_dim}, layers={self.layers}")
-        
-        self.policy = PolicyMLP(self.obs_dim, self.layers, self.action_dim).to(self.device).eval()
-        self.scaler = RunningStandardScaler(self.obs_dim, self.device).to(self.device)
-        
-        self._load_checkpoint(checkpoint_path)
 
     def _inspect_checkpoint(self, path):
         """Detect obs_dim and layer sizes from checkpoint keys and shapes."""
@@ -117,8 +110,9 @@ class PolicyRunner:
         return obs_dim, layers
 
     def _load_checkpoint(self, path):
-        print(f"[PolicyRunner] Loading checkpoint weights...")
+        print(f"[PolicyRunner] Loading checkpoint weights from {path}")
         data = torch.load(path, map_location=self.device)
+        print(f"[PolicyRunner] Checkpoint keys: {list(data.keys())}")
         
         # Load policy
         policy_state = data.get("policy", {})
@@ -133,10 +127,17 @@ class PolicyRunner:
         self.policy.load_state_dict(net_keys, strict=False)
         
         # Load scaler
-        scaler_state = data.get("running_standard_scaler") or data.get("state_preprocessor")
+        scaler_state = data.get("state_preprocessor") or data.get("running_standard_scaler")
         if scaler_state:
-            self.scaler.load_state_dict(scaler_state)
-            print("[PolicyRunner] Loaded obs scaler")
+            # Map keys if they have '_model.' prefix
+            clean_scaler_state = {}
+            for k, v in scaler_state.items():
+                clean_key = k.split("_model.")[-1]
+                clean_scaler_state[clean_key] = v
+            self.scaler.load_state_dict(clean_scaler_state)
+            print(f"[PolicyRunner] Loaded obs scaler (mean[0]: {self.scaler.running_mean[0]:.3f})")
+        else:
+            print("[PolicyRunner] WARNING: No obs scaler found in checkpoint!")
 
     def build_obs(self, state, commands, last_actions, desired_qpos, mj_to_isaac):
         """

@@ -1,7 +1,8 @@
 Add a input variable to controll the swing height and the base height
-Add a point cloud of the terrain as input
+- Add a point cloud of the terrain as input
 Add a friction variable to controll the friction of the terrain
 Add a noise variable to controll the noise of the sensors
+Make the robot start in a random position or laying down
 Add a way to recouver from a fall
 - Add friction variation of the actuators
 - Add a foot height reward
@@ -9,7 +10,8 @@ Add a way to recouver from a fall
 - Make the foot height not influence the standing phase
 Add a automatic rename to trained agents via launcher
 Add a way to change the timestep from trainer via launcher
-Add a way to open 3 robots at once in mujoco
+Make a fail safe to the robot
+Make limitter to the torque and velocity of the actuators
 
 
 
