@@ -5,6 +5,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import time
 import numpy as np
+"""
+MuJoCo Driver for Quadruped Locomotion. 
+Handles internal policy inference (Turbo Mode), physics stepping, 
+and standardizes telemetry for ROS 2 monitoring.
+"""
+
 import mujoco
 from mujoco import viewer
 import rclpy
@@ -18,7 +24,7 @@ from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
 from Controller.Utils.telemetry import TelemetryManager
 
-class Ros2MujocoBridge(Node):
+class Ros2MujocoDriver(Node):
     def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49):
         super().__init__('mujoco_bridge_node')
         self.robot_type = robot_type
@@ -27,7 +33,7 @@ class Ros2MujocoBridge(Node):
         # Internal Policy Runner (Turbo Mode)
         self.runner = None
         if checkpoint:
-            print(f"[MujocoBridge] Loading internal policy runner (Turbo Mode): {checkpoint}")
+            print(f"[MujocoDriver] Loading internal policy runner (Turbo Mode): {checkpoint}")
             self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
             self.last_actions = np.zeros(12, dtype=np.float32)
             self.inference_counter = 0
@@ -39,7 +45,7 @@ class Ros2MujocoBridge(Node):
         if not os.path.exists(mjcf_path):
              mjcf_path = os.path.join(os.path.dirname(__file__), "scene.xml")
 
-        print(f"[MujocoBridge] Initializing for Go2. Model: {mjcf_path}")
+        print(f"[MujocoDriver] Initializing for Go2. Model: {mjcf_path}")
         self.model = mujoco.MjModel.from_xml_path(mjcf_path)
         self.data = mujoco.MjData(self.model)
         self.model.opt.timestep = 0.001
@@ -51,14 +57,13 @@ class Ros2MujocoBridge(Node):
         self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=self.isaac_names, saturation=0.9)
 
         # 3. Subscriptions
-        self.create_subscription(JointState, '/commands/joint_commands', self.joint_command_cb, 10)
         self.create_subscription(Twist, '/cmd_vel', self.teleop_cb, 10)
 
         # 4. Physics Thread
         self.physics_thread = threading.Thread(target=self._physics_loop, daemon=True)
         self.physics_thread.start()
 
-        print(f"[MujocoBridge] Initialized for {self.robot_type}. Physics running at 200Hz.")
+        print(f"[MujocoDriver] Initialized for {self.robot_type.upper()}. Physics running at 200Hz.")
 
     def _init_physics(self):
         """Initialize MuJoCo physics and resolve joint addresses."""
@@ -102,11 +107,6 @@ class Ros2MujocoBridge(Node):
         self.pos_err_hist = np.zeros((1, 12), dtype=np.float32)
         self.vel_hist = np.zeros((1, 12), dtype=np.float32)
 
-    def joint_command_cb(self, msg):
-        """Receive joint targets from the ROS Controller."""
-        if len(msg.position) == 12:
-            self.current_targets = np.array(msg.position, dtype=np.float32)
-
     def teleop_cb(self, msg):
         """Teleop passed through to sensors for the policy runner to see."""
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
@@ -118,7 +118,7 @@ class Ros2MujocoBridge(Node):
         self.data.qpos[2] = 0.50
         self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
         mujoco.mj_forward(self.model, self.data)
-        print("[MujocoBridge] Robot reset to standing pose.")
+        print("[MujocoDriver] Robot reset to standing pose.")
 
     def _pd_torques(self, targets):
         """Compute DCMotor PD torques matching training (Kp=25, Kd=0.5)."""
@@ -201,12 +201,12 @@ def main():
     args = parser.parse_args()
     
     rclpy.init()
-    bridge = Ros2MujocoBridge(robot_type=args.robot, checkpoint=args.internal_policy, obs_dim=args.obs_dim)
+    node = Ros2MujocoDriver(robot_type=args.robot, checkpoint=args.internal_policy, obs_dim=args.obs_dim)
     try:
-        rclpy.spin(bridge)
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    bridge.destroy_node()
+    node.destroy_node()
     rclpy.shutdown()
 
 if __name__ == "__main__":

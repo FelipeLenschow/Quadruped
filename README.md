@@ -1,44 +1,40 @@
 # Quadruped RL Deployment Framework
 
-A unified suite for training and deploying reinforcement learning policies for Unitree quadruped robots across multiple simulators and physical hardware.
+A unified suite for training and deploying reinforcement learning policies for Unitree quadruped robots (Go2, Go1, A1) across multiple simulators and physical hardware.
 
 ## 🚀 Unified Launcher
-Everything starts at `launcher.py`. Run it to access:
-- **Isaac Lab**: Training and high-parallelism evaluation.
-- **MuJoCo**: High-fidelity physics validation (Sim-to-Real).
-- **Gazebo Sim (Harmonic)**: Standalone ROS-compatible simulation.
-- **Physical Hardware**: Direct deployment to Unitree Go1/A1.
+Everything starts at `launcher.py`. Run it to access a simplified, professional menu:
 
-## 🏗️ Project Structure
+- **Train Policy**: High-parallelism reinforcement learning in Isaac Lab.
+- **Play Policy**: Rapid evaluation of trained checkpoints in Isaac Lab (Sim2Sim).
+- **Play IsaacSim / MuJoCo / Gazebo**: High-fidelity verification using specialized **Drivers** that mirror real-robot firmware behavior.
 
-- `IsaacLab_Tasks/`: Contains task definitions (Walk, Stairs, Handstand, etc.). The launcher automatically detects new tasks here.
-- `Mujoco/`: MuJoCo simulation bridge and robot model (using `unitree_sdk_mock`).
-- `Gazebo/`: Standalone Gazebo Harmonic SDF assets and the Python bridge (`gazebo_sim2sim.py`).
-- `Deployment/`: The core of the Sim-to-Real pipeline.
-  - `policy_runner.py`: Modular inference engine shared by all platforms.
-  - `export_jit.py`: Tool to convert PyTorch checkpoints into optimized **TorchScript** models.
-  - `real_deploy.py`: Final script for the robot's onboard computer.
+## 🏗️ Technical Architecture
+The framework is built on a **Hardware-Agnostic Core** to ensure zero-gap sim-to-real transfer.
 
-## 🧬 Multi-Python Architecture (Gazebo)
-> [!NOTE]
-> Gazebo Harmonic mode uses a hybrid Python approach.
+- **Unified Drivers**: Simulation bridges have been refactored into intelligent drivers (`mujoco_driver.py`, `gazebo_driver.py`, `isaac_driver.py`).
+- **TelemetryManager**: A centralized state standardizer in `telemetry.py` that converts raw simulator data into a `StandardState` object.
+- **CommandProcessor**: A safety-first action pipeline in `policy_bridge.py` that handles hardware-aware scaling and 90% saturation limits for the Go2.
+- **Turbo Mode**: Bit-perfect, zero-latency inference. All drivers run policy inference internally at 50Hz, bypassing ROS 2 transport jitter for critical control loops.
 
-Because the official **Gazebo Python bindings (`gz-transport`)** are built for the system's default Python version (usually **3.10** on Ubuntu 22.04), they are incompatible with the `env_isaacsim` environment which uses **Python 3.11**. 
+## 🧬 Project Structure
+- `Controller/`: The brain of the robot.
 
-The launcher automatically handles this by:
-1. Executing Isaac Lab and MuJoCo scripts using the `env_isaacsim` (3.11) interpreter.
-2. Executing Gazebo bridge scripts using the system `/usr/bin/python3` (3.10) interpreter.
-
-To support this, lightweight versions of `torch` and `numpy` should be installed for the system Python:
-```bash
-python3 -m pip install --user torch numpy
-```
+  - `policy_runner.py`: The cross-platform inference engine.
+  - `policy_bridge.py`: Contains the `CommandProcessor` for safety and scaling.
+  - `Utils/telemetry.py`: Standardizes data from any source (Sim or Real).
+- `IsaacLab_Tasks/`: RL task definitions and Isaac Lab configurations.
+- `Mujoco/`, `Gazebo/`, `IsaacSim/`: Simulator-specific drivers and assets.
 
 ## 🛠️ Typical Workflow
-1. **Train** in Isaac Lab: `python launcher.py` -> Select Task -> Train.
-2. **Export** to JIT: 
-   ```bash
-   python Controller/export_jit.py --checkpoint path/to/best_agent.pt --out Controller/policy_jit.pt
-   ```
-3. **Verify** in MuJoCo or Gazebo via the launcher.
-4. **Deploy** to a physical robot using the `Controller/` folder.
+
+1. **Train Policy**: `python launcher.py` -> Select Task -> **[1] Train Policy**.
+2. **Play Policy**: Verify logic immediately in Isaac Lab via **[2] Play Policy**.
+3. **High-Fidelity Verification**: Use the **MuJoCo** or **Gazebo** drivers to validate physics-dependent behaviors (e.g., foot friction, actuator dynamics).
+4. **Deploy**: The same `Controller/` module used in simulation is deployed directly to the Jetson Orin on the physical robot.
+
+## ⚠️ Requirements
+
+- **Isaac Sim Environment**: Python 3.11 (for Isaac Lab and MuJoCo drivers).
+- **System ROS 2**: Python 3.10 (for Gazebo drivers and monitoring).
+- The launcher automatically handles environment switching between `env_isaacsim` and `/usr/bin/python3`.

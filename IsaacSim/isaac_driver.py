@@ -1,3 +1,9 @@
+"""
+Isaac Sim Driver for Quadruped Locomotion. 
+Integrates the simulator's Articulation interface with the central 
+Policy Runner and Command Processor (Turbo Mode).
+"""
+
 import argparse
 import sys
 import os
@@ -80,16 +86,16 @@ class BridgeSceneCfg(InteractiveSceneCfg):
     )
 
 
-class Ros2IsaacBridge(Node):
+class Ros2IsaacDriver(Node):
     def __init__(self, robot, robot_type="go2", checkpoint=None, obs_dim=49):
-        super().__init__("isaac_bridge")
+        super().__init__("isaac_driver")
         self.robot = robot
         self.robot_type = robot_type
         
         # Internal Policy Runner (Turbo Mode)
         self.runner = None
         if checkpoint:
-            print(f"[IsaacBridge] Loading internal policy runner (Turbo Mode): {checkpoint}")
+            print(f"[IsaacDriver] Loading internal policy runner (Turbo Mode): {checkpoint}")
             self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
             self.last_actions = np.zeros(12, dtype=np.float32)
             self.desired_qpos = np.array([
@@ -137,7 +143,7 @@ class Ros2IsaacBridge(Node):
                         break
                 if not found:
                     print(
-                        f"[IsaacBridge] ERROR: Could not find joint {name} in simulation!"
+                        f"[IsaacDriver] ERROR: Could not find joint {name} in simulation!"
                     )
 
         if len(self.mapped_dof_idx) != 12:
@@ -151,9 +157,6 @@ class Ros2IsaacBridge(Node):
         self.cmd_echo_pub = self.create_publisher(JointState, "/commands/joint_commands", 10)
 
         # 3. Subscriptions
-        self.create_subscription(
-            JointState, "/commands/joint_commands", self.joint_command_cb, 10
-        )
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
 
         # 4. Buffers
@@ -163,18 +166,12 @@ class Ros2IsaacBridge(Node):
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
 
         print(
-            f"[IsaacBridge] Initialized for {self.robot_type} with {len(self.mapped_dof_idx)} joints."
+            f"[IsaacDriver] Initialized for {self.robot_type.upper()} with {len(self.mapped_dof_idx)} joints."
         )
         defaults = self.robot.data.default_joint_pos[0, self.mapped_dof_idx].tolist()
         for i, name in enumerate(self.joint_names):
             print(
                 f"  - Joint [{i}] (Idx {self.mapped_dof_idx[i]}): {name} | Default: {defaults[i]:.3f}"
-            )
-
-    def joint_command_cb(self, msg):
-        if len(msg.position) == 12:
-            self.latest_targets = torch.tensor(
-                msg.position, device=self.robot.device, dtype=torch.float32
             )
 
     def teleop_cb(self, msg):
@@ -236,7 +233,7 @@ class Ros2IsaacBridge(Node):
             j_errs = torch.abs(curr_jpos - self.latest_targets)
             max_err_idx = torch.argmax(j_errs).item()
             
-            print(f"[IsaacBridge] V_body: {[round(x,3) for x in root_v_b]} | Max Error: {j_errs[max_err_idx]:.3f} on {self.joint_names[max_err_idx]}")
+            print(f"[IsaacDriver] V_body: {[round(x,3) for x in root_v_b]} | Max Error: {j_errs[max_err_idx]:.3f} on {self.joint_names[max_err_idx]}")
             self._last_telemetry = now
 
         # 2. Publish Standardized Telemetry (Downsampled to 20Hz for network efficiency)
@@ -292,20 +289,20 @@ def main():
     scene.reset()
     scene.update(0.0)
 
-    # 6. Initialize Bridge (After reset so .data is available)
-    bridge_node = Ros2IsaacBridge(robot, args_cli.robot, checkpoint=args_cli.internal_policy, obs_dim=args_cli.obs_dim)
+    # 6. Initialize Driver (After reset so .data is available)
+    node = Ros2IsaacDriver(robot, args_cli.robot, checkpoint=args_cli.internal_policy, obs_dim=args_cli.obs_dim)
 
-    print("[IsaacBridge] Starting simulation loop...")
+    print("[IsaacDriver] Starting simulation loop...")
     next_time = time.time()
     count = 0
     while simulation_app.is_running():
         # 1. Sync ROS 2 (Drain all pending messages)
         while rclpy.ok():
-            if not rclpy.spin_once(bridge_node, timeout_sec=0.0):
+            if not rclpy.spin_once(node, timeout_sec=0.0):
                 break
 
-        # 2. Bridge Logic (Manual PD)
-        bridge_node.step()
+        # 2. Driver Logic (Manual PD)
+        node.step()
         
         # 3. Write data to sim (APPLY EFFORTS TO PHYSX)
         scene.write_data_to_sim()
@@ -320,7 +317,7 @@ def main():
         if count % 100 == 0:
             pos = robot.data.root_pos_w[0]
             print(
-                f"\r[IsaacBridge] Sim Time Step: {count} | Robot Height: {pos[2]:.3f}m | T: {sim_context.current_time:.2f}s",
+                f"\r[IsaacDriver] Sim Time Step: {count} | Robot Height: {pos[2]:.3f}m | T: {sim_context.current_time:.2f}s",
                 end="",
                 flush=True,
             )
@@ -331,7 +328,7 @@ def main():
         next_time += 0.005
 
     # Cleanup
-    bridge_node.destroy_node()
+    node.destroy_node()
     rclpy.shutdown()
     simulation_app.close()
 

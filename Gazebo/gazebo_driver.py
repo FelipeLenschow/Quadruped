@@ -1,3 +1,9 @@
+"""
+Gazebo Driver for Quadruped Locomotion. 
+Manages high-frequency physics stepping, ActuatorNet simulation, 
+and deterministic policy deployment (Turbo Mode).
+"""
+
 import os
 import sys
 # Ensure absolute path of the repository is in sys.path
@@ -56,7 +62,7 @@ JOINT_NAMES = [
 ]
 
 
-class Ros2GazeboBridge(Node):
+class Ros2GazeboDriver(Node):
     def __init__(self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
@@ -65,7 +71,7 @@ class Ros2GazeboBridge(Node):
         # Internal Policy Runner (Turbo Mode)
         self.runner = None
         if checkpoint:
-            print(f"[GazeboBridge] Loading internal policy runner (Turbo Mode): {checkpoint}")
+            print(f"[GazeboDriver] Loading internal policy runner (Turbo Mode): {checkpoint}")
             self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
             self.last_actions = np.zeros(12, dtype=np.float32)
             self.desired_qpos = np.array(
@@ -81,7 +87,6 @@ class Ros2GazeboBridge(Node):
         self.telemetry = TelemetryManager(self, JOINT_NAMES)
         self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=JOINT_NAMES, saturation=0.9)
 
-        self.create_subscription(JointState, "/commands/joint_commands", self._command_cb, 10)
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
 
         # 2. State & Control Buffers
@@ -112,11 +117,7 @@ class Ros2GazeboBridge(Node):
         self.physics_thread.start()
         self.repeater_thread.start()
 
-        print(f"[Ros2GazeboBridge] Initialized for {robot_type}. Physics at 500Hz (Slave).")
-
-    def _command_cb(self, msg):
-        if len(msg.position) == 12:
-            self.latest_targets[:] = msg.position
+        print(f"[GazeboDriver] Initialized for {robot_type.upper()}. Physics at 500Hz (Slave).")
 
     def _teleop_cb(self, msg):
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
@@ -220,15 +221,15 @@ class Ros2GazeboBridge(Node):
         if os.environ.get("GZ_HEADLESS", "0") == "1":
             gz_args.append("-s")
         
-        print(f"[Ros2GazeboBridge] Partition: {partition}")
-        print(f"[Ros2GazeboBridge] Launching: {' '.join(gz_args)}")
+        print(f"[GazeboDriver] Partition: {partition}")
+        print(f"[GazeboDriver] Launching: {' '.join(gz_args)}")
         
         # Launch Gazebo in a new process group with the ENRICHED env
         self.gz_proc = subprocess.Popen(gz_args, env=env, preexec_fn=os.setsid)
         
         # Match our own process partition for topic discovery
         os.environ["GZ_PARTITION"] = partition
-        print(f"[Ros2GazeboBridge] Initializing GzTransportNode on partition: {partition}")
+        print(f"[GazeboDriver] Initializing GzTransportNode on partition: {partition}")
         self.gz_node = GzTransportNode()
         
         # Advertise joint topics
@@ -246,11 +247,11 @@ class Ros2GazeboBridge(Node):
         self.gz_node.subscribe(world_stats_pb2.WorldStatistics, f"/world/{self.world_name}/stats", self._stats_cb)
 
         # 5. Wait for First State
-        print("[Ros2GazeboBridge] Waiting for simulation to start and first joint state...")
+        print("[GazeboDriver] Waiting for simulation to start and first joint state...")
         while (self.sim_time == 0) and not self._stop.is_set():
             time.sleep(0.1)
         
-        print(f"[Ros2GazeboBridge] Simulation started at t={self.sim_time:.2f}. Initializing targets.")
+        print(f"[GazeboDriver] Simulation started at t={self.sim_time:.2f}. Initializing targets.")
         self.latest_targets[:] = self.q if not np.all(self.q == 0) else self.latest_targets
             
         pos_err_hist = np.zeros((3, 12), dtype=np.float32)
@@ -331,7 +332,7 @@ class Ros2GazeboBridge(Node):
         """Clean up Gazebo server and simulator processes."""
         self._stop.set()
         if hasattr(self, 'gz_proc') and self.gz_proc:
-            print(f"[Ros2GazeboBridge] Terminating simulator (PID {self.gz_proc.pid})...")
+            print(f"[GazeboDriver] Terminating simulator (PID {self.gz_proc.pid})...")
             try:
                 os.killpg(os.getpgid(self.gz_proc.pid), signal.SIGTERM)
                 self.gz_proc.wait(timeout=5)
@@ -349,7 +350,7 @@ def main():
     parser.add_argument("--obs_dim", type=int, default=49)
     args = parser.parse_args()
     rclpy.init()
-    node = Ros2GazeboBridge(args.robot, args.world, checkpoint=args.internal_policy, obs_dim=args.obs_dim)
+    node = Ros2GazeboDriver(args.robot, args.world, checkpoint=args.internal_policy, obs_dim=args.obs_dim)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

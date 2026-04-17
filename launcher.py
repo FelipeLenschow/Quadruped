@@ -47,32 +47,25 @@ def run_cli_menu():
 
     # 1. Action
     tp = input(
-        "Select Action:\n  [1] Train\n"
-        "  [2] Play IsaacSim (Internal)\n"
-        "  [3] Play MuJoCo (Bridge - ROS Inference)\n"
-        "  [4] Play Gazebo (Bridge)\n"
-        "  [5] Play IsaacSim (Bridge - ROS Inference)\n"
-        "  [6] Play IsaacSim (Turbo - Internal Inference)\n"
-        "  [7] Play MuJoCo (Turbo - Internal Inference)\n"
-        "  [8] Play Gazebo (Turbo - Internal Inference)\n"
-        "Enter choice [1-8] (default 2): "
+        "Select Action:\n  [1] Train Policy\n"
+        "  [2] Play Policy\n"
+        "  [3] Play IsaacSim\n"
+        "  [4] Play MuJoCo\n"
+        "  [5] Play Gazebo\n"
+        "Enter choice [1-5] (default 2): "
     ).strip()
     if tp == "1":
         action = "train"
+    elif tp == "2":
+        action = "isaac"
     elif tp == "3":
-        action = "mujoco"
-    elif tp == "4":
-        action = "gazebo"
-    elif tp == "5":
-        action = "isaac_bridge"
-    elif tp == "6":
         action = "isaac_turbo"
-    elif tp == "7":
+    elif tp == "4":
         action = "mujoco_turbo"
-    elif tp == "8":
+    elif tp == "5":
         action = "gazebo_turbo"
     else:
-        action = "isaac"
+        action = "isaac"  # Default to Play Policy (Original Isaac play)
 
     # 2. Robot selection
     selected_robot_cfg = "UNITREE_GO2_CFG"  # Global default
@@ -114,7 +107,7 @@ def run_cli_menu():
 
     # 4. Num Envs
     num_envs = ""
-    if action not in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
+    if action not in ("mujoco_turbo", "gazebo_turbo", "isaac_turbo"):
         num_envs = input(
             "\nEnter number of environments (leave blank to use config default): "
         ).strip()
@@ -137,7 +130,7 @@ def run_cli_menu():
     )
     checkpoint_paths.sort(reverse=True)
 
-    needs_ckpt = action in ("isaac", "mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo", "gazebo_turbo")
+    needs_ckpt = action in ("isaac", "isaac_turbo", "mujoco_turbo", "gazebo_turbo")
 
     if needs_ckpt and not checkpoint_paths:
         print(
@@ -177,13 +170,13 @@ def run_cli_menu():
             except ValueError:
                 selected_ckpt = None
 
-    if action in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
+    if action in ("isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
         teleop = False  # Using ROS 2 teleop instead of internal WASD
     elif action == "isaac":
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
     
-    if action in ("isaac", "isaac_bridge", "isaac_turbo", "mujoco", "gazebo", "mujoco_turbo", "gazebo_turbo"):
+    if action in ("isaac", "isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
         headless = False
     else:
         h_input = input("\nEnable Headless Mode? [Y/n]: ").strip().lower()
@@ -244,7 +237,7 @@ if __name__ == "__main__":
     # Environment Sanitization for ROS 2 Bridges (MuJoCo/Gazebo/Isaac)
     # This prevents pollution from Isaac Sim's site-packages (Python 3.11)
     # when we want to use the system ROS 2 (Python 3.10)
-    if action in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo"):
+    if action in ("mujoco_turbo", "gazebo_turbo", "isaac_turbo"):
         if action in ("isaac_bridge", "isaac_turbo"):
             # Use Isaac Sim's internal ROS 2 libraries (compiled for Python 3.11)
             isaac_ros_path = "/home/05680435969@corp.udesc.br/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/rclpy"
@@ -352,103 +345,35 @@ if __name__ == "__main__":
         isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
         
         if action == "isaac_turbo":
-            bridge_script = os.path.abspath(os.path.join("IsaacSim", "ros2_isaac_bridge.py"))
+            bridge_script = os.path.abspath(os.path.join("IsaacSim", "isaac_driver.py"))
             bridge_cmd = [isaac_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
         elif action == "mujoco_turbo":
-            bridge_script = os.path.abspath(os.path.join("Mujoco", "ros2_mujoco_bridge.py"))
+            bridge_script = os.path.abspath(os.path.join("Mujoco", "mujoco_driver.py"))
             bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
         elif action == "gazebo_turbo":
-            bridge_script = os.path.abspath(os.path.join("Gazebo", "ros2_gazebo_bridge.py"))
+            bridge_script = os.path.abspath(os.path.join("Gazebo", "gazebo_driver.py"))
             bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
-        elif action == "isaac_bridge":
-            bridge_script = os.path.abspath(os.path.join("IsaacSim", "ros2_isaac_bridge.py"))
-            bridge_cmd = [isaac_python, bridge_script, f"--robot={robot_key}"]
-        elif action == "mujoco":
-            bridge_script = os.path.abspath(
-                os.path.join("Mujoco", "ros2_mujoco_bridge.py")
-            )
-            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}"]
-        elif action == "gazebo":
-            bridge_script = os.path.abspath(
-                os.path.join("Gazebo", "ros2_gazebo_bridge.py")
-            )
-            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}"]
-        elif action == "isaac_bridge":
-            bridge_script = os.path.abspath(
-                os.path.join("IsaacSim", "ros2_isaac_bridge.py")
-            )
-            # Isaac requires its own python with specialized path
-            bridge_cmd = [sys.executable, bridge_script, f"--robot={robot_key}"]
-            if headless:
-                bridge_cmd.append("--headless")
         else:  # real
             bridge_script = os.path.abspath(
                 os.path.join("Unitree", "ros2_real_bridge.py")
             )
-            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}"]
+            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
 
-        # 2. Controller Script
-        ctrl_script = os.path.abspath(os.path.join("Controller", "policy_bridge.py"))
-        ctrl_cmd = [
-            "/usr/bin/python3",
-            ctrl_script,
-            f"--checkpoint={abs_ckpt}",
-            f"--robot={robot_key}",
-            f"--obs_dim={obs_dim}",
-        ]
-
-        print(f"[Launcher] Starting Bridge: {' '.join(bridge_cmd)}")
+        print(f"[Launcher] Starting Driver: {' '.join(bridge_cmd)}")
         bridge_env = env.copy()
-        if action not in ("isaac_bridge", "isaac_turbo"):
+        if action not in ("isaac_turbo"):
             # For non-Isaac bridges, we want to ensure system Python 3.10 env
             bridge_env.pop("VIRTUAL_ENV", None)
             bridge_env.pop("PYTHONHOME", None)
         
         bridge_proc = subprocess.Popen(bridge_cmd, env=bridge_env, cwd=module_path)
 
-        if action in ("isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
-            # No controller node needed for Turbo mode
-            print(f"[Launcher] Running in Turbo Mode (Internal Inference) on {action.split('_')[0]}.")
-            try:
-                bridge_proc.wait()
-            except KeyboardInterrupt:
-                bridge_proc.terminate()
-            sys.exit(0)
-
-        print(f"[Launcher] Starting Controller: {' '.join(ctrl_cmd)}")
-        ctrl_env = env.copy()
-        # Controller MUST use system ROS 2 / Python 3.10
-        # If we added Isaac paths to 'env', we must remove them for the controller
-        if action == "isaac_bridge":
-            isaac_ros_path = "/home/05680435969@corp.udesc.br/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/rclpy"
-            if isaac_ros_path in ctrl_env.get("PYTHONPATH", ""):
-                paths = ctrl_env["PYTHONPATH"].split(os.pathsep)
-                paths = [p for p in paths if p != isaac_ros_path]
-                ctrl_env["PYTHONPATH"] = os.pathsep.join(paths)
-            
-            # Remove LD_LIBRARY_PATH pollution
-            isaac_lib_path = os.path.join(os.path.dirname(isaac_ros_path), "lib")
-            if isaac_lib_path in ctrl_env.get("LD_LIBRARY_PATH", ""):
-                paths = ctrl_env["LD_LIBRARY_PATH"].split(os.pathsep)
-                paths = [p for p in paths if p != isaac_lib_path]
-                ctrl_env["LD_LIBRARY_PATH"] = os.pathsep.join(paths)
-            
-            # Ensure system ROS 2 paths are present
-            ros_python_path = "/opt/ros/humble/local/lib/python3.10/dist-packages"
-            if ros_python_path not in ctrl_env.get("PYTHONPATH", ""):
-                ctrl_env["PYTHONPATH"] = ros_python_path + os.pathsep + ctrl_env.get("PYTHONPATH", "")
-            
-            # For controller, we must clean the environment from Isaac's pollution
-            ctrl_env.pop("VIRTUAL_ENV", None)
-            ctrl_env.pop("PYTHONHOME", None)
-
+        print(f"[Launcher] Running in Turbo Mode (Internal Inference) on {action.split('_')[0] if '_' in action else action}.")
         try:
-            subprocess.run(ctrl_cmd, env=ctrl_env, cwd=module_path)
+            bridge_proc.wait()
         except KeyboardInterrupt:
-            pass
-        finally:
-            print("[Launcher] Terminating bridge...")
             bridge_proc.terminate()
+        sys.exit(0)
 
     else:  # isaac play
         script_path = os.path.join("scripts", "skrl", "play.py")
