@@ -50,6 +50,8 @@ from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from Controller.policy_runner import PolicyRunner
+from Controller.policy_bridge import CommandProcessor
+from Controller.Utils.telemetry import TelemetryManager
 
 from isaaclab_assets.robots.unitree import (
     UNITREE_A1_CFG,
@@ -143,10 +145,9 @@ class Ros2IsaacBridge(Node):
                 f"[IsaacBridge] WARNING: Found only {len(self.mapped_dof_idx)}/12 joints!"
             )
 
-        # ROS Publishers
-        self.js_pub = self.create_publisher(JointState, "/sensors/joint_states", 10)
-        self.imu_pub = self.create_publisher(Imu, "/sensors/imu", 10)
-        self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
+        # ROS 2 Managers
+        self.telemetry = TelemetryManager(self, self.joint_names)
+        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=self.joint_names, saturation=0.9)
         self.cmd_echo_pub = self.create_publisher(JointState, "/commands/joint_commands", 10)
 
         # 3. Subscriptions
@@ -185,27 +186,18 @@ class Ros2IsaacBridge(Node):
         # 0. Internal Inference (Turbo Mode)
         if self.runner:
             if self.inference_counter % self.inference_decimation == 0:
-                # Prepare state object for build_obs
-                class StateProxy:
-                    def __init__(self, robot, mapped_idx, cmd_vel):
-                        self.imu = type('obj', (object,), {
-                            'quaternion': robot.data.root_quat_w[0].tolist(),
-                            'gyroscope': robot.data.root_ang_vel_b[0].tolist()
-                        })
-                        self.base_lin_vel = robot.data.root_lin_vel_b[0].tolist()
-                        self.motorState = [type('obj', (object,), {
-                            'q': robot.data.joint_pos[0, i].item(),
-                            'dq': robot.data.joint_vel[0, i].item()
-                        }) for i in mapped_idx]
+                # 1. Use centralized parser for Standardization
+                state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
                 
-                state = StateProxy(self.robot, self.mapped_dof_idx, self.cmd_vel)
-                # Obs Builder
+                # 2. Feed Policy
                 obs = self.runner.build_obs(state, self.cmd_vel, self.last_actions, self.desired_qpos, self.mj_to_isaac)
-                # Inference
                 actions = self.runner.get_action(obs)
                 self.last_actions[:] = actions
-                # Update targets
-                self.latest_targets = torch.from_numpy(actions * 0.25 + self.desired_qpos).to(self.robot.data.joint_pos.device)
+                
+                # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
+                self.latest_targets = torch.from_numpy(
+                    self.command_processor.process(actions, self.desired_qpos)
+                ).to(device=self.robot.data.joint_pos.device, dtype=torch.float32)
             self.inference_counter += 1
 
         # 1. PD Effort Calculation (Matching training: Kp=25.0, Kd=0.5)
@@ -218,7 +210,7 @@ class Ros2IsaacBridge(Node):
         effort_limit = 23.5
         
         torques = kp * pos_err + kd * (0 - curr_jvel)
-        torques = torch.clamp(torques, -effort_limit, effort_limit)
+        torques = torch.clamp(torques, -effort_limit, effort_limit).to(torch.float32)
 
         # Apply Actions via Effort
         self.robot.set_joint_effort_target(torques, joint_ids=self.mapped_dof_idx)
@@ -247,39 +239,12 @@ class Ros2IsaacBridge(Node):
             print(f"[IsaacBridge] V_body: {[round(x,3) for x in root_v_b]} | Max Error: {j_errs[max_err_idx]:.3f} on {self.joint_names[max_err_idx]}")
             self._last_telemetry = now
 
-        # 2. Publish Sensors
-        now = self.get_clock().now().to_msg()
-
-        # Joint States
-        js = JointState()
-        js.header.stamp = now
-        js.name = self.joint_names
-        js.position = self.robot.data.joint_pos[0, self.mapped_dof_idx].tolist()
-        js.velocity = self.robot.data.joint_vel[0, self.mapped_dof_idx].tolist()
-        self.js_pub.publish(js)
-
-        # IMU
-        imu = Imu()
-        imu.header.stamp = now
-        imu.header.frame_id = "imu_link"
-        q = self.robot.data.root_quat_w[0]  # [w, x, y, z]
-        imu.orientation = Quaternion(
-            w=float(q[0]), x=float(q[1]), y=float(q[2]), z=float(q[3])
-        )
-        gv = self.robot.data.root_ang_vel_b[0]
-        imu.angular_velocity = Vector3(x=float(gv[0]), y=float(gv[1]), z=float(gv[2]))
-        self.imu_pub.publish(imu)
-
-        # Odom (Base Velocity)
-        odom = Odometry()
-        odom.header.stamp = now
-        odom.header.frame_id = "odom"
-        odom.child_frame_id = "base"
-        lv = self.robot.data.root_lin_vel_b[0]
-        odom.twist.twist.linear = Vector3(
-            x=float(lv[0]), y=float(lv[1]), z=float(lv[2])
-        )
-        self.odom_pub.publish(odom)
+        # 2. Publish Standardized Telemetry (Downsampled to 20Hz for network efficiency)
+        if self.step_counter % 5 == 0:
+            state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
+            self.telemetry.publish(sim_time=float(self.step_counter * 0.01), state=state)
+        
+        self.step_counter += 1
 
 
 def main():

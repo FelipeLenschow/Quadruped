@@ -17,6 +17,69 @@ import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from Controller.policy_runner import PolicyRunner, quat_to_rot_matrix
 
+class CommandProcessor:
+    """
+    Centralized component to handle policy outputs (Actions -> Robot).
+    Handles hardware-aware scaling, limiting, and sequenced publishing.
+    """
+    def __init__(self, node, robot_type="go2", joint_names=None, saturation=0.9):
+        self.node = node
+        self.robot_type = robot_type
+        self.saturation = saturation
+        self.joint_names = joint_names or [
+            "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
+            "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
+            "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint"
+        ]
+        
+        # Hardware Limits (Unitree Go2 Standard)
+        # Order: 0-3 HAA, 4-5 Front Thigh, 6-7 Back Thigh, 8-11 Calf
+        self.hard_min = np.array([
+            -1.047, -1.047, -1.047, -1.047, # HAA
+            -1.571, -1.571,                 # FL/FR Thigh
+            -0.524, -0.524,                 # RL/RR Thigh
+            -2.723, -2.723, -2.723, -2.723  # Calf
+        ], dtype=np.float32)
+        self.hard_max = np.array([
+            1.047, 1.047, 1.047, 1.047,   # HAA
+            3.491, 3.491,                 # FL/FR Thigh
+            4.538, 4.538,                 # RL/RR Thigh
+            -0.838, -0.838, -0.838, -0.838 # Calf
+        ], dtype=np.float32)
+        
+        # Apply Saturation Safeguard
+        self.center = (self.hard_min + self.hard_max) / 2.0
+        self.half_range = (self.hard_max - self.hard_min) / 2.0
+        self.soft_min = (self.center - self.half_range * self.saturation).astype(np.float32)
+        self.soft_max = (self.center + self.half_range * self.saturation).astype(np.float32)
+        
+        # Publisher
+        self.cmd_pub = self.node.create_publisher(JointState, '/commands/joint_commands', 10)
+        self.node.get_logger().info(f"[CommandProcessor] Initialized for {robot_type} (Sat: {saturation*100}%)")
+
+    def process(self, actions, desired_qpos, action_scale=0.25, send_to_robot_cb=None):
+        """
+        Sequenced Pipeline:
+        1. Limit: Calculate targets and clip to soft hardware limits.
+        2. Actuate: Execute callback to send targets to Simulator or Real SDK.
+        3. Telemetry: Publish resulting command to ROS 2.
+        """
+        # 1. Scaling & Clipping
+        targets = actions * action_scale + desired_qpos
+        limited_targets = np.clip(targets, self.soft_min, self.soft_max)
+        
+        # 2. Actuate (Simulator or Real Robot)
+        if send_to_robot_cb:
+            send_to_robot_cb(limited_targets)
+            
+        # 3. Publish to ROS 2
+        msg = JointState()
+        msg.header.stamp = self.node.get_clock().now().to_msg()
+        msg.name = self.joint_names
+        msg.position = limited_targets.tolist()
+        self.cmd_pub.publish(msg)
+        
+        return limited_targets
 
 class PolicyController(Node):
     """
@@ -124,19 +187,17 @@ class PolicyController(Node):
         actions = self.runner.get_action(obs)
         self.last_actions[:] = actions
 
-        # 3. Apply Scaling & Nominal Pose
-        targets = actions * 0.25 + self.desired_qpos
-
-        # 4. Publish
-        msg = JointState()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.name = [
-            "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
-            "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
-            "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint"
-        ]
-        msg.position = targets.tolist()
-        self.command_pub.publish(msg)
+        # 1. Replace manual processing with CommandProcessor
+        if not hasattr(self, 'command_processor'):
+            # Use standardized joint names
+            names = [
+                "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
+                "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
+                "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint"
+            ]
+            self.command_processor = CommandProcessor(self, robot_type="go2", joint_names=names)
+            
+        self.command_processor.process(actions, self.desired_qpos)
 
         # Console Output (Throttle to 25Hz for readability)
         if not hasattr(self, "_print_counter"): self._print_counter = 0

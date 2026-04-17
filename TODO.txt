@@ -20,3 +20,6 @@ Make limitter to the torque and velocity of the actuators
 cp5: Added sensor noise
 cp6: Added friction, foot height reward, robot variation
 cp7: penalize for lifting foot while standing
+cp8: GO2 only training
+cp9: Spawn robot in random positions
+cp10: Add more sim2real training strategies

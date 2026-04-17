@@ -54,7 +54,8 @@ def run_cli_menu():
         "  [5] Play IsaacSim (Bridge - ROS Inference)\n"
         "  [6] Play IsaacSim (Turbo - Internal Inference)\n"
         "  [7] Play MuJoCo (Turbo - Internal Inference)\n"
-        "Enter choice [1-7] (default 2): "
+        "  [8] Play Gazebo (Turbo - Internal Inference)\n"
+        "Enter choice [1-8] (default 2): "
     ).strip()
     if tp == "1":
         action = "train"
@@ -68,6 +69,8 @@ def run_cli_menu():
         action = "isaac_turbo"
     elif tp == "7":
         action = "mujoco_turbo"
+    elif tp == "8":
+        action = "gazebo_turbo"
     else:
         action = "isaac"
 
@@ -111,7 +114,7 @@ def run_cli_menu():
 
     # 4. Num Envs
     num_envs = ""
-    if action not in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo"):
+    if action not in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
         num_envs = input(
             "\nEnter number of environments (leave blank to use config default): "
         ).strip()
@@ -134,7 +137,7 @@ def run_cli_menu():
     )
     checkpoint_paths.sort(reverse=True)
 
-    needs_ckpt = action in ("isaac", "mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo")
+    needs_ckpt = action in ("isaac", "mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo", "gazebo_turbo")
 
     if needs_ckpt and not checkpoint_paths:
         print(
@@ -174,13 +177,13 @@ def run_cli_menu():
             except ValueError:
                 selected_ckpt = None
 
-    if action in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo"):
+    if action in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
         teleop = False  # Using ROS 2 teleop instead of internal WASD
     elif action == "isaac":
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
     
-    if action in ("isaac", "isaac_bridge", "isaac_turbo", "mujoco", "gazebo", "mujoco_turbo"):
+    if action in ("isaac", "isaac_bridge", "isaac_turbo", "mujoco", "gazebo", "mujoco_turbo", "gazebo_turbo"):
         headless = False
     else:
         h_input = input("\nEnable Headless Mode? [Y/n]: ").strip().lower()
@@ -343,7 +346,7 @@ if __name__ == "__main__":
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "real", "isaac_bridge", "isaac_turbo", "mujoco_turbo"):
+    elif action in ("mujoco", "gazebo", "real", "isaac_bridge", "isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
         # Unified ROS 2 Pipeline: Bridge + Controller
         # 1. Determine Bridge Script and Python
         isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
@@ -353,6 +356,9 @@ if __name__ == "__main__":
             bridge_cmd = [isaac_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
         elif action == "mujoco_turbo":
             bridge_script = os.path.abspath(os.path.join("Mujoco", "ros2_mujoco_bridge.py"))
+            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+        elif action == "gazebo_turbo":
+            bridge_script = os.path.abspath(os.path.join("Gazebo", "ros2_gazebo_bridge.py"))
             bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
         elif action == "isaac_bridge":
             bridge_script = os.path.abspath(os.path.join("IsaacSim", "ros2_isaac_bridge.py"))
@@ -400,7 +406,7 @@ if __name__ == "__main__":
         
         bridge_proc = subprocess.Popen(bridge_cmd, env=bridge_env, cwd=module_path)
 
-        if action in ("isaac_turbo", "mujoco_turbo"):
+        if action in ("isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
             # No controller node needed for Turbo mode
             print(f"[Launcher] Running in Turbo Mode (Internal Inference) on {action.split('_')[0]}.")
             try:

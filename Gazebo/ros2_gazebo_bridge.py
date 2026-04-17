@@ -1,6 +1,8 @@
-#!/usr/bin/env python3
 import os
 import sys
+# Ensure absolute path of the repository is in sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import time
 import numpy as np
 import torch
@@ -10,13 +12,16 @@ import threading
 import subprocess
 from pathlib import Path
 from scipy.spatial.transform import Rotation
+from Controller.policy_runner import PolicyRunner
+from Controller.policy_bridge import CommandProcessor
+from Controller.Utils.telemetry import TelemetryManager
 
 # ROS 2 Standard Imports
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Quaternion, Vector3
+from geometry_msgs.msg import Quaternion, Vector3, Twist
 
 # Gazebo Transport & Msgs
 try:
@@ -52,16 +57,32 @@ JOINT_NAMES = [
 
 
 class Ros2GazeboBridge(Node):
-    def __init__(self, robot_type, world_name="quadruped_world"):
+    def __init__(self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
+        self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
+        
+        # Internal Policy Runner (Turbo Mode)
+        self.runner = None
+        if checkpoint:
+            print(f"[GazeboBridge] Loading internal policy runner (Turbo Mode): {checkpoint}")
+            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
+            self.last_actions = np.zeros(12, dtype=np.float32)
+            self.desired_qpos = np.array(
+                [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
+                dtype=np.float32,
+            )
+            self.inference_counter = 0
+            self.inference_decimation = 10 # 500Hz / 10 = 50Hz
+            self.mj_to_isaac = list(range(12)) # Identity
         self.world_name = world_name
 
-        # 4. ROS 2 Initialization
-        self.joint_pub = self.create_publisher(JointState, "/sensors/joint_states", 10)
-        self.imu_pub = self.create_publisher(Imu, "/sensors/imu", 10)
-        self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
+        # 4. ROS 2 Telemetry Manager
+        self.telemetry = TelemetryManager(self, JOINT_NAMES)
+        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=JOINT_NAMES, saturation=0.9)
+
         self.create_subscription(JointState, "/commands/joint_commands", self._command_cb, 10)
+        self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
 
         # 2. State & Control Buffers
         self.latest_torques = np.zeros(12, dtype=np.float32)
@@ -97,6 +118,9 @@ class Ros2GazeboBridge(Node):
         if len(msg.position) == 12:
             self.latest_targets[:] = msg.position
 
+    def _teleop_cb(self, msg):
+        self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
+
     # --- Gazebo Callbacks ---
     def _stats_cb(self, msg):
         self.sim_time = msg.sim_time.sec + msg.sim_time.nsec * 1e-9
@@ -114,17 +138,11 @@ class Ros2GazeboBridge(Node):
             if joint.name in JOINT_NAMES:
                 idx = JOINT_NAMES.index(joint.name)
                 try:
-                     # Mapping joint state (Gazebo -> Isaac order)
+                     # Mapping joint state (Gazebo -> Isaac order - NO FLIPS)
                      self.q[idx] = joint.axis1.position
                      self.dq[idx] = joint.axis1.velocity
-                     
-                     # Check for asymmetry: Isaac Lab usually expects mirror-symmetric signs 
-                     # (e.g. positive HAA = Outward for both sides). 
-                     # Gazebo SDF axis 1 0 0 on both sides is asymmetric.
-                     if "rf_" in joint.name or "rh_" in joint.name:
-                         # Mirror the right side joints if they are asymmetric in SDF
-                         # Most Go1 policies expect symmetric HAA/HFE signs
-                         if "_haa_" in joint.name: self.q[idx] *= -1.0; self.dq[idx] *= -1.0
+                     # Diagnostic print (commented out by default)
+                     # if idx == 0: print(f"[GazeboBridge] LF_HAA q: {self.q[0]:.3f} dq: {self.dq[0]:.3f}")
                 except AttributeError:
                     pass
         # Signal the physics loop to step
@@ -238,38 +256,73 @@ class Ros2GazeboBridge(Node):
         pos_err_hist = np.zeros((3, 12), dtype=np.float32)
         vel_hist = np.zeros((3, 12), dtype=np.float32)
         last_processed_sim_time = -1.0
+        actuator_count = 0
         count = 0
 
         while not self._stop.is_set():
-            self.new_data_event.wait()
+            self.new_data_event.wait(timeout=0.1)
             self.new_data_event.clear()
 
             if self.sim_time == last_processed_sim_time:
                 continue
             last_processed_sim_time = self.sim_time
 
-            # State for ActuatorNet
-            targets = self.latest_targets
-            pos_err_hist = np.roll(pos_err_hist, 1, 0); pos_err_hist[0] = self.q - targets
-            vel_hist = np.roll(vel_hist, 1, 0); vel_hist[0] = self.dq
+            # --- Turbo Mode Inference (50 Hz) ---
+            if self.runner:
+                if self.inference_counter % self.inference_decimation == 0:
+                    # 1. Use centralized parser for Standardization
+                    state = self.telemetry.parse_bridge_data(
+                        self.q, self.dq, self.base_quat, self.base_ang_vel, self.base_lin_vel_b, self.base_pos
+                    )
+                    
+                    # 2. Feed Policy
+                    obs = self.runner.build_obs(state, self.cmd_vel, self.last_actions, self.desired_qpos, self.mj_to_isaac)
+                    actions = self.runner.get_action(obs)
+                    self.last_actions[:] = actions
+                    
+                    # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
+                    self.latest_targets[:] = self.command_processor.process(actions, self.desired_qpos)
+                
+                self.inference_counter += 1
+
+            # --- ActuatorNet History (Downsample 500Hz -> 200Hz) ---
+            # Isaac ActuatorNet was trained at 200Hz. 500/200 = 2.5.
+            # We sample roughly every 2 or 3 steps.
+            if actuator_count % 2 == 0:
+                targets = self.latest_targets
+                pos_err_hist = np.roll(pos_err_hist, 1, 0); pos_err_hist[0] = self.q - targets
+                vel_hist = np.roll(vel_hist, 1, 0); vel_hist[0] = self.dq
+            actuator_count += 1
 
             net_in = torch.zeros((12, 6))
             net_in[:, :3] = torch.from_numpy(pos_err_hist.T.copy())
             net_in[:, 3:] = torch.from_numpy(vel_hist.T.copy())
 
+            # Application of torques
+            # Fallback PD Controller for stability testing
+            # (Matches Isaac Lab default gains)
+            targets = self.latest_targets
+            kp = 35.0  # Increased for stability
+            kd = 0.8
+            pd_torques = kp * (targets - self.q) - kd * self.dq
+            
+            # Application of raw torques (Change to pd_torques if ActuatorNet is unstable)
+            # self.latest_torques[:] = np.clip(pd_torques, -23.7, 23.7)
+            
+            # Using ActuatorNet by default
             with torch.no_grad():
-                torques = self.act_net(net_in).squeeze().numpy()
+                net_torques = self.act_net(net_in).squeeze().numpy()
+            self.latest_torques[:] = np.clip(net_torques, -23.7, 23.7)
             
-            # Sign mirroring for right side HAA
-            final_torques = torques.copy()
-            for j_idx, jname in enumerate(JOINT_NAMES):
-                if ("rf_" in jname or "rh_" in jname) and "_haa_" in jname:
-                    final_torques[j_idx] *= -1.0
-            
-            self.latest_torques[:] = np.clip(final_torques, -23.7, 23.7)
+            # LOGGING FOR DIAGNOSIS (every 100 physics steps ~ 0.2s)
+            if actuator_count % 100 == 0:
+                print(f"[GazeboBridge] t: {self.sim_time:.2f} | q[0]: {self.q[0]:.2f} | T_act[0]: {self.latest_torques[0]:.2f} | T_pd[0]: {pd_torques[0]:.2f}")
 
             if count % 4 == 0:
-                self._publish_ros2()
+                state = self.telemetry.parse_bridge_data(
+                    self.q, self.dq, self.base_quat, self.base_ang_vel, self.base_lin_vel_b, self.base_pos
+                )
+                self.telemetry.publish(sim_time=self.sim_time, state=state)
             count += 1
             if count % 200 == 0:
                 print(f"\r[Bridge] t={self.sim_time:.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+.2f}   ", end="", flush=True)
@@ -285,41 +338,18 @@ class Ros2GazeboBridge(Node):
             except Exception:
                 subprocess.run(["pkill", "-9", "-f", "gz-sim-server"], stderr=subprocess.DEVNULL)
 
-    def _publish_ros2(self):
-        # Use Gazebo simulation time for all headers to ensure PolicyBridge sync
-        msg_time = rclpy.time.Time(seconds=self.sim_time).to_msg()
-        
-        # Joint States
-        js = JointState()
-        js.header.stamp = msg_time
-        js.name = JOINT_NAMES
-        js.position = self.q.tolist()
-        js.velocity = self.dq.tolist()
-        self.joint_pub.publish(js)
 
-        # IMU
-        imu = Imu()
-        imu.header.stamp = msg_time
-        imu.orientation = Quaternion(w=float(self.base_quat[0]), x=float(self.base_quat[1]), y=float(self.base_quat[2]), z=float(self.base_quat[3]))
-        imu.angular_velocity = Vector3(x=float(self.base_ang_vel[0]), y=float(self.base_ang_vel[1]), z=float(self.base_ang_vel[2]))
-        self.imu_pub.publish(imu)
-
-        # Odometry
-        odom = Odometry()
-        odom.header.stamp = msg_time
-        odom.header.frame_id = "odom"
-        odom.child_frame_id = "base"
-        odom.twist.twist.linear = Vector3(x=float(self.base_lin_vel_b[0]), y=float(self.base_lin_vel_b[1]), z=float(self.base_lin_vel_b[2]))
-        self.odom_pub.publish(odom)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
     parser.add_argument("--world", type=str, default="quadruped_world")
+    parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint (Turbo Mode)")
+    parser.add_argument("--obs_dim", type=int, default=49)
     args = parser.parse_args()
     rclpy.init()
-    node = Ros2GazeboBridge(args.robot, args.world)
+    node = Ros2GazeboBridge(args.robot, args.world, checkpoint=args.internal_policy, obs_dim=args.obs_dim)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

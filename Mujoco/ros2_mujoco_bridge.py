@@ -15,6 +15,8 @@ from nav_msgs.msg import Odometry
 import argparse
 import threading
 from Controller.policy_runner import PolicyRunner
+from Controller.policy_bridge import CommandProcessor
+from Controller.Utils.telemetry import TelemetryManager
 
 class Ros2MujocoBridge(Node):
     def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49):
@@ -44,10 +46,9 @@ class Ros2MujocoBridge(Node):
 
         self._init_physics()
 
-        # 2. ROS 2 Publishers
-        self.joint_pub = self.create_publisher(JointState, '/sensors/joint_states', 10)
-        self.imu_pub   = self.create_publisher(Imu,        '/sensors/imu', 10)
-        self.odom_pub  = self.create_publisher(Odometry,   '/odom', 10)
+        # 2. ROS 2 Managers
+        self.telemetry = TelemetryManager(self, self.isaac_names)
+        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=self.isaac_names, saturation=0.9)
 
         # 3. Subscriptions
         self.create_subscription(JointState, '/commands/joint_commands', self.joint_command_cb, 10)
@@ -153,31 +154,16 @@ class Ros2MujocoBridge(Node):
                 # --- Turbo Mode Inference (50 Hz) ---
                 if self.runner:
                     if self.inference_counter % self.inference_decimation == 0:
-                        # Build state proxy
-                        class StateProxy:
-                            def __init__(self, q, dq, qpos_addr, qvel_addr):
-                                self.imu = type('obj', (object,), {
-                                    'quaternion': q[3:7].tolist(),
-                                    'gyroscope': dq[3:6].tolist()
-                                })
-                                # Compute lin_vel_b
-                                w, x, y, z = q[3:7]
-                                R = np.array([
-                                    [1-2*y**2-2*z**2, 2*x*y-2*w*z, 2*x*z+2*w*y],
-                                    [2*x*y+2*w*z, 1-2*x**2-2*z**2, 2*y*z-2*w*x],
-                                    [2*x*z-2*w*y, 2*y*z+2*w*x, 1-2*x**2-2*y**2]
-                                ])
-                                self.base_lin_vel = (R.T @ dq[:3]).tolist()
-                                self.motorState = [type('obj', (object,), {
-                                    'q': q[addr],
-                                    'dq': dq[v_addr]
-                                }) for addr, v_addr in zip(qpos_addr, qvel_addr)]
+                        # 1. Use centralized parser for Standardization
+                        state = self.telemetry.parse_mujoco(self.data, self.isaac_qpos_addr, self.isaac_qvel_addr)
                         
-                        state = StateProxy(self.data.qpos, self.data.qvel, self.isaac_qpos_addr, self.isaac_qvel_addr)
+                        # 2. Feed Policy
                         obs = self.runner.build_obs(state, self.cmd_vel, self.last_actions, self.desired_qpos, self.mj_to_isaac)
                         actions = self.runner.get_action(obs)
                         self.last_actions[:] = actions
-                        self.current_targets = actions * 0.25 + self.desired_qpos
+                        
+                        # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
+                        self.current_targets = self.command_processor.process(actions, self.desired_qpos)
                     
                     self.inference_counter += 1
 
@@ -190,8 +176,9 @@ class Ros2MujocoBridge(Node):
                 for _ in range(self.PD_DECIMATION):
                     mujoco.mj_step(self.model, self.data)
 
-                # --- Publish sensors ---
-                self._publish_sensors(self.get_clock().now().to_msg())
+                # --- Publish sensors (Standardized & Synchronized) ---
+                state = self.telemetry.parse_mujoco(self.data, self.isaac_qpos_addr, self.isaac_qvel_addr)
+                self.telemetry.publish(sim_time=self.data.time, state=state)
                 viewer.sync()
 
                 self.step_counter += 1
@@ -204,40 +191,7 @@ class Ros2MujocoBridge(Node):
                 elif sleep_dur < -0.1: # Catch up if significantly behind
                     next_time = time.time()
 
-    def _publish_sensors(self, now):
-        # Joint States
-        js = JointState()
-        js.header.stamp = now
-        js.name = self.isaac_names
-        js.position = self.data.qpos[self.isaac_qpos_addr].tolist()
-        js.velocity = self.data.qvel[self.isaac_qvel_addr].tolist()
-        self.joint_pub.publish(js)
 
-        q = self.data.qpos[3:7]        # IMU
-        imu = Imu()
-        imu.header.stamp = now
-        imu.orientation = Quaternion(w=float(q[0]), x=float(q[1]), y=float(q[2]), z=float(q[3]))
-        gyro_b = self.data.qvel[3:6]
-        imu.angular_velocity.x = float(gyro_b[0])
-        imu.angular_velocity.y = float(gyro_b[1])
-        imu.angular_velocity.z = float(gyro_b[2])
-        self.imu_pub.publish(imu)
-
-        # Odom (Base Velocity)
-        w, x, y, z = q
-        R = np.array([
-            [1-2*y**2-2*z**2, 2*x*y-2*w*z, 2*x*z+2*w*y],
-            [2*x*y+2*w*z, 1-2*x**2-2*z**2, 2*y*z-2*w*x],
-            [2*x*z-2*w*y, 2*y*z+2*w*x, 1-2*x**2-2*y**2]
-        ])
-        lin_vel_b = R.T @ self.data.qvel[:3]
-
-        odom = Odometry()
-        odom.header.stamp = now
-        odom.header.frame_id = 'odom'
-        odom.child_frame_id  = 'base'
-        odom.twist.twist.linear = Vector3(x=float(lin_vel_b[0]), y=float(lin_vel_b[1]), z=float(lin_vel_b[2]))
-        self.odom_pub.publish(odom)
 
 def main():
     parser = argparse.ArgumentParser()
