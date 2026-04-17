@@ -1,6 +1,11 @@
 import argparse
 import sys
 import os
+import os
+import sys
+# Ensure absolute path of the repository is in sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import time
 import numpy as np
 import torch
@@ -10,9 +15,9 @@ from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="IsaacSim ROS 2 Bridge for Quadruped.")
-parser.add_argument(
-    "--robot", type=str, default="go2", choices=["a1", "go1", "go2"], help="Robot type."
-)
+parser.add_argument("--robot", type=str, default="go2", help="Robot type (go2, go1, a1)")
+parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint (Turbo Mode)")
+parser.add_argument("--obs_dim", type=int, default=49, help="Observation dimension")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -44,6 +49,7 @@ from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
+from Controller.policy_runner import PolicyRunner
 
 from isaaclab_assets.robots.unitree import (
     UNITREE_A1_CFG,
@@ -73,14 +79,30 @@ class BridgeSceneCfg(InteractiveSceneCfg):
 
 
 class Ros2IsaacBridge(Node):
-    def __init__(self, robot_articulation: Articulation, robot_type="go2"):
-        super().__init__("isaac_bridge_node")
-        self.robot = robot_articulation
+    def __init__(self, robot, robot_type="go2", checkpoint=None, obs_dim=49):
+        super().__init__("isaac_bridge")
+        self.robot = robot
         self.robot_type = robot_type
+        
+        # Internal Policy Runner (Turbo Mode)
+        self.runner = None
+        if checkpoint:
+            print(f"[IsaacBridge] Loading internal policy runner (Turbo Mode): {checkpoint}")
+            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
+            self.last_actions = np.zeros(12, dtype=np.float32)
+            self.desired_qpos = np.array([
+                0.1, -0.1, 0.1, -0.1,  # hips
+                0.8, 0.8, 1.0, 1.0,    # thighs
+                -1.5, -1.5, -1.5, -1.5, # calves
+            ], dtype=np.float32)
+            # Joint index mapping: ISAAC to Type-Grouped (identity in our bridge)
+            self.mj_to_isaac = list(range(12))
+            self.inference_counter = 0
+            self.inference_decimation = 4
 
-        # 1. Resolve Joint Indices
-        # We use the same order as in Mujoco/Gazebo:
-        # hip, thigh, calf for each leg in order FL, FR, RL, RR
+        # Joint Configuration
+        # (Internal names are what Isaac Sim uses, joint_names are what we group into ROS)
+        self.internal_names = self.robot.data.joint_names
         # 1. Join Mapping (Strict Type-Grouped order for compatibility)
         self.joint_names = [
             "FL_hip_joint",
@@ -121,10 +143,11 @@ class Ros2IsaacBridge(Node):
                 f"[IsaacBridge] WARNING: Found only {len(self.mapped_dof_idx)}/12 joints!"
             )
 
-        # 2. ROS 2 Publishers
-        self.joint_pub = self.create_publisher(JointState, "/sensors/joint_states", 10)
+        # ROS Publishers
+        self.js_pub = self.create_publisher(JointState, "/sensors/joint_states", 10)
         self.imu_pub = self.create_publisher(Imu, "/sensors/imu", 10)
         self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
+        self.cmd_echo_pub = self.create_publisher(JointState, "/commands/joint_commands", 10)
 
         # 3. Subscriptions
         self.create_subscription(
@@ -159,6 +182,32 @@ class Ros2IsaacBridge(Node):
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
 
     def step(self):
+        # 0. Internal Inference (Turbo Mode)
+        if self.runner:
+            if self.inference_counter % self.inference_decimation == 0:
+                # Prepare state object for build_obs
+                class StateProxy:
+                    def __init__(self, robot, mapped_idx, cmd_vel):
+                        self.imu = type('obj', (object,), {
+                            'quaternion': robot.data.root_quat_w[0].tolist(),
+                            'gyroscope': robot.data.root_ang_vel_b[0].tolist()
+                        })
+                        self.base_lin_vel = robot.data.root_lin_vel_b[0].tolist()
+                        self.motorState = [type('obj', (object,), {
+                            'q': robot.data.joint_pos[0, i].item(),
+                            'dq': robot.data.joint_vel[0, i].item()
+                        }) for i in mapped_idx]
+                
+                state = StateProxy(self.robot, self.mapped_dof_idx, self.cmd_vel)
+                # Obs Builder
+                obs = self.runner.build_obs(state, self.cmd_vel, self.last_actions, self.desired_qpos, self.mj_to_isaac)
+                # Inference
+                actions = self.runner.get_action(obs)
+                self.last_actions[:] = actions
+                # Update targets
+                self.latest_targets = torch.from_numpy(actions * 0.25 + self.desired_qpos).to(self.robot.data.joint_pos.device)
+            self.inference_counter += 1
+
         # 1. PD Effort Calculation (Matching training: Kp=25.0, Kd=0.5)
         curr_jpos = self.robot.data.joint_pos[0, self.mapped_dof_idx]
         curr_jvel = self.robot.data.joint_vel[0, self.mapped_dof_idx]
@@ -173,6 +222,14 @@ class Ros2IsaacBridge(Node):
 
         # Apply Actions via Effort
         self.robot.set_joint_effort_target(torques, joint_ids=self.mapped_dof_idx)
+
+        if self.runner and self.inference_counter % 10 == 0:
+            # Publish echo of internal commands for PlotJuggler
+            js_echo = JointState()
+            js_echo.header.stamp = self.get_clock().now().to_msg()
+            js_echo.name = self.joint_names
+            js_echo.position = self.latest_targets.tolist()
+            self.cmd_echo_pub.publish(js_echo)
 
         # Telemetry every 1s
         now = time.time()
@@ -199,7 +256,7 @@ class Ros2IsaacBridge(Node):
         js.name = self.joint_names
         js.position = self.robot.data.joint_pos[0, self.mapped_dof_idx].tolist()
         js.velocity = self.robot.data.joint_vel[0, self.mapped_dof_idx].tolist()
-        self.joint_pub.publish(js)
+        self.js_pub.publish(js)
 
         # IMU
         imu = Imu()
@@ -271,7 +328,7 @@ def main():
     scene.update(0.0)
 
     # 6. Initialize Bridge (After reset so .data is available)
-    bridge_node = Ros2IsaacBridge(robot, args_cli.robot)
+    bridge_node = Ros2IsaacBridge(robot, args_cli.robot, checkpoint=args_cli.internal_policy, obs_dim=args_cli.obs_dim)
 
     print("[IsaacBridge] Starting simulation loop...")
     next_time = time.time()

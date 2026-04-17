@@ -49,10 +49,12 @@ def run_cli_menu():
     tp = input(
         "Select Action:\n  [1] Train\n"
         "  [2] Play IsaacSim (Internal)\n"
-        "  [3] Play MuJoCo (Bridge)\n"
+        "  [3] Play MuJoCo (Bridge - ROS Inference)\n"
         "  [4] Play Gazebo (Bridge)\n"
-        "  [5] Play IsaacSim (Bridge)\n"
-        "Enter choice [1-5] (default 2): "
+        "  [5] Play IsaacSim (Bridge - ROS Inference)\n"
+        "  [6] Play IsaacSim (Turbo - Internal Inference)\n"
+        "  [7] Play MuJoCo (Turbo - Internal Inference)\n"
+        "Enter choice [1-7] (default 2): "
     ).strip()
     if tp == "1":
         action = "train"
@@ -62,6 +64,10 @@ def run_cli_menu():
         action = "gazebo"
     elif tp == "5":
         action = "isaac_bridge"
+    elif tp == "6":
+        action = "isaac_turbo"
+    elif tp == "7":
+        action = "mujoco_turbo"
     else:
         action = "isaac"
 
@@ -105,7 +111,7 @@ def run_cli_menu():
 
     # 4. Num Envs
     num_envs = ""
-    if action not in ("mujoco", "gazebo", "isaac_bridge"):
+    if action not in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo"):
         num_envs = input(
             "\nEnter number of environments (leave blank to use config default): "
         ).strip()
@@ -128,7 +134,7 @@ def run_cli_menu():
     )
     checkpoint_paths.sort(reverse=True)
 
-    needs_ckpt = action in ("isaac", "mujoco", "gazebo", "isaac_bridge")
+    needs_ckpt = action in ("isaac", "mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo")
 
     if needs_ckpt and not checkpoint_paths:
         print(
@@ -168,11 +174,14 @@ def run_cli_menu():
             except ValueError:
                 selected_ckpt = None
 
-    if action in ("mujoco", "gazebo", "isaac_bridge"):
+    if action in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo", "mujoco_turbo"):
         teleop = False  # Using ROS 2 teleop instead of internal WASD
-    elif action in ("isaac", "isaac_bridge"):
+    elif action == "isaac":
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
+    
+    if action in ("isaac", "isaac_bridge", "isaac_turbo", "mujoco", "gazebo", "mujoco_turbo"):
+        headless = False
     else:
         h_input = input("\nEnable Headless Mode? [Y/n]: ").strip().lower()
         headless = h_input != "n"
@@ -232,8 +241,8 @@ if __name__ == "__main__":
     # Environment Sanitization for ROS 2 Bridges (MuJoCo/Gazebo/Isaac)
     # This prevents pollution from Isaac Sim's site-packages (Python 3.11)
     # when we want to use the system ROS 2 (Python 3.10)
-    if action in ("mujoco", "gazebo", "isaac_bridge"):
-        if action == "isaac_bridge":
+    if action in ("mujoco", "gazebo", "isaac_bridge", "isaac_turbo"):
+        if action in ("isaac_bridge", "isaac_turbo"):
             # Use Isaac Sim's internal ROS 2 libraries (compiled for Python 3.11)
             isaac_ros_path = "/home/05680435969@corp.udesc.br/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/rclpy"
             if os.path.exists(isaac_ros_path):
@@ -246,6 +255,18 @@ if __name__ == "__main__":
                     + os.pathsep
                     + env.get("LD_LIBRARY_PATH", "")
                 )
+            
+            # Add IsaacLab source paths
+            isaaclab_path = "/home/05680435969@corp.udesc.br/IsaacLab"
+            isaaclab_sources = [
+                os.path.join(isaaclab_path, "source", "isaaclab"),
+                os.path.join(isaaclab_path, "source", "isaaclab_assets"),
+                os.path.join(isaaclab_path, "source", "isaaclab_tasks"),
+                os.path.join(isaaclab_path, "source", "isaaclab_rl"),
+            ]
+            for src in isaaclab_sources:
+                if os.path.exists(src):
+                    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
         else:
             # Ensure ROS 2 standard paths are present (Humble uses dist-packages)
             ros_python_path = "/opt/ros/humble/local/lib/python3.10/dist-packages"
@@ -322,10 +343,21 @@ if __name__ == "__main__":
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "real", "isaac_bridge"):
+    elif action in ("mujoco", "gazebo", "real", "isaac_bridge", "isaac_turbo", "mujoco_turbo"):
         # Unified ROS 2 Pipeline: Bridge + Controller
-        # 1. Determine Bridge Script
-        if action == "mujoco":
+        # 1. Determine Bridge Script and Python
+        isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
+        
+        if action == "isaac_turbo":
+            bridge_script = os.path.abspath(os.path.join("IsaacSim", "ros2_isaac_bridge.py"))
+            bridge_cmd = [isaac_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+        elif action == "mujoco_turbo":
+            bridge_script = os.path.abspath(os.path.join("Mujoco", "ros2_mujoco_bridge.py"))
+            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+        elif action == "isaac_bridge":
+            bridge_script = os.path.abspath(os.path.join("IsaacSim", "ros2_isaac_bridge.py"))
+            bridge_cmd = [isaac_python, bridge_script, f"--robot={robot_key}"]
+        elif action == "mujoco":
             bridge_script = os.path.abspath(
                 os.path.join("Mujoco", "ros2_mujoco_bridge.py")
             )
@@ -361,12 +393,21 @@ if __name__ == "__main__":
 
         print(f"[Launcher] Starting Bridge: {' '.join(bridge_cmd)}")
         bridge_env = env.copy()
-        if action != "isaac_bridge":
+        if action not in ("isaac_bridge", "isaac_turbo"):
             # For non-Isaac bridges, we want to ensure system Python 3.10 env
             bridge_env.pop("VIRTUAL_ENV", None)
             bridge_env.pop("PYTHONHOME", None)
         
         bridge_proc = subprocess.Popen(bridge_cmd, env=bridge_env, cwd=module_path)
+
+        if action in ("isaac_turbo", "mujoco_turbo"):
+            # No controller node needed for Turbo mode
+            print(f"[Launcher] Running in Turbo Mode (Internal Inference) on {action.split('_')[0]}.")
+            try:
+                bridge_proc.wait()
+            except KeyboardInterrupt:
+                bridge_proc.terminate()
+            sys.exit(0)
 
         print(f"[Launcher] Starting Controller: {' '.join(ctrl_cmd)}")
         ctrl_env = env.copy()

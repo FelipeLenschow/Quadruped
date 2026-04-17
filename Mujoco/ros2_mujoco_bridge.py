@@ -11,11 +11,23 @@ from geometry_msgs.msg import Quaternion, Vector3, Twist
 from nav_msgs.msg import Odometry
 import argparse
 import threading
+from Controller.policy_runner import PolicyRunner
 
 class Ros2MujocoBridge(Node):
-    def __init__(self, robot_type="go2"):
+    def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49):
         super().__init__('mujoco_bridge_node')
         self.robot_type = robot_type
+        self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
+        
+        # Internal Policy Runner (Turbo Mode)
+        self.runner = None
+        if checkpoint:
+            print(f"[MujocoBridge] Loading internal policy runner (Turbo Mode): {checkpoint}")
+            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
+            self.last_actions = np.zeros(12, dtype=np.float32)
+            self.inference_counter = 0
+            self.inference_decimation = 4 # Policy at 50Hz (200Hz / 4)
+            self.mj_to_isaac = list(range(12)) # Identity mapping for our standardized bridge
 
         # 1. Load Go2 MuJoCo Scene
         mjcf_path = os.path.join(os.path.dirname(__file__), "mujoco_menagerie", "unitree_go2", "scene.xml")
@@ -135,6 +147,37 @@ class Ros2MujocoBridge(Node):
             self.step_counter = 0
 
             while rclpy.ok() and viewer.is_running():
+                # --- Turbo Mode Inference (50 Hz) ---
+                if self.runner:
+                    if self.inference_counter % self.inference_decimation == 0:
+                        # Build state proxy
+                        class StateProxy:
+                            def __init__(self, q, dq, robot_type):
+                                self.imu = type('obj', (object,), {
+                                    'quaternion': q[3:7].tolist(),
+                                    'gyroscope': dq[3:6].tolist()
+                                })
+                                # Compute lin_vel_b
+                                w, x, y, z = q[3:7]
+                                R = np.array([
+                                    [1-2*y**2-2*z**2, 2*x*y-2*w*z, 2*x*z+2*w*y],
+                                    [2*x*y+2*w*z, 1-2*x**2-2*z**2, 2*y*z-2*w*x],
+                                    [2*x*z-2*w*y, 2*y*z+2*w*x, 1-2*x**2-2*y**2]
+                                ])
+                                self.base_lin_vel = (R.T @ dq[:3]).tolist()
+                                self.motorState = [type('obj', (object,), {
+                                    'q': q[addr],
+                                    'dq': dq[v_addr]
+                                }) for addr, v_addr in zip(self.isaac_qpos_addr, self.isaac_qvel_addr)]
+                        
+                        state = StateProxy(self.data.qpos, self.data.qvel, self.robot_type)
+                        obs = self.runner.build_obs(state, self.cmd_vel, self.last_actions, self.desired_qpos, self.mj_to_isaac)
+                        actions = self.runner.get_action(obs)
+                        self.last_actions[:] = actions
+                        self.current_targets = actions * 0.25 + self.desired_qpos
+                    
+                    self.inference_counter += 1
+
                 # --- PD step (200 Hz) ---
                 torques = self._pd_torques(self.current_targets)
                 for i, act_idx in enumerate(self.isaac_ctrl_idx):
@@ -196,16 +239,17 @@ class Ros2MujocoBridge(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
+    parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint (Turbo Mode)")
     parser.add_argument("--obs_dim", type=int, default=49)
     args = parser.parse_args()
-
+    
     rclpy.init()
-    node = Ros2MujocoBridge(args.robot)
+    bridge = Ros2MujocoBridge(robot_type=args.robot, checkpoint=args.internal_policy, obs_dim=args.obs_dim)
     try:
-        rclpy.spin(node)
+        rclpy.spin(bridge)
     except KeyboardInterrupt:
         pass
-    node.destroy_node()
+    bridge.destroy_node()
     rclpy.shutdown()
 
 if __name__ == "__main__":
