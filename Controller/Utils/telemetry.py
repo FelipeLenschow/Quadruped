@@ -21,14 +21,41 @@ class TelemetryManager:
     Centralized component to handle ROS 2 telemetry and state standardization.
     Bridges the gap between backend-specific data and the unified Policy Runner.
     """
-    def __init__(self, node: Node, joint_names: list):
+    def __init__(self, node: Node, joint_names: list = None):
         self.node = node
-        self.joint_names = joint_names
+        self.joint_names = joint_names or [
+            "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
+            "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
+            "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint"
+        ]
         
         # 1. Publishers
         self.joint_pub = self.node.create_publisher(JointState, '/sensors/joint_states', 10)
         self.imu_pub   = self.node.create_publisher(Imu, '/sensors/imu', 10)
         self.odom_pub  = self.node.create_publisher(Odometry, '/odom', 10)
+
+    def standardize(self, raw_data, backend="generic", **kwargs):
+        """Standardizes raw data from various backends into a StandardState."""
+        if backend == "mujoco":
+            return self.parse_mujoco(raw_data, **kwargs)
+        elif backend == "isaac":
+            return self.parse_isaac(raw_data, **kwargs)
+        else:
+            # For SDK2, we need to extract the data first. 
+            # In real_driver.py we pass the LowState object.
+            # SDK2 LowState format (approximate based on examples):
+            # q, dq = extracted from msg.motor_state[i].q
+            if hasattr(raw_data, 'motor_state'):
+                q = [float(raw_data.motor_state[i].q) for i in range(12)]
+                dq = [float(raw_data.motor_state[i].dq) for i in range(12)]
+                quat = raw_data.imu_state.quaternion
+                ang_vel = raw_data.imu_state.gyroscope
+                # SDK2 LowState doesn't always provide body velocity directly in the same spot, 
+                # but we'll use zeros or kwargs if available.
+                lin_vel = [0.0, 0.0, 0.0]
+                return self.parse_bridge_data(q, dq, quat, ang_vel, lin_vel)
+            
+            return self.parse_bridge_data(**kwargs)
 
     def publish(self, sim_time, state: StandardState):
         """Publishes the standardized state to ROS 2 topics."""

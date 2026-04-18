@@ -7,7 +7,7 @@ import time
 import numpy as np
 """
 MuJoCo Driver for Quadruped Locomotion. 
-Handles internal policy inference (Turbo Mode), physics stepping, 
+Handles internal policy inference, physics stepping, 
 and standardizes telemetry for ROS 2 monitoring.
 """
 
@@ -30,14 +30,11 @@ class Ros2MujocoDriver(Node):
         self.robot_type = robot_type
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
         
-        # Internal Policy Runner (Turbo Mode)
+        # Internal Policy Runner
         self.runner = None
         if checkpoint:
-            print(f"[MujocoDriver] Loading internal policy runner (Turbo Mode): {checkpoint}")
+            print(f"[MujocoDriver] Loading internal policy runner: {checkpoint}")
             self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
-            self.last_actions = np.zeros(12, dtype=np.float32)
-            self.inference_counter = 0
-            self.inference_decimation = 4 # Policy at 50Hz (200Hz / 4)
             self.mj_to_isaac = list(range(12)) # Identity mapping for our standardized bridge
 
         # 1. Load Go2 MuJoCo Scene
@@ -151,15 +148,17 @@ class Ros2MujocoDriver(Node):
             self.step_counter = 0
 
             while rclpy.ok() and viewer.is_running():
-                # --- Turbo Mode Inference (50 Hz) ---
+                # --- Internal Inference (50 Hz) ---
                 if self.runner:
                     if self.inference_counter % self.inference_decimation == 0:
                         # 1. Use centralized parser for Standardization
                         state = self.telemetry.parse_mujoco(self.data, self.isaac_qpos_addr, self.isaac_qvel_addr)
                         
-                        # 2. Feed Policy
-                        obs = self.runner.build_obs(state, self.cmd_vel, self.last_actions, self.desired_qpos, self.mj_to_isaac)
-                        actions = self.runner.get_action(obs)
+                        # 2. Feed Policy (Unified Inference with Timing)
+                        actions, _ = self.runner.infer(
+                            state, self.cmd_vel, self.last_actions, self.desired_qpos, 
+                            self.mj_to_isaac, verbose=True
+                        )
                         self.last_actions[:] = actions
                         
                         # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
@@ -196,7 +195,7 @@ class Ros2MujocoDriver(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
-    parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint (Turbo Mode)")
+    parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint")
     parser.add_argument("--obs_dim", type=int, default=49)
     args = parser.parse_args()
     

@@ -68,10 +68,11 @@ class Ros2GazeboDriver(Node):
         self.robot_type = robot_type
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
         
-        # Internal Policy Runner (Turbo Mode)
+        # Handles internal policy inference, physics stepping, 
+        # and standardizes telemetry for ROS 2 monitoring.
         self.runner = None
         if checkpoint:
-            print(f"[GazeboDriver] Loading internal policy runner (Turbo Mode): {checkpoint}")
+            print(f"[GazeboDriver] Loading internal policy runner: {checkpoint}")
             self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
             self.last_actions = np.zeros(12, dtype=np.float32)
             self.desired_qpos = np.array(
@@ -268,7 +269,7 @@ class Ros2GazeboDriver(Node):
                 continue
             last_processed_sim_time = self.sim_time
 
-            # --- Turbo Mode Inference (50 Hz) ---
+            # --- Internal Inference (50 Hz) ---
             if self.runner:
                 if self.inference_counter % self.inference_decimation == 0:
                     # 1. Use centralized parser for Standardization
@@ -276,9 +277,11 @@ class Ros2GazeboDriver(Node):
                         self.q, self.dq, self.base_quat, self.base_ang_vel, self.base_lin_vel_b, self.base_pos
                     )
                     
-                    # 2. Feed Policy
-                    obs = self.runner.build_obs(state, self.cmd_vel, self.last_actions, self.desired_qpos, self.mj_to_isaac)
-                    actions = self.runner.get_action(obs)
+                    # 2. Feed Policy (Unified Inference with Timing)
+                    actions, _ = self.runner.infer(
+                        state, self.cmd_vel, self.last_actions, self.desired_qpos, 
+                        self.mj_to_isaac, verbose=True
+                    )
                     self.last_actions[:] = actions
                     
                     # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)

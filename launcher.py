@@ -48,24 +48,30 @@ def run_cli_menu():
     # 1. Action
     tp = input(
         "Select Action:\n  [1] Train Policy\n"
-        "  [2] Play Policy\n"
-        "  [3] Play IsaacSim\n"
+        "  [2] Play Policy (Isaac Lab)\n"
+        "  [3] Play Isaac Sim (Internal Driver)\n"
         "  [4] Play MuJoCo\n"
         "  [5] Play Gazebo\n"
-        "Enter choice [1-5] (default 2): "
+        "  [6] Deploy to Robot\n"
+        "  [7] Remote Teleop\n"
+        "Enter choice [1-7] (default 2): "
     ).strip()
     if tp == "1":
         action = "train"
     elif tp == "2":
-        action = "isaac"
+        action = "isaac_lab"
     elif tp == "3":
-        action = "isaac_turbo"
+        action = "isaac_sim"
     elif tp == "4":
-        action = "mujoco_turbo"
+        action = "mujoco"
     elif tp == "5":
-        action = "gazebo_turbo"
+        action = "gazebo"
+    elif tp == "6":
+        action = "real_deploy"
+    elif tp == "7":
+        action = "teleop"
     else:
-        action = "isaac"  # Default to Play Policy (Original Isaac play)
+        action = "isaac_lab"  # Default to Isaac Lab play
 
     # 2. Robot selection
     selected_robot_cfg = "UNITREE_GO2_CFG"  # Global default
@@ -339,41 +345,44 @@ if __name__ == "__main__":
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "real", "isaac_bridge", "isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
-        # Unified ROS 2 Pipeline: Bridge + Controller
-        # 1. Determine Bridge Script and Python
+    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy"):
+        # Unified Driver Pipeline
         isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
+        sys_python = "/usr/bin/python3"
         
-        if action == "isaac_turbo":
+        if action == "isaac_sim":
             bridge_script = os.path.abspath(os.path.join("IsaacSim", "isaac_driver.py"))
-            bridge_cmd = [isaac_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
-        elif action == "mujoco_turbo":
+            cmd = [isaac_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+        elif action == "mujoco":
             bridge_script = os.path.abspath(os.path.join("Mujoco", "mujoco_driver.py"))
-            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
-        elif action == "gazebo_turbo":
+            cmd = [sys_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+        elif action == "gazebo":
             bridge_script = os.path.abspath(os.path.join("Gazebo", "gazebo_driver.py"))
-            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
-        else:  # real
-            bridge_script = os.path.abspath(
-                os.path.join("Unitree", "ros2_real_bridge.py")
-            )
-            bridge_cmd = ["/usr/bin/python3", bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+            cmd = [sys_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+        elif action == "real_deploy":
+            bridge_script = os.path.abspath(os.path.join("Unitree", "real_driver.py"))
+            cmd = [sys_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
 
-        print(f"[Launcher] Starting Driver: {' '.join(bridge_cmd)}")
+        print(f"[Launcher] Starting Driver: {' '.join(cmd)}")
         bridge_env = env.copy()
-        if action not in ("isaac_turbo"):
-            # For non-Isaac bridges, we want to ensure system Python 3.10 env
+        if action != "isaac_turbo":
             bridge_env.pop("VIRTUAL_ENV", None)
             bridge_env.pop("PYTHONHOME", None)
         
-        bridge_proc = subprocess.Popen(bridge_cmd, env=bridge_env, cwd=module_path)
-
-        print(f"[Launcher] Running in Turbo Mode (Internal Inference) on {action.split('_')[0] if '_' in action else action}.")
+        proc = subprocess.Popen(cmd, env=bridge_env, cwd=module_path)
         try:
-            bridge_proc.wait()
+            proc.wait()
         except KeyboardInterrupt:
-            bridge_proc.terminate()
+            proc.terminate()
         sys.exit(0)
+
+    elif action == "teleop":
+        print(f"\n{'='*50}")
+        print(f"Launching REMOTE TELEOP!")
+        print(f"Controls: I/K=fwd/back, J/L=left/right, U/O=turn")
+        print(f"{'='*50}\n")
+        cmd = ["ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard"]
+        subprocess.run(cmd, env=env, cwd=module_path)
 
     else:  # isaac play
         script_path = os.path.join("scripts", "skrl", "play.py")

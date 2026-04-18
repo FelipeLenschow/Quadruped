@@ -92,10 +92,11 @@ class Ros2IsaacDriver(Node):
         self.robot = robot
         self.robot_type = robot_type
         
-        # Internal Policy Runner (Turbo Mode)
+        # Handles internal policy inference, physics stepping, 
+        # and standardizes telemetry for ROS 2 monitoring.
         self.runner = None
         if checkpoint:
-            print(f"[IsaacDriver] Loading internal policy runner (Turbo Mode): {checkpoint}")
+            print(f"[IsaacDriver] Loading internal policy runner: {checkpoint}")
             self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
             self.last_actions = np.zeros(12, dtype=np.float32)
             self.desired_qpos = np.array([
@@ -180,19 +181,21 @@ class Ros2IsaacDriver(Node):
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
 
     def step(self):
-        # 0. Internal Inference (Turbo Mode)
+        # 0. Internal Inference
         if self.runner:
             if self.inference_counter % self.inference_decimation == 0:
-                # 1. Use centralized parser for Standardization
-                state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
+                # 1. Use centralized parser for Standardization (Synchronized)
+                state = self.telemetry.parse_isaac(self.robot)
                 
-                # 2. Feed Policy
-                obs = self.runner.build_obs(state, self.cmd_vel, self.last_actions, self.desired_qpos, self.mj_to_isaac)
-                actions = self.runner.get_action(obs)
+                # 2. Feed Policy (Unified Inference with Timing)
+                actions, _ = self.runner.infer(
+                    state, self.cmd_vel, self.last_actions, self.desired_qpos, 
+                    self.mj_to_isaac, verbose=True
+                )
                 self.last_actions[:] = actions
                 
                 # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-                self.latest_targets = torch.from_numpy(
+                self.latest_targets[:] = torch.from_numpy(
                     self.command_processor.process(actions, self.desired_qpos)
                 ).to(device=self.robot.data.joint_pos.device, dtype=torch.float32)
             self.inference_counter += 1

@@ -66,6 +66,9 @@ class PolicyRunner:
             self.scaler = RunningStandardScaler(self.obs_dim, self.device).to(self.device)
             
             self._load_checkpoint(checkpoint_path)
+            
+        # --- Performance Tracking ---
+        self.inf_times = []
 
     def _check_is_jit(self, path):
         # SKRL usually uses .pt for state dicts. JIT models are different.
@@ -196,3 +199,20 @@ class PolicyRunner:
                 obs_norm = self.scaler(obs_t)
                 action_t = self.policy(obs_norm)
         return action_t.squeeze(0).cpu().numpy()
+
+    def infer(self, state, commands, last_actions, desired_qpos, mapping, verbose=False):
+        """High-level inference with timing."""
+        t_start = time.perf_counter()
+        obs = self.build_obs(state, commands, last_actions, desired_qpos, mapping)
+        actions = self.get_action(obs)
+        t_end = time.perf_counter()
+        
+        inf_time = t_end - t_start
+        self.inf_times.append(inf_time)
+        
+        if verbose and len(self.inf_times) >= 100:
+            avg = sum(self.inf_times) / len(self.inf_times)
+            print(f"[PolicyRunner] Avg Inference: {avg*1000:.2f}ms ({1.0/avg:.1f}Hz)")
+            self.inf_times = []
+            
+        return actions, inf_time

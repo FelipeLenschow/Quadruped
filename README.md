@@ -15,7 +15,8 @@ The framework is built on a **Hardware-Agnostic Core** to ensure zero-gap sim-to
 - **Unified Drivers**: Simulation bridges have been refactored into intelligent drivers (`mujoco_driver.py`, `gazebo_driver.py`, `isaac_driver.py`).
 - **TelemetryManager**: A centralized state standardizer in `telemetry.py` that converts raw simulator data into a `StandardState` object.
 - **CommandProcessor**: A safety-first action pipeline in `policy_bridge.py` that handles hardware-aware scaling and 90% saturation limits for the Go2.
-- **Turbo Mode**: Bit-perfect, zero-latency inference. All drivers run policy inference internally at 50Hz, bypassing ROS 2 transport jitter for critical control loops.
+- **### High-Performance Drivers
+Each backend (MuJoCo, Gazebo, Isaac Sim, Real Robot) has a dedicated driver that handles physics and policy inference locally. This bypasses ROS 2 network overhead, achieving sub-millisecond control latency.
 
 ## 🧬 Project Structure
 - `Controller/`: The brain of the robot.
