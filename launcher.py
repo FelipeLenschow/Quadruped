@@ -48,8 +48,8 @@ def run_cli_menu():
     # 1. Action
     tp = input(
         "Select Action:\n  [1] Train Policy\n"
-        "  [2] Play Policy (Isaac Lab)\n"
-        "  [3] Play Isaac Sim (Internal Driver)\n"
+        "  [2] Play Policy\n"
+        "  [3] Play Isaac Sim\n"
         "  [4] Play MuJoCo\n"
         "  [5] Play Gazebo\n"
         "  [6] Deploy to Robot\n"
@@ -88,16 +88,16 @@ def run_cli_menu():
         if not rob_idx or rob_idx not in ROBOT_CHOICES:
             rob_idx = "3"
         _, selected_robot_cfg = ROBOT_CHOICES[rob_idx]
-    elif action == "isaac":
-        # Isaac Play mode (Sim2Sim) currently spawns all three for comparison
+    elif action == "isaac_lab":
+        # Isaac Play mode (Sim2Sim) spawns all three for comparison
         selected_robot_cfg = None
     else:
-        # MuJoCo/Gazebo deployments now default to Go2 as per user requested standardization
+        # Default to Go2 for all drivers
         selected_robot_cfg = "UNITREE_GO2_CFG"
 
     # 3. Terrain
     selected_terrain = "flat"
-    if action == "isaac" or action == "train":
+    if action == "train":
         TERRAIN_CHOICES = {
             "1": ("Flat Plane", "flat"),
             "2": ("Random Rough", "rough"),
@@ -113,10 +113,12 @@ def run_cli_menu():
 
     # 4. Num Envs
     num_envs = ""
-    if action not in ("mujoco_turbo", "gazebo_turbo", "isaac_turbo"):
+    if action == "train":
         num_envs = input(
             "\nEnter number of environments (leave blank to use config default): "
         ).strip()
+    else:
+        num_envs = "1"
 
     selected_ckpt = None
     teleop = False
@@ -136,7 +138,7 @@ def run_cli_menu():
     )
     checkpoint_paths.sort(reverse=True)
 
-    needs_ckpt = action in ("isaac", "isaac_turbo", "mujoco_turbo", "gazebo_turbo")
+    needs_ckpt = action in ("isaac_sim", "mujoco", "gazebo", "real_deploy")
 
     if needs_ckpt and not checkpoint_paths:
         print(
@@ -145,20 +147,7 @@ def run_cli_menu():
         sys.exit(1)
 
     if checkpoint_paths:
-        if needs_ckpt:
-            print("\nSelect Trained Checkpoint:")
-            for i, path in enumerate(checkpoint_paths):
-                print(f"  [{i+1}] {path}")
-            ckpt_idx = input(
-                f"Enter choice [1-{len(checkpoint_paths)}] (default 1): "
-            ).strip()
-            try:
-                val = int(ckpt_idx) - 1
-                idx = val if 0 <= val < len(checkpoint_paths) else 0
-            except ValueError:
-                idx = 0
-            selected_ckpt = checkpoint_paths[idx]
-        else:  # train
+        if action == "train":
             print("\nSelect Checkpoint to Resume Training:")
             print("  [0] Train from Scratch (None)")
             for i, path in enumerate(checkpoint_paths):
@@ -175,14 +164,29 @@ def run_cli_menu():
                     selected_ckpt = checkpoint_paths[idx]
             except ValueError:
                 selected_ckpt = None
+        else:
+            # Deployment/Sim2Sim Mode: User wants to pick the checkpoint
+            print("\nSelect Trained Checkpoint:")
+            for i, path in enumerate(checkpoint_paths):
+                print(f"  [{i+1}] {path}")
+            ckpt_idx = input(
+                f"Enter choice [1-{len(checkpoint_paths)}] (default 1): "
+            ).strip()
+            try:
+                val = int(ckpt_idx) - 1
+                idx = val if 0 <= val < len(checkpoint_paths) else 0
+            except ValueError:
+                idx = 0
+            selected_ckpt = checkpoint_paths[idx]
+            print(f"[Launcher] Selected checkpoint: {selected_ckpt}")
 
-    if action in ("isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
+    if action in ("isaac_sim", "mujoco", "gazebo", "real_deploy"):
         teleop = False  # Using ROS 2 teleop instead of internal WASD
-    elif action == "isaac":
+    elif action == "isaac_lab":
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
-    
-    if action in ("isaac", "isaac_turbo", "mujoco_turbo", "gazebo_turbo"):
+
+    if action in ("isaac_sim", "mujoco", "gazebo", "real_deploy", "isaac_lab"):
         headless = False
     else:
         h_input = input("\nEnable Headless Mode? [Y/n]: ").strip().lower()
@@ -222,7 +226,7 @@ if __name__ == "__main__":
         print(f"Robots:   A1 + Go1 + Go2 (Sim2Sim)")
     print(f"Terrain:  {terrain_cfg}")
     print(f"Envs:     {num_envs if num_envs else 'Config Default'}")
-    if action in ("isaac", "isaac_bridge", "mujoco", "gazebo"):
+    if action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo"):
         print(f"Checkpoint: {ckpt}")
         print(f"Teleop:   {teleop}")
     else:
@@ -243,8 +247,8 @@ if __name__ == "__main__":
     # Environment Sanitization for ROS 2 Bridges (MuJoCo/Gazebo/Isaac)
     # This prevents pollution from Isaac Sim's site-packages (Python 3.11)
     # when we want to use the system ROS 2 (Python 3.10)
-    if action in ("mujoco_turbo", "gazebo_turbo", "isaac_turbo"):
-        if action in ("isaac_bridge", "isaac_turbo"):
+    if action in ("mujoco", "gazebo", "isaac_sim"):
+        if action == "isaac_sim":
             # Use Isaac Sim's internal ROS 2 libraries (compiled for Python 3.11)
             isaac_ros_path = "/home/05680435969@corp.udesc.br/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/rclpy"
             if os.path.exists(isaac_ros_path):
@@ -257,7 +261,7 @@ if __name__ == "__main__":
                     + os.pathsep
                     + env.get("LD_LIBRARY_PATH", "")
                 )
-            
+
             # Add IsaacLab source paths
             isaaclab_path = "/home/05680435969@corp.udesc.br/IsaacLab"
             isaaclab_sources = [
@@ -285,7 +289,7 @@ if __name__ == "__main__":
                 )
 
         # Unset virtualenv variables that might confuse the system python
-        if action != "isaac_bridge":  # Keep env for Isaac
+        if action != "isaac_sim":  # Keep env for Isaac
             env.pop("VIRTUAL_ENV", None)
             env.pop("PYTHONHOME", None)
 
@@ -321,10 +325,6 @@ if __name__ == "__main__":
     abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
     obs_dim = env.get("QUADRUPED_OBS_DIM", "49")
 
-    # Final Command Assembly
-    abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
-    obs_dim = env.get("QUADRUPED_OBS_DIM", "49")
-
     def get_robot_key(cfg):
         return {
             "UNITREE_A1_CFG": "a1",
@@ -349,26 +349,50 @@ if __name__ == "__main__":
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
         sys_python = "/usr/bin/python3"
-        
+
         if action == "isaac_sim":
             bridge_script = os.path.abspath(os.path.join("IsaacSim", "isaac_driver.py"))
-            cmd = [isaac_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+            cmd = [
+                isaac_python,
+                bridge_script,
+                f"--robot={robot_key}",
+                f"--internal_policy={abs_ckpt}",
+                f"--obs_dim={obs_dim}",
+            ]
         elif action == "mujoco":
             bridge_script = os.path.abspath(os.path.join("Mujoco", "mujoco_driver.py"))
-            cmd = [sys_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+            cmd = [
+                sys_python,
+                bridge_script,
+                f"--robot={robot_key}",
+                f"--internal_policy={abs_ckpt}",
+                f"--obs_dim={obs_dim}",
+            ]
         elif action == "gazebo":
             bridge_script = os.path.abspath(os.path.join("Gazebo", "gazebo_driver.py"))
-            cmd = [sys_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+            cmd = [
+                sys_python,
+                bridge_script,
+                f"--robot={robot_key}",
+                f"--internal_policy={abs_ckpt}",
+                f"--obs_dim={obs_dim}",
+            ]
         elif action == "real_deploy":
             bridge_script = os.path.abspath(os.path.join("Unitree", "real_driver.py"))
-            cmd = [sys_python, bridge_script, f"--robot={robot_key}", f"--internal_policy={abs_ckpt}", f"--obs_dim={obs_dim}"]
+            cmd = [
+                sys_python,
+                bridge_script,
+                f"--robot={robot_key}",
+                f"--internal_policy={abs_ckpt}",
+                f"--obs_dim={obs_dim}",
+            ]
 
         print(f"[Launcher] Starting Driver: {' '.join(cmd)}")
         bridge_env = env.copy()
-        if action != "isaac_turbo":
+        if action != "isaac_sim":
             bridge_env.pop("VIRTUAL_ENV", None)
             bridge_env.pop("PYTHONHOME", None)
-        
+
         proc = subprocess.Popen(cmd, env=bridge_env, cwd=module_path)
         try:
             proc.wait()

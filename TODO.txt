@@ -12,6 +12,9 @@ Add a automatic rename to trained agents via launcher
 Add a way to change the timestep from trainer via launcher
 Make a fail safe to the robot
 Make limitter to the torque and velocity of the actuators
+Make gazebo work
+Check why isaacsim takes 10ms for policy while mujoco takes 1ms
+Add a way to hold the robot in mid air
 
 
 

@@ -1,11 +1,12 @@
 """
-Gazebo Driver for Quadruped Locomotion. 
-Manages high-frequency physics stepping, ActuatorNet simulation, 
+Gazebo Driver for Quadruped Locomotion.
+Manages high-frequency physics stepping, ActuatorNet simulation,
 and deterministic policy deployment (Turbo Mode).
 """
 
 import os
 import sys
+
 # Ensure absolute path of the repository is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -63,39 +64,43 @@ JOINT_NAMES = [
 
 
 class Ros2GazeboDriver(Node):
-    def __init__(self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49):
+    def __init__(
+        self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49
+    ):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
-        
-        # Handles internal policy inference, physics stepping, 
+
+        # Handles internal policy inference, physics stepping,
         # and standardizes telemetry for ROS 2 monitoring.
         self.runner = None
         if checkpoint:
             print(f"[GazeboDriver] Loading internal policy runner: {checkpoint}")
-            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
-            self.last_actions = np.zeros(12, dtype=np.float32)
-            self.desired_qpos = np.array(
-                [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
-                dtype=np.float32,
+            self.runner = PolicyRunner(
+                checkpoint,
+                obs_dim=obs_dim,
+                robot_type=robot_type,
+                decimation=10,
+                verbose=True,
             )
-            self.inference_counter = 0
-            self.inference_decimation = 10 # 500Hz / 10 = 50Hz
-            self.mj_to_isaac = list(range(12)) # Identity
+            self.mj_to_isaac = list(range(12))  # Identity
         self.world_name = world_name
 
         # 4. ROS 2 Telemetry Manager
         self.telemetry = TelemetryManager(self, JOINT_NAMES)
-        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=JOINT_NAMES, saturation=0.9)
+        self.command_processor = CommandProcessor(
+            self, robot_type=robot_type, joint_names=JOINT_NAMES
+        )
 
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
 
         # 2. State & Control Buffers
-        self.latest_torques = np.zeros(12, dtype=np.float32)
-        self.latest_targets = np.array(
+        self.desired_qpos = np.array(
             [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
             dtype=np.float32,
         )
+        self.latest_torques = np.zeros(12, dtype=np.float32)
+        self.latest_targets = self.desired_qpos.copy()
         self.sim_time = 0.0
         self.q = np.zeros(12)
         self.dq = np.zeros(12)
@@ -107,10 +112,12 @@ class Ros2GazeboDriver(Node):
         # 3. Gazebo Transport (Deferred until physics loop for partitioning)
         self.gz_node = None
         self.joint_pubs = []
-        
+
         self.new_data_event = threading.Event()
         self._stop = threading.Event()
-        self.world_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "scene.sdf"))
+        self.world_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "scene.sdf")
+        )
 
         # 4. Starting Threads
         self.physics_thread = threading.Thread(target=self._physics_loop, daemon=True)
@@ -118,7 +125,9 @@ class Ros2GazeboDriver(Node):
         self.physics_thread.start()
         self.repeater_thread.start()
 
-        print(f"[GazeboDriver] Initialized for {robot_type.upper()}. Physics at 500Hz (Slave).")
+        print(
+            f"[GazeboDriver] Initialized for {robot_type.upper()}. Physics at 500Hz (Slave)."
+        )
 
     def _teleop_cb(self, msg):
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
@@ -140,39 +149,43 @@ class Ros2GazeboDriver(Node):
             if joint.name in JOINT_NAMES:
                 idx = JOINT_NAMES.index(joint.name)
                 try:
-                     # Mapping joint state (Gazebo -> Isaac order - NO FLIPS)
-                     self.q[idx] = joint.axis1.position
-                     self.dq[idx] = joint.axis1.velocity
-                     # Diagnostic print (commented out by default)
-                     # if idx == 0: print(f"[GazeboBridge] LF_HAA q: {self.q[0]:.3f} dq: {self.dq[0]:.3f}")
+                    # Mapping joint state (Gazebo -> Isaac order - NO FLIPS)
+                    self.q[idx] = joint.axis1.position
+                    self.dq[idx] = joint.axis1.velocity
+                    # Diagnostic print (commented out by default)
+                    # if idx == 0: print(f"[GazeboBridge] LF_HAA q: {self.q[0]:.3f} dq: {self.dq[0]:.3f}")
                 except AttributeError:
                     pass
         # Signal the physics loop to step
         self.new_data_event.set()
 
     def _odom_cb(self, msg):
-        self.base_pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
+        self.base_pos = np.array(
+            [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
+        )
         # msg.pose.orientation is [x, y, z, w]
         q = msg.pose.orientation
-        
-        # Gazebo Sim2Sim Odometry: 
+
+        # Gazebo Sim2Sim Odometry:
         # Harmonize with MuJoCo bridge: World velocity rotated to Body Frame.
         v_world = np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z])
-        
+
         # Pull orientation from the odom pose [x, y, z, w]
         q = msg.pose.orientation
         q_scipy = [q.x, q.y, q.z, q.w]
-        
+
         try:
             R = Rotation.from_quat(q_scipy).as_matrix()
             # v_body = R^T @ v_world
             self.base_lin_vel_b[:] = R.T @ v_world
         except Exception:
-            self.base_lin_vel_b[:] = v_world # Fallback
-        
+            self.base_lin_vel_b[:] = v_world  # Fallback
+
         # Log Suspected Drift
         if np.abs(self.base_lin_vel_b[0]) > 2.0 and self.sim_time < 0.2:
-             print(f"\r[Bridge] WARNING: Extreme vx={self.base_lin_vel_b[0]:.2f}. Collision likely.")
+            print(
+                f"\r[Bridge] WARNING: Extreme vx={self.base_lin_vel_b[0]:.2f}. Collision likely."
+            )
 
     def _repeater_loop(self):
         """
@@ -180,7 +193,7 @@ class Ros2GazeboDriver(Node):
         Gazebo clears forces every step; this ensures the robot stays powered.
         """
         while not self._stop.is_set():
-            if hasattr(self, 'joint_pubs') and len(self.joint_pubs) == 12:
+            if hasattr(self, "joint_pubs") and len(self.joint_pubs) == 12:
                 torch_torques = self.latest_torques.copy()
                 for i, torque in enumerate(torch_torques):
                     msg = double_pb2.Double()
@@ -198,21 +211,29 @@ class Ros2GazeboDriver(Node):
 
         # 2. Resource & Global Cleanup
         root_dir = os.path.dirname(os.path.abspath(__file__))
-        subprocess.run(["pkill", "-9", "-f", "gz-sim-server"], stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["pkill", "-9", "-f", "gz-sim-server"], stderr=subprocess.DEVNULL
+        )
         time.sleep(1.0)
-        
+
         # 3. Environment Setup (Crucial for Resource Path and Partition)
         env = os.environ.copy()
-        
+
         # Ensure a truly unique partition for THIS specific bridge instance
         unique_id = os.getpid() % 100000
         partition = f"quadruped_sim_{unique_id}"
         env["GZ_PARTITION"] = partition
-        
+
         # Resource paths for Gazebo to find models and meshes
         model_path = os.path.join(root_dir, "models")
-        env["GZ_SIM_RESOURCE_PATH"] = root_dir + os.pathsep + model_path + os.pathsep + env.get("GZ_SIM_RESOURCE_PATH", "")
-        
+        env["GZ_SIM_RESOURCE_PATH"] = (
+            root_dir
+            + os.pathsep
+            + model_path
+            + os.pathsep
+            + env.get("GZ_SIM_RESOURCE_PATH", "")
+        )
+
         # VDI Rendering Fixes
         if os.environ.get("FORCE_SOFTWARE_RENDER", "1") == "1":
             env["LIBGL_ALWAYS_SOFTWARE"] = "1"
@@ -221,18 +242,18 @@ class Ros2GazeboDriver(Node):
         gz_args = ["gz", "sim", self.world_path]
         if os.environ.get("GZ_HEADLESS", "0") == "1":
             gz_args.append("-s")
-        
+
         print(f"[GazeboDriver] Partition: {partition}")
         print(f"[GazeboDriver] Launching: {' '.join(gz_args)}")
-        
+
         # Launch Gazebo in a new process group with the ENRICHED env
         self.gz_proc = subprocess.Popen(gz_args, env=env, preexec_fn=os.setsid)
-        
+
         # Match our own process partition for topic discovery
         os.environ["GZ_PARTITION"] = partition
         print(f"[GazeboDriver] Initializing GzTransportNode on partition: {partition}")
         self.gz_node = GzTransportNode()
-        
+
         # Advertise joint topics
         self.joint_pubs = []
         for jname in JOINT_NAMES:
@@ -242,19 +263,35 @@ class Ros2GazeboDriver(Node):
         time.sleep(5.0)
 
         # 4. Bind Subscriptions
-        self.gz_node.subscribe(imu_pb2.IMU, f"/model/{self.robot_type}/link/base/sensor/imu/imu", self._imu_cb)
-        self.gz_node.subscribe(model_pb2.Model, f"/model/{self.robot_type}/joint_state", self._joint_cb)
-        self.gz_node.subscribe(odometry_pb2.Odometry, f"/model/{self.robot_type}/odometry", self._odom_cb)
-        self.gz_node.subscribe(world_stats_pb2.WorldStatistics, f"/world/{self.world_name}/stats", self._stats_cb)
+        self.gz_node.subscribe(
+            imu_pb2.IMU,
+            f"/model/{self.robot_type}/link/base/sensor/imu/imu",
+            self._imu_cb,
+        )
+        self.gz_node.subscribe(
+            model_pb2.Model, f"/model/{self.robot_type}/joint_state", self._joint_cb
+        )
+        self.gz_node.subscribe(
+            odometry_pb2.Odometry, f"/model/{self.robot_type}/odometry", self._odom_cb
+        )
+        self.gz_node.subscribe(
+            world_stats_pb2.WorldStatistics,
+            f"/world/{self.world_name}/stats",
+            self._stats_cb,
+        )
 
         # 5. Wait for First State
         print("[GazeboDriver] Waiting for simulation to start and first joint state...")
         while (self.sim_time == 0) and not self._stop.is_set():
             time.sleep(0.1)
-        
-        print(f"[GazeboDriver] Simulation started at t={self.sim_time:.2f}. Initializing targets.")
-        self.latest_targets[:] = self.q if not np.all(self.q == 0) else self.latest_targets
-            
+
+        print(
+            f"[GazeboDriver] Simulation started at t={self.sim_time:.2f}. Initializing targets."
+        )
+        self.latest_targets[:] = (
+            self.q if not np.all(self.q == 0) else self.latest_targets
+        )
+
         pos_err_hist = np.zeros((3, 12), dtype=np.float32)
         vel_hist = np.zeros((3, 12), dtype=np.float32)
         last_processed_sim_time = -1.0
@@ -271,31 +308,33 @@ class Ros2GazeboDriver(Node):
 
             # --- Internal Inference (50 Hz) ---
             if self.runner:
-                if self.inference_counter % self.inference_decimation == 0:
-                    # 1. Use centralized parser for Standardization
-                    state = self.telemetry.parse_bridge_data(
-                        self.q, self.dq, self.base_quat, self.base_ang_vel, self.base_lin_vel_b, self.base_pos
-                    )
-                    
-                    # 2. Feed Policy (Unified Inference with Timing)
-                    actions, _ = self.runner.infer(
-                        state, self.cmd_vel, self.last_actions, self.desired_qpos, 
-                        self.mj_to_isaac, verbose=True
-                    )
-                    self.last_actions[:] = actions
-                    
-                    # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-                    self.latest_targets[:] = self.command_processor.process(actions, self.desired_qpos)
-                
-                self.inference_counter += 1
+                # 1. Use centralized parser for Standardization
+                state = self.telemetry.parse_gazebo(
+                    self.q,
+                    self.dq,
+                    self.base_quat,
+                    self.base_ang_vel,
+                    self.base_lin_vel_b,
+                    self.base_pos,
+                )
+
+                # 2. Feed Policy (Internalized State Management)
+                actions = self.runner.step(state, self.cmd_vel)
+
+                # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
+                self.latest_targets = self.command_processor.process(
+                    actions, self.desired_qpos
+                )
 
             # --- ActuatorNet History (Downsample 500Hz -> 200Hz) ---
             # Isaac ActuatorNet was trained at 200Hz. 500/200 = 2.5.
             # We sample roughly every 2 or 3 steps.
             if actuator_count % 2 == 0:
                 targets = self.latest_targets
-                pos_err_hist = np.roll(pos_err_hist, 1, 0); pos_err_hist[0] = self.q - targets
-                vel_hist = np.roll(vel_hist, 1, 0); vel_hist[0] = self.dq
+                pos_err_hist = np.roll(pos_err_hist, 1, 0)
+                pos_err_hist[0] = self.q - targets
+                vel_hist = np.roll(vel_hist, 1, 0)
+                vel_hist[0] = self.dq
             actuator_count += 1
 
             net_in = torch.zeros((12, 6))
@@ -309,51 +348,69 @@ class Ros2GazeboDriver(Node):
             kp = 35.0  # Increased for stability
             kd = 0.8
             pd_torques = kp * (targets - self.q) - kd * self.dq
-            
+
             # Application of raw torques (Change to pd_torques if ActuatorNet is unstable)
             # self.latest_torques[:] = np.clip(pd_torques, -23.7, 23.7)
-            
+
             # Using ActuatorNet by default
             with torch.no_grad():
                 net_torques = self.act_net(net_in).squeeze().numpy()
             self.latest_torques[:] = np.clip(net_torques, -23.7, 23.7)
-            
+
             # LOGGING FOR DIAGNOSIS (every 100 physics steps ~ 0.2s)
             if actuator_count % 100 == 0:
-                print(f"[GazeboBridge] t: {self.sim_time:.2f} | q[0]: {self.q[0]:.2f} | T_act[0]: {self.latest_torques[0]:.2f} | T_pd[0]: {pd_torques[0]:.2f}")
+                print(
+                    f"[GazeboBridge] t: {self.sim_time:.2f} | q[0]: {self.q[0]:.2f} | T_act[0]: {self.latest_torques[0]:.2f} | T_pd[0]: {pd_torques[0]:.2f}"
+                )
 
             if count % 4 == 0:
                 state = self.telemetry.parse_bridge_data(
-                    self.q, self.dq, self.base_quat, self.base_ang_vel, self.base_lin_vel_b, self.base_pos
+                    self.q,
+                    self.dq,
+                    self.base_quat,
+                    self.base_ang_vel,
+                    self.base_lin_vel_b,
+                    self.base_pos,
                 )
                 self.telemetry.publish(sim_time=self.sim_time, state=state)
             count += 1
             if count % 200 == 0:
-                print(f"\r[Bridge] t={self.sim_time:.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+.2f}   ", end="", flush=True)
+                print(
+                    f"\r[Bridge] t={self.sim_time:.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+.2f}   ",
+                    end="",
+                    flush=True,
+                )
 
     def _cleanup(self):
         """Clean up Gazebo server and simulator processes."""
         self._stop.set()
-        if hasattr(self, 'gz_proc') and self.gz_proc:
+        if hasattr(self, "gz_proc") and self.gz_proc:
             print(f"[GazeboDriver] Terminating simulator (PID {self.gz_proc.pid})...")
             try:
                 os.killpg(os.getpgid(self.gz_proc.pid), signal.SIGTERM)
                 self.gz_proc.wait(timeout=5)
             except Exception:
-                subprocess.run(["pkill", "-9", "-f", "gz-sim-server"], stderr=subprocess.DEVNULL)
-
-
+                subprocess.run(
+                    ["pkill", "-9", "-f", "gz-sim-server"], stderr=subprocess.DEVNULL
+                )
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
     parser.add_argument("--world", type=str, default="quadruped_world")
-    parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint (Turbo Mode)")
+    parser.add_argument(
+        "--internal_policy",
+        type=str,
+        default=None,
+        help="Path to policy checkpoint (Turbo Mode)",
+    )
     parser.add_argument("--obs_dim", type=int, default=49)
     args = parser.parse_args()
     rclpy.init()
-    node = Ros2GazeboDriver(args.robot, args.world, checkpoint=args.internal_policy, obs_dim=args.obs_dim)
+    node = Ros2GazeboDriver(
+        args.robot, args.world, checkpoint=args.internal_policy, obs_dim=args.obs_dim
+    )
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

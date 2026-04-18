@@ -2,6 +2,7 @@ import os
 import torch
 import torch.nn as nn
 import numpy as np
+import time
 
 # Rotation helper
 def quat_to_rot_matrix(q):
@@ -40,11 +41,25 @@ class PolicyMLP(nn.Module):
         return self.policy_layer(x)
 
 class PolicyRunner:
-    def __init__(self, checkpoint_path, obs_dim=None, robot_type="go1", device="cpu"):
+    def __init__(self, checkpoint_path, obs_dim=None, robot_type="go1", device="cpu", verbose=False, decimation=4):
         print(f"[PolicyRunner] __init__ called for {checkpoint_path}")
+        self.verbose = verbose
         self.device = device
         self.checkpoint_path = checkpoint_path
         self.robot_type = robot_type
+        self.decimation = decimation
+        self.counter = 0
+        
+        # Default Pose Standards
+        self.desired_qpos = np.array([
+            0.1, -0.1, 0.1, -0.1,  # hips
+            0.8, 0.8, 1.0, 1.0,    # thighs
+            -1.5, -1.5, -1.5, -1.5, # calves
+        ], dtype=np.float32)
+        
+        # Joint mapping: Identity by default (matches our standardized drivers)
+        self.mapping = list(range(12))
+        
         self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 49))
         self.is_jit = checkpoint_path.endswith(".jit") or (checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path))
         print(f"[PolicyRunner] is_jit detected: {self.is_jit}")
@@ -67,8 +82,9 @@ class PolicyRunner:
             
             self._load_checkpoint(checkpoint_path)
             
-        # --- Performance Tracking ---
+        # --- Performance Tracking & Automatic State ---
         self.inf_times = []
+        self.last_actions = np.zeros(self.action_dim, dtype=np.float32)
 
     def _check_is_jit(self, path):
         # SKRL usually uses .pt for state dicts. JIT models are different.
@@ -216,3 +232,18 @@ class PolicyRunner:
             self.inf_times = []
             
         return actions, inf_time
+
+    def step(self, state, commands, verbose=None):
+        """
+        Automatic inference step. 
+        Handles decimation, internal action tracking, and timing.
+        Returns the action vector (last produced or newly inferred).
+        """
+        v = self.verbose if verbose is None else verbose
+        
+        if self.counter % self.decimation == 0:
+            actions, _ = self.infer(state, commands, self.last_actions, self.desired_qpos, self.mapping, verbose=v)
+            self.last_actions[:] = actions
+        
+        self.counter += 1
+        return self.last_actions

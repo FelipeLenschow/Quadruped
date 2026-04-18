@@ -34,7 +34,7 @@ class Ros2MujocoDriver(Node):
         self.runner = None
         if checkpoint:
             print(f"[MujocoDriver] Loading internal policy runner: {checkpoint}")
-            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
+            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type, verbose=True)
             self.mj_to_isaac = list(range(12)) # Identity mapping for our standardized bridge
 
         # 1. Load Go2 MuJoCo Scene
@@ -51,7 +51,7 @@ class Ros2MujocoDriver(Node):
 
         # 2. ROS 2 Managers
         self.telemetry = TelemetryManager(self, self.isaac_names)
-        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=self.isaac_names, saturation=0.9)
+        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=self.isaac_names)
 
         # 3. Subscriptions
         self.create_subscription(Twist, '/cmd_vel', self.teleop_cb, 10)
@@ -146,25 +146,17 @@ class Ros2MujocoDriver(Node):
             self._reset_robot()
             next_time = time.time()
             self.step_counter = 0
-
             while rclpy.ok() and viewer.is_running():
                 # --- Internal Inference (50 Hz) ---
                 if self.runner:
-                    if self.inference_counter % self.inference_decimation == 0:
-                        # 1. Use centralized parser for Standardization
-                        state = self.telemetry.parse_mujoco(self.data, self.isaac_qpos_addr, self.isaac_qvel_addr)
-                        
-                        # 2. Feed Policy (Unified Inference with Timing)
-                        actions, _ = self.runner.infer(
-                            state, self.cmd_vel, self.last_actions, self.desired_qpos, 
-                            self.mj_to_isaac, verbose=True
-                        )
-                        self.last_actions[:] = actions
-                        
-                        # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-                        self.current_targets = self.command_processor.process(actions, self.desired_qpos)
+                    # 1. Use centralized parser for Standardization
+                    state = self.telemetry.parse_mujoco(self.data, self.isaac_qpos_addr, self.isaac_qvel_addr)
                     
-                    self.inference_counter += 1
+                    # 2. Feed Policy (Internalized State Management)
+                    actions = self.runner.step(state, self.cmd_vel)
+                    
+                    # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
+                    self.current_targets = self.command_processor.process(actions, self.desired_qpos)
 
                 # --- PD step (200 Hz) ---
                 torques = self._pd_torques(self.current_targets)

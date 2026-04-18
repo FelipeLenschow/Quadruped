@@ -47,11 +47,10 @@ class RealDriver(Node):
         
         # 3. Internal Inference
         self.policy = None
+        self.desired_qpos = np.array([0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5], dtype=np.float32)
         if internal_policy:
             self.get_logger().info(f"[RealDriver] Loading internal policy: {internal_policy}")
-            self.policy = PolicyRunner(internal_policy, obs_dim=obs_dim)
-            self.last_actions = np.zeros(12, dtype=np.float32)
-            self.desired_qpos = np.array([0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5], dtype=np.float32)
+            self.policy = PolicyRunner(internal_policy, obs_dim=obs_dim, decimation=1, verbose=True)
             self.sdk_to_isaac = list(range(12)) # Verified mapping should go here
         
         # 4. Teleop Subscription
@@ -96,16 +95,12 @@ class RealDriver(Node):
         
         # 2. Internal Inference
         if self.policy:
-            actions, _ = self.policy.infer(
-                state, self.cmds_vel, self.last_actions, 
-                self.desired_qpos, self.sdk_to_isaac, verbose=True
-            )
-            self.last_actions[:] = actions
+            actions = self.policy.step(state, self.cmds_vel)
             
             # 3. Process Commands (Scaling + Saturation)
             self.command_processor.process(
                 actions, 
-                state.q, 
+                self.desired_qpos, 
                 send_to_robot_cb=self.send_to_sdk
             )
 

@@ -95,19 +95,17 @@ class Ros2IsaacDriver(Node):
         # Handles internal policy inference, physics stepping, 
         # and standardizes telemetry for ROS 2 monitoring.
         self.runner = None
+        self.desired_qpos = np.array([
+            0.1, -0.1, 0.1, -0.1,  # hips
+            0.8, 0.8, 1.0, 1.0,    # thighs
+            -1.5, -1.5, -1.5, -1.5, # calves
+        ], dtype=np.float32)
+
         if checkpoint:
             print(f"[IsaacDriver] Loading internal policy runner: {checkpoint}")
-            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type)
-            self.last_actions = np.zeros(12, dtype=np.float32)
-            self.desired_qpos = np.array([
-                0.1, -0.1, 0.1, -0.1,  # hips
-                0.8, 0.8, 1.0, 1.0,    # thighs
-                -1.5, -1.5, -1.5, -1.5, # calves
-            ], dtype=np.float32)
+            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type, verbose=True)
             # Joint index mapping: ISAAC to Type-Grouped (identity in our bridge)
             self.mj_to_isaac = list(range(12))
-            self.inference_counter = 0
-            self.inference_decimation = 4
 
         # Joint Configuration
         # (Internal names are what Isaac Sim uses, joint_names are what we group into ROS)
@@ -154,7 +152,7 @@ class Ros2IsaacDriver(Node):
 
         # ROS 2 Managers
         self.telemetry = TelemetryManager(self, self.joint_names)
-        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=self.joint_names, saturation=0.9)
+        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=self.joint_names)
         self.cmd_echo_pub = self.create_publisher(JointState, "/commands/joint_commands", 10)
 
         # 3. Subscriptions
@@ -165,6 +163,7 @@ class Ros2IsaacDriver(Node):
             0, self.mapped_dof_idx
         ].clone()
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
+        self.step_counter = 0
 
         print(
             f"[IsaacDriver] Initialized for {self.robot_type.upper()} with {len(self.mapped_dof_idx)} joints."
@@ -183,22 +182,16 @@ class Ros2IsaacDriver(Node):
     def step(self):
         # 0. Internal Inference
         if self.runner:
-            if self.inference_counter % self.inference_decimation == 0:
-                # 1. Use centralized parser for Standardization (Synchronized)
-                state = self.telemetry.parse_isaac(self.robot)
-                
-                # 2. Feed Policy (Unified Inference with Timing)
-                actions, _ = self.runner.infer(
-                    state, self.cmd_vel, self.last_actions, self.desired_qpos, 
-                    self.mj_to_isaac, verbose=True
-                )
-                self.last_actions[:] = actions
-                
-                # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-                self.latest_targets[:] = torch.from_numpy(
-                    self.command_processor.process(actions, self.desired_qpos)
-                ).to(device=self.robot.data.joint_pos.device, dtype=torch.float32)
-            self.inference_counter += 1
+            # 1. Use centralized parser for Standardization (Synchronized)
+            state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
+            
+            # 2. Feed Policy (Internalized State Management)
+            actions = self.runner.step(state, self.cmd_vel)
+            
+            # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
+            self.latest_targets[:] = torch.from_numpy(
+                self.command_processor.process(actions, self.desired_qpos)
+            ).to(device=self.robot.data.joint_pos.device, dtype=torch.float32)
 
         # 1. PD Effort Calculation (Matching training: Kp=25.0, Kd=0.5)
         curr_jpos = self.robot.data.joint_pos[0, self.mapped_dof_idx]
@@ -215,34 +208,12 @@ class Ros2IsaacDriver(Node):
         # Apply Actions via Effort
         self.robot.set_joint_effort_target(torques, joint_ids=self.mapped_dof_idx)
 
-        if self.runner and self.inference_counter % 10 == 0:
-            # Publish echo of internal commands for PlotJuggler
-            js_echo = JointState()
-            js_echo.header.stamp = self.get_clock().now().to_msg()
-            js_echo.name = self.joint_names
-            js_echo.position = self.latest_targets.tolist()
-            self.cmd_echo_pub.publish(js_echo)
-
-        # Telemetry every 1s
-        now = time.time()
-        if not hasattr(self, "_last_telemetry"):
-            self._last_telemetry = 0
-        if now - self._last_telemetry > 1.0:
-            root_v_w = self.robot.data.root_com_lin_vel_w[0].tolist()
-            root_v_b = self.robot.data.root_lin_vel_b[0].tolist()
-            
-            # Per-joint error check
-            curr_jpos = self.robot.data.joint_pos[0, self.mapped_dof_idx]
-            j_errs = torch.abs(curr_jpos - self.latest_targets)
-            max_err_idx = torch.argmax(j_errs).item()
-            
-            print(f"[IsaacDriver] V_body: {[round(x,3) for x in root_v_b]} | Max Error: {j_errs[max_err_idx]:.3f} on {self.joint_names[max_err_idx]}")
-            self._last_telemetry = now
-
-        # 2. Publish Standardized Telemetry (Downsampled to 20Hz for network efficiency)
-        if self.step_counter % 5 == 0:
+        # 2. Status Output every 1s (Silenced)
+        # if self.step_counter % 100 == 0:
+        #     pass
+        if self.step_counter % 10 == 0:
             state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
-            self.telemetry.publish(sim_time=float(self.step_counter * 0.01), state=state)
+            self.telemetry.publish(sim_time=float(self.step_counter * 0.005), state=state)
         
         self.step_counter += 1
 
@@ -320,7 +291,7 @@ def main():
         if count % 100 == 0:
             pos = robot.data.root_pos_w[0]
             print(
-                f"\r[IsaacDriver] Sim Time Step: {count} | Robot Height: {pos[2]:.3f}m | T: {sim_context.current_time:.2f}s",
+                f"\r[IsaacDriver] Sim Time Step: {count} | Robot Height: {pos[2]:.3f}m | T: {sim_context.current_time:.2f}s\n",
                 end="",
                 flush=True,
             )
