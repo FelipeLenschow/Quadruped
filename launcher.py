@@ -2,9 +2,29 @@ import os
 import sys
 import glob
 import subprocess
+import json
 
 
 TASKS_DIR = "IsaacLab_Tasks"
+LAST_COMMAND_FILE = ".launcher_last_command.json"
+
+
+def save_last_command(data):
+    try:
+        with open(LAST_COMMAND_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def load_last_command():
+    if os.path.exists(LAST_COMMAND_FILE):
+        try:
+            with open(LAST_COMMAND_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return None
 
 
 def run_cli_menu():
@@ -12,7 +32,25 @@ def run_cli_menu():
     print(" Quadruped Unified Launcher")
     print("=" * 50 + "\n")
 
-    # 0. Selection: Dynamic Module Detection
+    # 0. Load last command
+    last_cmd = load_last_command()
+    if last_cmd:
+        print(f"Last command: {last_cmd.get('action')} on {last_cmd.get('module_name')}")
+        quick_start = input("Press Enter to repeat last command or any key to select new: ").strip()
+        if not quick_start:
+            return (
+                last_cmd["module_name"],
+                last_cmd["module_path"],
+                last_cmd["action"],
+                last_cmd["robot_cfg"],
+                last_cmd["terrain_cfg"],
+                last_cmd["num_envs"],
+                last_cmd["ckpt"],
+                last_cmd["teleop"],
+                last_cmd["headless"],
+            )
+
+    # 1. Selection: Dynamic Module Detection
     if not os.path.exists(TASKS_DIR):
         print(f"[ERROR] Tasks directory '{TASKS_DIR}' not found.")
         sys.exit(1)
@@ -117,6 +155,12 @@ def run_cli_menu():
         num_envs = input(
             "\nEnter number of environments (leave blank to use config default): "
         ).strip()
+    elif action == "isaac_lab":
+        num_envs = input(
+            "\nEnter number of environments [1-50] (default 1): "
+        ).strip()
+        if not num_envs:
+            num_envs = "1"
     else:
         num_envs = "1"
 
@@ -232,6 +276,19 @@ if __name__ == "__main__":
     else:
         print(f"Headless: {headless}")
     print(f"{'='*50}\n")
+
+    # Save last command
+    save_last_command({
+        "module_name": module_name,
+        "module_path": module_path,
+        "action": action,
+        "robot_cfg": robot_cfg,
+        "terrain_cfg": terrain_cfg,
+        "num_envs": num_envs,
+        "ckpt": ckpt,
+        "teleop": teleop,
+        "headless": headless,
+    })
 
     # Prepare environment
     env = os.environ.copy()

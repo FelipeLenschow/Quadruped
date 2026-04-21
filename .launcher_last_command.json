@@ -1,0 +1,1 @@
+{"module_name": "Walk_GO2", "module_path": "IsaacLab_Tasks/Walk_GO2", "action": "train", "robot_cfg": "UNITREE_GO2_CFG", "terrain_cfg": "rough", "num_envs": "", "ckpt": null, "teleop": false, "headless": true}
