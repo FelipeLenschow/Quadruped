@@ -48,6 +48,8 @@ def run_cli_menu():
                 last_cmd["ckpt"],
                 last_cmd["teleop"],
                 last_cmd["headless"],
+                last_cmd.get("video", False),
+                last_cmd.get("run_name", ""),
             )
 
     # 1. Selection: Dynamic Module Detection
@@ -167,6 +169,8 @@ def run_cli_menu():
     selected_ckpt = None
     teleop = False
     headless = False
+    video = False
+    run_name = ""
 
     # 5. Checkpoint Selection
     checkpoint_paths = glob.glob(
@@ -236,6 +240,11 @@ def run_cli_menu():
         h_input = input("\nEnable Headless Mode? [Y/n]: ").strip().lower()
         headless = h_input != "n"
 
+    if action == "train":
+        run_name = input("\nEnter custom run name (leave blank for default): ").strip()
+        v_input = input("\nEnable Video Recording? [Y/n]: ").strip().lower()
+        video = v_input != "n"
+
     return (
         selected_module_name,
         selected_module_path,
@@ -246,6 +255,8 @@ def run_cli_menu():
         selected_ckpt,
         teleop,
         headless,
+        video,
+        run_name,
     )
 
 
@@ -260,6 +271,8 @@ if __name__ == "__main__":
         ckpt,
         teleop,
         headless,
+        video,
+        run_name,
     ) = run_cli_menu()
 
     print(f"\n{'='*50}")
@@ -275,6 +288,10 @@ if __name__ == "__main__":
         print(f"Teleop:   {teleop}")
     else:
         print(f"Headless: {headless}")
+        if action == "train":
+            print(f"Video:    {video}")
+            if run_name:
+                print(f"Run Name: {run_name}")
     print(f"{'='*50}\n")
 
     # Save last command
@@ -288,6 +305,8 @@ if __name__ == "__main__":
         "ckpt": ckpt,
         "teleop": teleop,
         "headless": headless,
+        "video": video,
+        "run_name": run_name,
     })
 
     # Prepare environment
@@ -400,6 +419,10 @@ if __name__ == "__main__":
             cmd.append(f"--checkpoint={abs_ckpt}")
         if headless:
             cmd.append("--headless")
+        if video:
+            cmd.append("--video")
+        if run_name:
+            cmd.append(f"agent.experiment.experiment_name={run_name}")
         subprocess.run(cmd, env=env, cwd=module_path)
 
     elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy"):

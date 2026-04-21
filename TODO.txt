@@ -2,8 +2,8 @@ Add a input variable to controll the swing height and the base height
 - Add a point cloud of the terrain as input
 Add a friction variable to controll the friction of the terrain
 Add a noise variable to controll the noise of the sensors
-5: [DONE] Make the robot start in a random position or laying down
-6: [DONE] Add a way to recouver from a fall
+- Make the robot start in a random position or laying down
+- Add a way to recouver from a fall
 - Add friction variation of the actuators
 - Add a foot height reward
 - Add a robot variation during training
@@ -15,7 +15,7 @@ Make limitter to the torque and velocity of the actuators
 Make gazebo work
 Check why isaacsim takes 10ms for policy while mujoco takes 1ms
 Add a way to hold the robot in mid air
-Add video output of the training
+- Add video output of the training
 Add noise for the world data/feedback
 Add penalty for hard impact on the ground when stepping
 
