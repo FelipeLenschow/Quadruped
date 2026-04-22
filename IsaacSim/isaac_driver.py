@@ -1,6 +1,6 @@
 """
-Isaac Sim Driver for Quadruped Locomotion. 
-Integrates the simulator's Articulation interface with the central 
+Isaac Sim Driver for Quadruped Locomotion.
+Integrates the simulator's Articulation interface with the central
 Policy Runner and Command Processor (Turbo Mode).
 """
 
@@ -9,6 +9,7 @@ import sys
 import os
 import os
 import sys
+
 # Ensure absolute path of the repository is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -21,8 +22,15 @@ from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="IsaacSim ROS 2 Bridge for Quadruped.")
-parser.add_argument("--robot", type=str, default="go2", help="Robot type (go2, go1, a1)")
-parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint (Turbo Mode)")
+parser.add_argument(
+    "--robot", type=str, default="go2", help="Robot type (go2, go1, a1)"
+)
+parser.add_argument(
+    "--internal_policy",
+    type=str,
+    default=None,
+    help="Path to policy checkpoint (Turbo Mode)",
+)
 parser.add_argument("--obs_dim", type=int, default=49, help="Observation dimension")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -91,19 +99,33 @@ class Ros2IsaacDriver(Node):
         super().__init__("isaac_driver")
         self.robot = robot
         self.robot_type = robot_type
-        
-        # Handles internal policy inference, physics stepping, 
+
+        # Handles internal policy inference, physics stepping,
         # and standardizes telemetry for ROS 2 monitoring.
         self.runner = None
-        self.desired_qpos = np.array([
-            0.1, -0.1, 0.1, -0.1,  # hips
-            0.8, 0.8, 1.0, 1.0,    # thighs
-            -1.5, -1.5, -1.5, -1.5, # calves
-        ], dtype=np.float32)
-
         if checkpoint:
             print(f"[IsaacDriver] Loading internal policy runner: {checkpoint}")
-            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type, verbose=True)
+            self.runner = PolicyRunner(
+                checkpoint, obs_dim=obs_dim, robot_type=robot_type
+            )
+            self.runner.decimation = 4  # Policy at 50Hz (200Hz / 4)
+            self.desired_qpos = np.array(
+                [
+                    0.1,
+                    -0.1,
+                    0.1,
+                    -0.1,  # hips
+                    0.8,
+                    0.8,
+                    1.0,
+                    1.0,  # thighs
+                    -1.5,
+                    -1.5,
+                    -1.5,
+                    -1.5,  # calves
+                ],
+                dtype=np.float32,
+            )
             # Joint index mapping: ISAAC to Type-Grouped (identity in our bridge)
             self.mj_to_isaac = list(range(12))
 
@@ -152,8 +174,21 @@ class Ros2IsaacDriver(Node):
 
         # ROS 2 Managers
         self.telemetry = TelemetryManager(self, self.joint_names)
-        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=self.joint_names)
-        self.cmd_echo_pub = self.create_publisher(JointState, "/commands/joint_commands", 10)
+        self.command_processor = CommandProcessor(
+            self, robot_type=robot_type, joint_names=self.joint_names
+        )
+        self.cmd_echo_pub = self.create_publisher(
+            JointState, "/commands/joint_commands", 10
+        )
+
+        # 4. State Buffers
+        self.latest_targets = torch.zeros(
+            (1, 12), device=self.robot.data.joint_pos.device, dtype=torch.float32
+        )
+        if hasattr(self, "desired_qpos"):
+            self.latest_targets[:] = torch.from_numpy(self.desired_qpos).to(
+                self.latest_targets
+            )
 
         # 3. Subscriptions
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
@@ -180,41 +215,72 @@ class Ros2IsaacDriver(Node):
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
 
     def step(self):
-        # 0. Internal Inference
+        # --- Internal Inference (50 Hz) ---
         if self.runner:
-            # 1. Use centralized parser for Standardization (Synchronized)
-            state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
-            
-            # 2. Feed Policy (Internalized State Management)
-            actions = self.runner.step(state, self.cmd_vel)
-            
-            # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-            self.latest_targets[:] = torch.from_numpy(
-                self.command_processor.process(actions, self.desired_qpos)
-            ).to(device=self.robot.data.joint_pos.device, dtype=torch.float32)
+            if self.runner.should_step():
+                # 1. Use centralized parser for Standardization
+                # parse_isaac expects (robot_data, mapped_idx)
+                state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
+
+                # 2. Feed Policy (Unified Inference with Timing)
+                actions, _ = self.runner.infer(
+                    state, self.cmd_vel, self.desired_qpos, self.mj_to_isaac
+                )
+
+                # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
+                targets = self.command_processor.process(actions, self.desired_qpos)
+                self.latest_targets[:] = torch.from_numpy(targets).to(
+                    device=self.robot.data.joint_pos.device, dtype=torch.float32
+                )
 
         # 1. PD Effort Calculation (Matching training: Kp=25.0, Kd=0.5)
         curr_jpos = self.robot.data.joint_pos[0, self.mapped_dof_idx]
         curr_jvel = self.robot.data.joint_vel[0, self.mapped_dof_idx]
-        
+
         pos_err = self.latest_targets - curr_jpos
-        
+
         kp, kd = 25.0, 0.5
         effort_limit = 23.5
-        
+
         torques = kp * pos_err + kd * (0 - curr_jvel)
         torques = torch.clamp(torques, -effort_limit, effort_limit).to(torch.float32)
 
         # Apply Actions via Effort
         self.robot.set_joint_effort_target(torques, joint_ids=self.mapped_dof_idx)
 
-        # 2. Status Output every 1s (Silenced)
-        # if self.step_counter % 100 == 0:
-        #     pass
-        if self.step_counter % 10 == 0:
+        if self.runner and self.runner.counter % 10 == 0:
+            # Publish echo of internal commands for PlotJuggler
+            js_echo = JointState()
+            js_echo.header.stamp = self.get_clock().now().to_msg()
+            js_echo.name = self.joint_names
+            js_echo.position = self.latest_targets.tolist()
+            self.cmd_echo_pub.publish(js_echo)
+
+        # Telemetry every 1s
+        now = time.time()
+        if not hasattr(self, "_last_telemetry"):
+            self._last_telemetry = 0
+        if now - self._last_telemetry > 1.0:
+            root_v_w = self.robot.data.root_com_lin_vel_w[0].tolist()
+            root_v_b = self.robot.data.root_lin_vel_b[0].tolist()
+
+            # Per-joint error check
+            curr_jpos = self.robot.data.joint_pos[0, self.mapped_dof_idx]
+            j_errs = torch.abs(curr_jpos - self.latest_targets)
+            max_err_idx = torch.argmax(j_errs).item()
+
+            print(
+                f"[IsaacDriver] V_body: {[round(x,3) for x in root_v_b]} | Max Error: {j_errs[max_err_idx]:.3f} on {self.joint_names[max_err_idx]}"
+            )
+            self._last_telemetry = now
+
+        # 2. Publish Standardized Telemetry (Downsampled to 20Hz for network efficiency)
+        if self.step_counter % 5 == 0:
             state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
-            self.telemetry.publish(sim_time=float(self.step_counter * 0.005), state=state)
-        
+            self.telemetry.publish(
+                sim_time=float(self.step_counter * 0.005), state=state
+            )
+
         self.step_counter += 1
 
 
@@ -264,7 +330,12 @@ def main():
     scene.update(0.0)
 
     # 6. Initialize Driver (After reset so .data is available)
-    node = Ros2IsaacDriver(robot, args_cli.robot, checkpoint=args_cli.internal_policy, obs_dim=args_cli.obs_dim)
+    node = Ros2IsaacDriver(
+        robot,
+        args_cli.robot,
+        checkpoint=args_cli.internal_policy,
+        obs_dim=args_cli.obs_dim,
+    )
 
     print("[IsaacDriver] Starting simulation loop...")
     next_time = time.time()
@@ -277,7 +348,7 @@ def main():
 
         # 2. Driver Logic (Manual PD)
         node.step()
-        
+
         # 3. Write data to sim (APPLY EFFORTS TO PHYSX)
         scene.write_data_to_sim()
 

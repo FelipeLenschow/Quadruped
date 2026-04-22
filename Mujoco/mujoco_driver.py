@@ -1,10 +1,12 @@
 import os
 import sys
+
 # Ensure absolute path of the repository is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import time
 import numpy as np
+
 """
 MuJoCo Driver for Quadruped Locomotion. 
 Handles internal policy inference, physics stepping, 
@@ -24,23 +26,30 @@ from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
 from Controller.Utils.telemetry import TelemetryManager
 
+
 class Ros2MujocoDriver(Node):
     def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49):
-        super().__init__('mujoco_bridge_node')
+        super().__init__("mujoco_bridge_node")
         self.robot_type = robot_type
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
-        
+
         # Internal Policy Runner
         self.runner = None
         if checkpoint:
             print(f"[MujocoDriver] Loading internal policy runner: {checkpoint}")
-            self.runner = PolicyRunner(checkpoint, obs_dim=obs_dim, robot_type=robot_type, verbose=True)
-            self.mj_to_isaac = list(range(12)) # Identity mapping for our standardized bridge
+            self.runner = PolicyRunner(
+                checkpoint, obs_dim=obs_dim, robot_type=robot_type, verbose=True
+            )
+            self.mj_to_isaac = list(
+                range(12)
+            )  # Identity mapping for our standardized bridge
 
         # 1. Load Go2 MuJoCo Scene
-        mjcf_path = os.path.join(os.path.dirname(__file__), "mujoco_menagerie", "unitree_go2", "scene.xml")
+        mjcf_path = os.path.join(
+            os.path.dirname(__file__), "mujoco_menagerie", "unitree_go2", "scene.xml"
+        )
         if not os.path.exists(mjcf_path):
-             mjcf_path = os.path.join(os.path.dirname(__file__), "scene.xml")
+            mjcf_path = os.path.join(os.path.dirname(__file__), "scene.xml")
 
         print(f"[MujocoDriver] Initializing for Go2. Model: {mjcf_path}")
         self.model = mujoco.MjModel.from_xml_path(mjcf_path)
@@ -51,16 +60,20 @@ class Ros2MujocoDriver(Node):
 
         # 2. ROS 2 Managers
         self.telemetry = TelemetryManager(self, self.isaac_names)
-        self.command_processor = CommandProcessor(self, robot_type=robot_type, joint_names=self.isaac_names)
+        self.command_processor = CommandProcessor(
+            self, robot_type=robot_type, joint_names=self.isaac_names
+        )
 
         # 3. Subscriptions
-        self.create_subscription(Twist, '/cmd_vel', self.teleop_cb, 10)
+        self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
 
         # 4. Physics Thread
         self.physics_thread = threading.Thread(target=self._physics_loop, daemon=True)
         self.physics_thread.start()
 
-        print(f"[MujocoDriver] Initialized for {self.robot_type.upper()}. Physics running at 200Hz.")
+        print(
+            f"[MujocoDriver] Initialized for {self.robot_type.upper()}. Physics running at 200Hz."
+        )
 
     def _init_physics(self):
         """Initialize MuJoCo physics and resolve joint addresses."""
@@ -69,9 +82,18 @@ class Ros2MujocoDriver(Node):
 
         # Resolve joint addresses once
         self.isaac_names = [
-            "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
-            "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
-            "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
+            "FL_hip_joint",
+            "FR_hip_joint",
+            "RL_hip_joint",
+            "RR_hip_joint",
+            "FL_thigh_joint",
+            "FR_thigh_joint",
+            "RL_thigh_joint",
+            "RR_thigh_joint",
+            "FL_calf_joint",
+            "FR_calf_joint",
+            "RL_calf_joint",
+            "RR_calf_joint",
         ]
         self.isaac_qpos_addr = np.zeros(12, dtype=int)
         self.isaac_qvel_addr = np.zeros(12, dtype=int)
@@ -82,14 +104,28 @@ class Ros2MujocoDriver(Node):
             self.isaac_qpos_addr[i] = self.model.jnt_qposadr[j_id]
             self.isaac_qvel_addr[i] = self.model.jnt_dofadr[j_id]
             act_name = name.replace("_joint", "")
-            self.isaac_ctrl_idx[i] = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, act_name)
+            self.isaac_ctrl_idx[i] = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, act_name
+            )
 
         # Default Pose
-        self.desired_qpos = np.array([
-            0.1, -0.1, 0.1, -0.1,  # hips
-            0.8, 0.8, 1.0, 1.0,    # thighs
-            -1.5, -1.5, -1.5, -1.5, # calves
-        ], dtype=np.float32)
+        self.desired_qpos = np.array(
+            [
+                0.1,
+                -0.1,
+                0.1,
+                -0.1,  # hips
+                0.8,
+                0.8,
+                1.0,
+                1.0,  # thighs
+                -1.5,
+                -1.5,
+                -1.5,
+                -1.5,  # calves
+            ],
+            dtype=np.float32,
+        )
 
         # Buffer for smooth targets
         self.current_targets = self.desired_qpos.copy()
@@ -121,18 +157,20 @@ class Ros2MujocoDriver(Node):
         """Compute DCMotor PD torques matching training (Kp=25, Kd=0.5)."""
         q = self.data.qpos[self.isaac_qpos_addr]
         v = self.data.qvel[self.isaac_qvel_addr]
-        
+
         pos_err = targets - q  # Target - Actual
         kp, kd = 25.0, 0.5
         effort_limit, sat_effort, vel_lim = 23.5, 23.5, 30.0
-        
+
         torques = kp * pos_err + kd * (0 - v)
-        
+
         vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
         v_clamp = np.clip(v, -vel_at_lim, vel_at_lim)
         t_top = sat_effort * (1.0 - v_clamp / vel_lim)
         t_bot = sat_effort * (-1.0 - v_clamp / vel_lim)
-        return np.clip(torques, np.minimum(t_bot, -effort_limit), np.minimum(t_top, effort_limit))
+        return np.clip(
+            torques, np.minimum(t_bot, -effort_limit), np.minimum(t_top, effort_limit)
+        )
 
     def _physics_loop(self):
         """Primary simulation thread running PD at 200 Hz and Physics at 1000 Hz."""
@@ -140,23 +178,32 @@ class Ros2MujocoDriver(Node):
             viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
             track_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
             if track_id == -1:
-                track_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "base")
+                track_id = mujoco.mj_name2id(
+                    self.model, mujoco.mjtObj.mjOBJ_BODY, "base"
+                )
             viewer.cam.trackbodyid = track_id
-            
+
             self._reset_robot()
             next_time = time.time()
             self.step_counter = 0
             while rclpy.ok() and viewer.is_running():
                 # --- Internal Inference (50 Hz) ---
                 if self.runner:
-                    # 1. Use centralized parser for Standardization
-                    state = self.telemetry.parse_mujoco(self.data, self.isaac_qpos_addr, self.isaac_qvel_addr)
-                    
-                    # 2. Feed Policy (Internalized State Management)
-                    actions = self.runner.step(state, self.cmd_vel)
-                    
-                    # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-                    self.current_targets = self.command_processor.process(actions, self.desired_qpos)
+                    if self.runner.should_step():
+                        # 1. Use centralized parser for Standardization
+                        state = self.telemetry.parse_mujoco(
+                            self.data, self.isaac_qpos_addr, self.isaac_qvel_addr
+                        )
+
+                        # 2. Feed Policy (Unified Inference with Timing)
+                        actions, _ = self.runner.infer(
+                            state, self.cmd_vel, self.desired_qpos, self.mj_to_isaac
+                        )
+
+                        # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
+                        self.current_targets = self.command_processor.process(
+                            actions, self.desired_qpos
+                        )
 
                 # --- PD step (200 Hz) ---
                 torques = self._pd_torques(self.current_targets)
@@ -168,37 +215,43 @@ class Ros2MujocoDriver(Node):
                     mujoco.mj_step(self.model, self.data)
 
                 # --- Publish sensors (Standardized & Synchronized) ---
-                state = self.telemetry.parse_mujoco(self.data, self.isaac_qpos_addr, self.isaac_qvel_addr)
+                state = self.telemetry.parse_mujoco(
+                    self.data, self.isaac_qpos_addr, self.isaac_qvel_addr
+                )
                 self.telemetry.publish(sim_time=self.data.time, state=state)
                 viewer.sync()
 
                 self.step_counter += 1
 
                 # Sync with real time
-                next_time += 0.005 # 200 Hz
+                next_time += 0.005  # 200 Hz
                 sleep_dur = next_time - time.time()
                 if sleep_dur > 0:
                     time.sleep(sleep_dur)
-                elif sleep_dur < -0.1: # Catch up if significantly behind
+                elif sleep_dur < -0.1:  # Catch up if significantly behind
                     next_time = time.time()
-
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
-    parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint")
+    parser.add_argument(
+        "--internal_policy", type=str, default=None, help="Path to policy checkpoint"
+    )
     parser.add_argument("--obs_dim", type=int, default=49)
     args = parser.parse_args()
-    
+
     rclpy.init()
-    node = Ros2MujocoDriver(robot_type=args.robot, checkpoint=args.internal_policy, obs_dim=args.obs_dim)
+    node = Ros2MujocoDriver(
+        robot_type=args.robot, checkpoint=args.internal_policy, obs_dim=args.obs_dim
+    )
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()

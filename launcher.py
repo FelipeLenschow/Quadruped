@@ -89,7 +89,7 @@ def run_cli_menu():
     tp = input(
         "Select Action:\n  [1] Train Policy\n"
         "  [2] Play Policy\n"
-        "  [3] Play Isaac Sim\n"
+        "  [3] Play IsaacSim\n"
         "  [4] Play MuJoCo\n"
         "  [5] Play Gazebo\n"
         "  [6] Deploy to Robot\n"
@@ -129,15 +129,15 @@ def run_cli_menu():
             rob_idx = "3"
         _, selected_robot_cfg = ROBOT_CHOICES[rob_idx]
     elif action == "isaac_lab":
-        # Isaac Play mode (Sim2Sim) spawns all three for comparison
+        # Isaac Play mode (Sim2Sim) currently spawns all three for comparison
         selected_robot_cfg = None
     else:
-        # Default to Go2 for all drivers
+        # MuJoCo/Gazebo/Real deployments now default to Go2 as per user requested standardization
         selected_robot_cfg = "UNITREE_GO2_CFG"
 
     # 3. Terrain
     selected_terrain = "flat"
-    if action == "train":
+    if action == "isaac_lab" or action == "train":
         TERRAIN_CHOICES = {
             "1": ("Flat Plane", "flat"),
             "2": ("Random Rough", "rough"),
@@ -153,7 +153,7 @@ def run_cli_menu():
 
     # 4. Num Envs
     num_envs = ""
-    if action == "train":
+    if action in ("train", "isaac_lab"):
         num_envs = input(
             "\nEnter number of environments (leave blank to use config default): "
         ).strip()
@@ -179,14 +179,14 @@ def run_cli_menu():
             "logs",
             "skrl",
             "quadruped_direct",
-            "cp*",
+            "*",
             "checkpoints",
             "best_agent.pt",
         )
     )
     checkpoint_paths.sort(reverse=True)
 
-    needs_ckpt = action in ("isaac_sim", "mujoco", "gazebo", "real_deploy")
+    needs_ckpt = action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo", "real_deploy")
 
     if needs_ckpt and not checkpoint_paths:
         print(
@@ -234,14 +234,14 @@ def run_cli_menu():
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
 
-    if action in ("isaac_sim", "mujoco", "gazebo", "real_deploy", "isaac_lab"):
+    if action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo"):
         headless = False
-    else:
+    elif action == "train":
         h_input = input("\nEnable Headless Mode? [Y/n]: ").strip().lower()
         headless = h_input != "n"
 
+    run_name = ""
     if action == "train":
-        run_name = input("\nEnter custom run name (leave blank for default): ").strip()
         v_input = input("\nEnable Video Recording? [Y/n]: ").strip().lower()
         video = v_input != "n"
 
@@ -421,8 +421,6 @@ if __name__ == "__main__":
             cmd.append("--headless")
         if video:
             cmd.append("--video")
-        if run_name:
-            cmd.append(f"agent.experiment.experiment_name={run_name}")
         subprocess.run(cmd, env=env, cwd=module_path)
 
     elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy"):

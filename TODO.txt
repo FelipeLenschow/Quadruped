@@ -10,7 +10,7 @@ Add a noise variable to controll the noise of the sensors
 - Make the foot height not influence the standing phase
 Add a automatic rename to trained agents via launcher
 Add a way to change the timestep from trainer via launcher
-Make a fail safe to the robot
+Make a fail safe to the robot (deadman switch)
 Make limitter to the torque and velocity of the actuators
 Make gazebo work
 Check why isaacsim takes 10ms for policy while mujoco takes 1ms
@@ -26,5 +26,5 @@ cp5: Added sensor noise
 cp6: Added friction, foot height reward, robot variation
 cp7: penalize for lifting foot while standing
 cp8: GO2 only training
-27: [DONE] cp9: Spawn robot in random positions
+cp9: Spawn robot in random positions
 cp10: Add more sim2real training strategies

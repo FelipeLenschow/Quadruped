@@ -77,12 +77,9 @@ class Ros2GazeboDriver(Node):
         if checkpoint:
             print(f"[GazeboDriver] Loading internal policy runner: {checkpoint}")
             self.runner = PolicyRunner(
-                checkpoint,
-                obs_dim=obs_dim,
-                robot_type=robot_type,
-                decimation=10,
-                verbose=True,
+                checkpoint, obs_dim=obs_dim, robot_type=robot_type
             )
+            self.runner.decimation = 10  # 500Hz / 10 = 50Hz
             self.mj_to_isaac = list(range(12))  # Identity
         self.world_name = world_name
 
@@ -308,23 +305,26 @@ class Ros2GazeboDriver(Node):
 
             # --- Internal Inference (50 Hz) ---
             if self.runner:
-                # 1. Use centralized parser for Standardization
-                state = self.telemetry.parse_gazebo(
-                    self.q,
-                    self.dq,
-                    self.base_quat,
-                    self.base_ang_vel,
-                    self.base_lin_vel_b,
-                    self.base_pos,
-                )
+                if self.runner.should_step():
+                    # 1. Use centralized parser for Standardization
+                    state = self.telemetry.parse_bridge_data(
+                        self.q,
+                        self.dq,
+                        self.base_quat,
+                        self.base_ang_vel,
+                        self.base_lin_vel_b,
+                        self.base_pos,
+                    )
 
-                # 2. Feed Policy (Internalized State Management)
-                actions = self.runner.step(state, self.cmd_vel)
+                    # 2. Feed Policy (Unified Inference with Timing)
+                    actions, _ = self.runner.infer(
+                        state, self.cmd_vel, self.desired_qpos, self.mj_to_isaac
+                    )
 
-                # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-                self.latest_targets = self.command_processor.process(
-                    actions, self.desired_qpos
-                )
+                    # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
+                    self.latest_targets[:] = self.command_processor.process(
+                        actions, self.desired_qpos
+                    )
 
             # --- ActuatorNet History (Downsample 500Hz -> 200Hz) ---
             # Isaac ActuatorNet was trained at 200Hz. 500/200 = 2.5.

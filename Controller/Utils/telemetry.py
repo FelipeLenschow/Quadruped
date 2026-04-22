@@ -94,7 +94,6 @@ class TelemetryManager:
         """Converts raw MuJoCo data into StandardState."""
         state = StandardState()
         state.imu.quaternion = data.qpos[3:7].tolist()
-        state.imu.gyroscope = data.qvel[3:6].tolist()
         state.base_pos = data.qpos[:3].tolist()
         
         # Body frame velocity rotation
@@ -104,6 +103,11 @@ class TelemetryManager:
             [2*x*y+2*w*z, 1-2*x**2-2*z**2, 2*y*z-2*w*x],
             [2*x*z-2*w*y, 2*y*z+2*w*x, 1-2*x**2-2*y**2]
         ])
+        
+        # Explicitly map global cvel to local body frame to avoid qvel convention ambiguities
+        # cvel[1] is the root trunk. Elements 0:3 are global angular velocity, 3:6 are global linear.
+        global_ang_vel = data.cvel[1][:3]
+        state.imu.gyroscope = (R.T @ global_ang_vel).tolist()
         state.base_lin_vel = (R.T @ data.qvel[:3]).tolist()
         
         for i, (p_addr, v_addr) in enumerate(zip(qpos_addr, qvel_addr)):

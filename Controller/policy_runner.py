@@ -1,18 +1,22 @@
 import os
+import time
 import torch
 import torch.nn as nn
 import numpy as np
-import time
+
 
 # Rotation helper
 def quat_to_rot_matrix(q):
     """(w, x, y, z) -> [3,3] matrix"""
     w, x, y, z = q
-    return np.array([
-        [1 - 2*y**2 - 2*z**2, 2*x*y - 2*w*z, 2*x*z + 2*w*y],
-        [2*x*y + 2*w*z, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*w*x],
-        [2*x*z - 2*w*y, 2*y*z + 2*w*x, 1 - 2*x**2 - 2*y**2]
-    ])
+    return np.array(
+        [
+            [1 - 2 * y**2 - 2 * z**2, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y],
+            [2 * x * y + 2 * w * z, 1 - 2 * x**2 - 2 * z**2, 2 * y * z - 2 * w * x],
+            [2 * x * z - 2 * w * y, 2 * y * z + 2 * w * x, 1 - 2 * x**2 - 2 * y**2],
+        ]
+    )
+
 
 class RunningStandardScaler(nn.Module):
     def __init__(self, size, device):
@@ -23,6 +27,7 @@ class RunningStandardScaler(nn.Module):
 
     def forward(self, x):
         return (x - self.running_mean) / torch.sqrt(self.running_variance + 1e-8)
+
 
 class PolicyMLP(nn.Module):
     def __init__(self, obs_dim, layers, action_dim):
@@ -40,8 +45,17 @@ class PolicyMLP(nn.Module):
         x = self.net_container(x)
         return self.policy_layer(x)
 
+
 class PolicyRunner:
-    def __init__(self, checkpoint_path, obs_dim=None, robot_type="go1", device="cpu", verbose=False, decimation=4):
+    def __init__(
+        self,
+        checkpoint_path,
+        obs_dim=None,
+        robot_type="go1",
+        device="cpu",
+        verbose=True,
+        decimation=4,
+    ):
         print(f"[PolicyRunner] __init__ called for {checkpoint_path}")
         self.verbose = verbose
         self.device = device
@@ -49,21 +63,35 @@ class PolicyRunner:
         self.robot_type = robot_type
         self.decimation = decimation
         self.counter = 0
-        
+
         # Default Pose Standards
-        self.desired_qpos = np.array([
-            0.1, -0.1, 0.1, -0.1,  # hips
-            0.8, 0.8, 1.0, 1.0,    # thighs
-            -1.5, -1.5, -1.5, -1.5, # calves
-        ], dtype=np.float32)
-        
+        self.desired_qpos = np.array(
+            [
+                0.1,
+                -0.1,
+                0.1,
+                -0.1,  # hips
+                0.8,
+                0.8,
+                1.0,
+                1.0,  # thighs
+                -1.5,
+                -1.5,
+                -1.5,
+                -1.5,  # calves
+            ],
+            dtype=np.float32,
+        )
+
         # Joint mapping: Identity by default (matches our standardized drivers)
         self.mapping = list(range(12))
-        
+
         self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 49))
-        self.is_jit = checkpoint_path.endswith(".jit") or (checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path))
+        self.is_jit = checkpoint_path.endswith(".jit") or (
+            checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path)
+        )
         print(f"[PolicyRunner] is_jit detected: {self.is_jit}")
-        
+
         if self.is_jit:
             print(f"[PolicyRunner] Loading JIT model from {checkpoint_path}")
             self.policy_jit = torch.jit.load(checkpoint_path, map_location=device)
@@ -74,22 +102,35 @@ class PolicyRunner:
             self.obs_dim, self.layers = self._inspect_checkpoint(checkpoint_path)
             self.action_dim = 12
             self.action_scale = 0.25
-            
-            print(f"[PolicyRunner] Initializing with OBS_DIM={self.obs_dim}, layers={self.layers}")
-            
-            self.policy = PolicyMLP(self.obs_dim, self.layers, self.action_dim).to(self.device).eval()
-            self.scaler = RunningStandardScaler(self.obs_dim, self.device).to(self.device)
-            
+
+            print(
+                f"[PolicyRunner] Initializing with OBS_DIM={self.obs_dim}, layers={self.layers}"
+            )
+
+            self.policy = (
+                PolicyMLP(self.obs_dim, self.layers, self.action_dim)
+                .to(self.device)
+                .eval()
+            )
+            self.scaler = RunningStandardScaler(self.obs_dim, self.device).to(
+                self.device
+            )
+
             self._load_checkpoint(checkpoint_path)
-            
-        # --- Performance Tracking & Automatic State ---
+
+        # --- Performance Tracking ---
         self.inf_times = []
-        self.last_actions = np.zeros(self.action_dim, dtype=np.float32)
+
+        # --- Control State ---
+        self.last_actions = np.zeros(12, dtype=np.float32)
+        self.counter = 0
+        self.decimation = 4  # Default for 200Hz -> 50Hz
 
     def _check_is_jit(self, path):
         # SKRL usually uses .pt for state dicts. JIT models are different.
         # We only treat as JIT if explicitly told or if .jit extension
-        if path.endswith(".jit"): return True
+        if path.endswith(".jit"):
+            return True
         return False
 
     def _detect_jit_obs_dim(self, model):
@@ -100,17 +141,17 @@ class PolicyRunner:
     def _inspect_checkpoint(self, path):
         """Detect obs_dim and layer sizes from checkpoint keys and shapes."""
         obs_dim = 236
-        layers = [512, 256, 128] # Default fallback
+        layers = [512, 256, 128]  # Default fallback
         try:
             data = torch.load(path, map_location="cpu")
             policy_state = data.get("policy", {})
-            
+
             # Detect OBS_DIM from first layer
             for k, v in policy_state.items():
                 if "net" in k and "0.weight" in k:
                     obs_dim = v.shape[1]
                     break
-            
+
             # Detect layers
             layer_sizes = []
             i = 0
@@ -118,12 +159,12 @@ class PolicyRunner:
                 key = f"net_container.{i}.weight"
                 if key in policy_state:
                     layer_sizes.append(policy_state[key].shape[0])
-                    i += 2 # Skip activation
+                    i += 2  # Skip activation
                 else:
                     break
             if layer_sizes:
                 layers = layer_sizes
-                
+
         except Exception as e:
             print(f"[PolicyRunner] Warning: Inspection failed: {e}")
         return obs_dim, layers
@@ -132,7 +173,7 @@ class PolicyRunner:
         print(f"[PolicyRunner] Loading checkpoint weights from {path}")
         data = torch.load(path, map_location=self.device)
         print(f"[PolicyRunner] Checkpoint keys: {list(data.keys())}")
-        
+
         # Load policy
         policy_state = data.get("policy", {})
         # Map keys robustly
@@ -142,11 +183,13 @@ class PolicyRunner:
                 # Remove prefixes like '_model.' if present
                 clean_key = k.split("_model.")[-1]
                 net_keys[clean_key] = v
-        
+
         self.policy.load_state_dict(net_keys, strict=False)
-        
+
         # Load scaler
-        scaler_state = data.get("state_preprocessor") or data.get("running_standard_scaler")
+        scaler_state = data.get("state_preprocessor") or data.get(
+            "running_standard_scaler"
+        )
         if scaler_state:
             # Map keys if they have '_model.' prefix
             clean_scaler_state = {}
@@ -154,7 +197,9 @@ class PolicyRunner:
                 clean_key = k.split("_model.")[-1]
                 clean_scaler_state[clean_key] = v
             self.scaler.load_state_dict(clean_scaler_state)
-            print(f"[PolicyRunner] Loaded obs scaler (mean[0]: {self.scaler.running_mean[0]:.3f})")
+            print(
+                f"[PolicyRunner] Loaded obs scaler (mean[0]: {self.scaler.running_mean[0]:.3f})"
+            )
         else:
             print("[PolicyRunner] WARNING: No obs scaler found in checkpoint!")
 
@@ -200,7 +245,9 @@ class PolicyRunner:
 
         # Debug print once
         if not hasattr(self, "_obs_debug_done"):
-            print(f"[PolicyRunner] Obs Parts Lengths: {[len(p) for p in obs_parts]} (Sum: {sum(len(p) for p in obs_parts)})")
+            print(
+                f"[PolicyRunner] Obs Parts Lengths: {[len(p) for p in obs_parts]} (Sum: {sum(len(p) for p in obs_parts)})"
+            )
             self._obs_debug_done = True
 
         obs = np.concatenate(obs_parts).astype(np.float32)
@@ -216,34 +263,51 @@ class PolicyRunner:
                 action_t = self.policy(obs_norm)
         return action_t.squeeze(0).cpu().numpy()
 
-    def infer(self, state, commands, last_actions, desired_qpos, mapping, verbose=False):
-        """High-level inference with timing."""
+    def should_step(self):
+        """Check decimation counter and increment."""
+        result = self.counter % self.decimation == 0
+        self.counter += 1
+        return result
+
+    def infer(self, state, commands, desired_qpos, mapping, verbose=None):
+        """High-level inference with timing and internal history management."""
+        # Use class-level verbose if not explicitly overridden
+        show_stats = self.verbose if verbose is None else verbose
+
         t_start = time.perf_counter()
-        obs = self.build_obs(state, commands, last_actions, desired_qpos, mapping)
+        obs = self.build_obs(state, commands, self.last_actions, desired_qpos, mapping)
         actions = self.get_action(obs)
         t_end = time.perf_counter()
-        
+
         inf_time = t_end - t_start
         self.inf_times.append(inf_time)
-        
-        if verbose and len(self.inf_times) >= 100:
-            avg = sum(self.inf_times) / len(self.inf_times)
-            print(f"[PolicyRunner] Avg Inference: {avg*1000:.2f}ms ({1.0/avg:.1f}Hz)")
+        self.last_actions[:] = actions
+
+        if show_stats and len(self.inf_times) >= 100:
+            avg_inf = sum(self.inf_times) / len(self.inf_times)
+            print(f"[PolicyRunner] Inference Time: {avg_inf*1000:.2f}ms")
             self.inf_times = []
-            
+
         return actions, inf_time
 
     def step(self, state, commands, verbose=None):
         """
-        Automatic inference step. 
+        Automatic inference step.
         Handles decimation, internal action tracking, and timing.
         Returns the action vector (last produced or newly inferred).
         """
         v = self.verbose if verbose is None else verbose
-        
+
         if self.counter % self.decimation == 0:
-            actions, _ = self.infer(state, commands, self.last_actions, self.desired_qpos, self.mapping, verbose=v)
+            actions, _ = self.infer(
+                state,
+                commands,
+                self.last_actions,
+                self.desired_qpos,
+                self.mapping,
+                verbose=v,
+            )
             self.last_actions[:] = actions
-        
+
         self.counter += 1
         return self.last_actions
