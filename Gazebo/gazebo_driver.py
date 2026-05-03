@@ -79,7 +79,7 @@ class Ros2GazeboDriver(Node):
             self.runner = PolicyRunner(
                 checkpoint, obs_dim=obs_dim, robot_type=robot_type
             )
-            self.runner.decimation = 10  # 500Hz / 10 = 50Hz
+            self.runner.decimation = 4  # 200Hz / 4 = 50Hz
             self.mj_to_isaac = list(range(12))  # Identity
         self.world_name = world_name
 
@@ -142,6 +142,9 @@ class Ros2GazeboDriver(Node):
         )
 
     def _joint_cb(self, msg):
+        if hasattr(msg, "header") and hasattr(msg.header, "stamp"):
+            self.sim_time = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
+            
         for joint in msg.joint:
             if joint.name in JOINT_NAMES:
                 idx = JOINT_NAMES.index(joint.name)
@@ -162,18 +165,15 @@ class Ros2GazeboDriver(Node):
         )
         # msg.pose.orientation is [x, y, z, w]
         q = msg.pose.orientation
+        q_scipy = [q.x, q.y, q.z, q.w]
+        R = Rotation.from_quat(q_scipy).as_matrix()
 
-        # Gazebo Sim2Sim Odometry:
-        # Harmonize with MuJoCo bridge: World velocity rotated to Body Frame.
+        # Gazebo Sim2Sim Odometry (gz.msgs.Odometry):
+        # In gz.msgs.Odometry, twist is typically in the world/odom frame (unlike ROS nav_msgs).
+        # We must rotate it into the local body frame using R.T.
         v_world = np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z])
 
-        # Pull orientation from the odom pose [x, y, z, w]
-        q = msg.pose.orientation
-        q_scipy = [q.x, q.y, q.z, q.w]
-
         try:
-            R = Rotation.from_quat(q_scipy).as_matrix()
-            # v_body = R^T @ v_world
             self.base_lin_vel_b[:] = R.T @ v_world
         except Exception:
             self.base_lin_vel_b[:] = v_world  # Fallback
@@ -289,20 +289,29 @@ class Ros2GazeboDriver(Node):
             self.q if not np.all(self.q == 0) else self.latest_targets
         )
 
-        pos_err_hist = np.zeros((3, 12), dtype=np.float32)
-        vel_hist = np.zeros((3, 12), dtype=np.float32)
-        last_processed_sim_time = -1.0
+        print(
+            "[GazeboDriver] Simulation started. Waiting 5s for drop/stabilization..."
+        )
+        time.sleep(5.0)
+
+        print(
+            "\n=======================================================\n"
+            "[GazeboDriver] Activating Control Loop..."
+            "\n=======================================================\n"
+        )
         actuator_count = 0
         count = 0
+        pos_err_hist = np.zeros((6, 12), dtype=np.float32)
+        vel_hist = np.zeros((6, 12), dtype=np.float32)
 
         while not self._stop.is_set():
             self.new_data_event.wait(timeout=0.1)
             self.new_data_event.clear()
 
-            if self.sim_time == last_processed_sim_time:
-                continue
-            last_processed_sim_time = self.sim_time
-
+            # We process a new PD/NN step every time we get a joint state callback (200 Hz).
+            # Do NOT skip steps based on sim_time, as it can cause massive latency
+            # if timestamps are coarse or not updated fast enough.
+            
             # --- Internal Inference (50 Hz) ---
             if self.runner:
                 if self.runner.should_step():
@@ -326,41 +335,32 @@ class Ros2GazeboDriver(Node):
                         actions, self.desired_qpos
                     )
 
-            # --- ActuatorNet History (Downsample 500Hz -> 200Hz) ---
-            # Isaac ActuatorNet was trained at 200Hz. 500/200 = 2.5.
-            # We sample roughly every 2 or 3 steps.
-            if actuator_count % 2 == 0:
-                targets = self.latest_targets
-                pos_err_hist = np.roll(pos_err_hist, 1, 0)
-                pos_err_hist[0] = self.q - targets
-                vel_hist = np.roll(vel_hist, 1, 0)
-                vel_hist[0] = self.dq
             actuator_count += 1
 
-            net_in = torch.zeros((12, 6))
-            net_in[:, :3] = torch.from_numpy(pos_err_hist.T.copy())
-            net_in[:, 3:] = torch.from_numpy(vel_hist.T.copy())
-
-            # Application of torques
-            # Fallback PD Controller for stability testing
-            # (Matches Isaac Lab default gains)
+            # Motor model matching MuJoCo
             targets = self.latest_targets
-            kp = 35.0  # Increased for stability
-            kd = 0.8
-            pd_torques = kp * (targets - self.q) - kd * self.dq
+            kp, kd = 25.0, 0.5
+            effort_limit, sat_effort, vel_lim = 23.5, 23.5, 30.0
+            
+            pos_err = targets - self.q
+            raw_torques = kp * pos_err - kd * self.dq
+            
+            vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
+            v_clamp = np.clip(self.dq, -vel_at_lim, vel_at_lim)
+            t_top = sat_effort * (1.0 - v_clamp / vel_lim)
+            t_bot = sat_effort * (-1.0 - v_clamp / vel_lim)
+            
+            pd_torques = np.clip(
+                raw_torques, np.minimum(t_bot, -effort_limit), np.minimum(t_top, effort_limit)
+            )
 
-            # Application of raw torques (Change to pd_torques if ActuatorNet is unstable)
-            # self.latest_torques[:] = np.clip(pd_torques, -23.7, 23.7)
-
-            # Using ActuatorNet by default
-            with torch.no_grad():
-                net_torques = self.act_net(net_in).squeeze().numpy()
-            self.latest_torques[:] = np.clip(net_torques, -23.7, 23.7)
+            # Using PD Controller by default as ActuatorNet was unstable in Gazebo
+            self.latest_torques[:] = pd_torques
 
             # LOGGING FOR DIAGNOSIS (every 100 physics steps ~ 0.2s)
             if actuator_count % 100 == 0:
                 print(
-                    f"[GazeboBridge] t: {self.sim_time:.2f} | q[0]: {self.q[0]:.2f} | T_act[0]: {self.latest_torques[0]:.2f} | T_pd[0]: {pd_torques[0]:.2f}"
+                    f"[GazeboBridge] t: {self.sim_time:.2f} | q[0]: {self.q[0]:.2f} | T_pd[0]: {pd_torques[0]:.2f}"
                 )
 
             if count % 4 == 0:
