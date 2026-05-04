@@ -18,7 +18,7 @@ import signal
 import threading
 import subprocess
 from pathlib import Path
-from scipy.spatial.transform import Rotation
+
 from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
 from Controller.Utils.telemetry import TelemetryManager
@@ -61,6 +61,14 @@ JOINT_NAMES = [
     "lh_kfe_joint",
     "rh_kfe_joint",
 ]
+
+# HAA axis sign correction: In IsaacLab/URDF, right-side HAA joints (FR=idx1, RR=idx3)
+# use axis=-1 0 0. The Gazebo SDF uses +1 0 0 for ALL joints. This mismatch causes
+# the right hip to be commanded in the wrong direction, producing rightward drift.
+# Fix: negate measured q/dq for right HAA joints BEFORE policy/PD, and negate the
+# resulting torques BEFORE sending back to Gazebo.
+# Sign = +1 for joints matching IsaacLab, -1 for joints that need flipping.
+HAA_SIGN = np.array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
 
 
 class Ros2GazeboDriver(Node):
@@ -149,11 +157,10 @@ class Ros2GazeboDriver(Node):
             if joint.name in JOINT_NAMES:
                 idx = JOINT_NAMES.index(joint.name)
                 try:
-                    # Mapping joint state (Gazebo -> Isaac order - NO FLIPS)
-                    self.q[idx] = joint.axis1.position
-                    self.dq[idx] = joint.axis1.velocity
-                    # Diagnostic print (commented out by default)
-                    # if idx == 0: print(f"[GazeboBridge] LF_HAA q: {self.q[0]:.3f} dq: {self.dq[0]:.3f}")
+                    # Apply HAA axis sign correction so that Gazebo joint readings
+                    # match the IsaacLab convention (right-side HAA joints are negated).
+                    self.q[idx] = joint.axis1.position * HAA_SIGN[idx]
+                    self.dq[idx] = joint.axis1.velocity * HAA_SIGN[idx]
                 except AttributeError:
                     pass
         # Signal the physics loop to step
@@ -163,25 +170,22 @@ class Ros2GazeboDriver(Node):
         self.base_pos = np.array(
             [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
         )
-        # msg.pose.orientation is [x, y, z, w]
-        q = msg.pose.orientation
-        q_scipy = [q.x, q.y, q.z, q.w]
-        R = Rotation.from_quat(q_scipy).as_matrix()
 
-        # Gazebo Sim2Sim Odometry (gz.msgs.Odometry):
-        # In gz.msgs.Odometry, twist is typically in the world/odom frame (unlike ROS nav_msgs).
-        # We must rotate it into the local body frame using R.T.
-        v_world = np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z])
+        # gz::sim::systems::OdometryPublisher (dimensions=3) reports the twist
+        # in the BODY frame (child frame), NOT the world frame.
+        # Do NOT apply R.T here — it is already in body frame.
+        v_body = np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z])
 
         try:
-            self.base_lin_vel_b[:] = R.T @ v_world
+            self.base_lin_vel_b[:] = v_body
         except Exception:
-            self.base_lin_vel_b[:] = v_world  # Fallback
+            self.base_lin_vel_b[:] = v_body
 
         # Log Suspected Drift
-        if np.abs(self.base_lin_vel_b[0]) > 2.0 and self.sim_time < 0.2:
+        if np.abs(self.base_lin_vel_b[1]) > 0.5 and self.sim_time > 5.0:
             print(
-                f"\r[Bridge] WARNING: Extreme vx={self.base_lin_vel_b[0]:.2f}. Collision likely."
+                f"\r[Bridge] WARNING: Lateral vel vy={self.base_lin_vel_b[1]:.2f} at t={self.sim_time:.1f}",
+                end="", flush=True,
             )
 
     def _repeater_loop(self):
@@ -289,10 +293,7 @@ class Ros2GazeboDriver(Node):
             self.q if not np.all(self.q == 0) else self.latest_targets
         )
 
-        print(
-            "[GazeboDriver] Simulation started. Waiting 5s for drop/stabilization..."
-        )
-        time.sleep(5.0)
+
 
         print(
             "\n=======================================================\n"
@@ -335,9 +336,15 @@ class Ros2GazeboDriver(Node):
                         actions, self.desired_qpos
                     )
 
+
+
             actuator_count += 1
 
-            # Motor model matching MuJoCo
+            # Motor model matching MuJoCo.
+            # NOTE: self.q and self.dq are already in Isaac convention (HAA signs corrected).
+            # Targets from the policy are also in Isaac convention.
+            # After computing torques in Isaac space, apply HAA_SIGN again to convert
+            # back to Gazebo convention before publishing.
             targets = self.latest_targets
             kp, kd = 25.0, 0.5
             effort_limit, sat_effort, vel_lim = 23.5, 23.5, 30.0
@@ -354,8 +361,9 @@ class Ros2GazeboDriver(Node):
                 raw_torques, np.minimum(t_bot, -effort_limit), np.minimum(t_top, effort_limit)
             )
 
-            # Using PD Controller by default as ActuatorNet was unstable in Gazebo
-            self.latest_torques[:] = pd_torques
+            # Convert torques from Isaac convention back to Gazebo convention
+            # (negate right-side HAA torques to match Gazebo's +1 0 0 axis).
+            self.latest_torques[:] = pd_torques * HAA_SIGN
 
             # LOGGING FOR DIAGNOSIS (every 100 physics steps ~ 0.2s)
             if actuator_count % 100 == 0:

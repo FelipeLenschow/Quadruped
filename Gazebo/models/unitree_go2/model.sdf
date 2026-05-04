@@ -303,6 +303,7 @@
       <child>lf_hipassembly</child>
       <axis>
         <xyz>1 0 0</xyz>
+        <initial_position>0</initial_position>
         <limit>
           <lower>-0.86299999999999999</lower>
           <upper>0.86299999999999999</upper>
@@ -378,6 +379,7 @@
       <child>lf_upperleg</child>
       <axis>
         <xyz>0 1 0</xyz>
+        <initial_position>0.8</initial_position>
         <limit>
           <lower>-0.68600000000000005</lower>
           <upper>4.5010000000000003</upper>
@@ -452,6 +454,7 @@
       <child>lf_lowerleg</child>
       <axis>
         <xyz>0 1 0</xyz>
+        <initial_position>-1.5</initial_position>
         <limit>
           <lower>-2.8180000000000001</lower>
           <upper>-0.88800000000000001</upper>
@@ -553,6 +556,7 @@
       <child>lh_hipassembly</child>
       <axis>
         <xyz>1 0 0</xyz>
+        <initial_position>0</initial_position>
         <limit>
           <lower>-0.86299999999999999</lower>
           <upper>0.86299999999999999</upper>
@@ -628,6 +632,7 @@
       <child>lh_upperleg</child>
       <axis>
         <xyz>0 1 0</xyz>
+        <initial_position>1.0</initial_position>
         <limit>
           <lower>-0.68600000000000005</lower>
           <upper>4.5010000000000003</upper>
@@ -702,6 +707,7 @@
       <child>lh_lowerleg</child>
       <axis>
         <xyz>0 1 0</xyz>
+        <initial_position>-1.5</initial_position>
         <limit>
           <lower>-2.8180000000000001</lower>
           <upper>-0.88800000000000001</upper>
@@ -803,6 +809,7 @@
       <child>rf_hipassembly</child>
       <axis>
         <xyz>1 0 0</xyz>
+        <initial_position>0</initial_position>
         <limit>
           <lower>-0.86299999999999999</lower>
           <upper>0.86299999999999999</upper>
@@ -878,6 +885,7 @@
       <child>rf_upperleg</child>
       <axis>
         <xyz>0 1 0</xyz>
+        <initial_position>0.8</initial_position>
         <limit>
           <lower>-0.68600000000000005</lower>
           <upper>4.5010000000000003</upper>
@@ -952,6 +960,7 @@
       <child>rf_lowerleg</child>
       <axis>
         <xyz>0 1 0</xyz>
+        <initial_position>-1.5</initial_position>
         <limit>
           <lower>-2.8180000000000001</lower>
           <upper>-0.88800000000000001</upper>
@@ -1053,6 +1062,7 @@
       <child>rh_hipassembly</child>
       <axis>
         <xyz>1 0 0</xyz>
+        <initial_position>0</initial_position>
         <limit>
           <lower>-0.86299999999999999</lower>
           <upper>0.86299999999999999</upper>
@@ -1128,6 +1138,7 @@
       <child>rh_upperleg</child>
       <axis>
         <xyz>0 1 0</xyz>
+        <initial_position>1.0</initial_position>
         <limit>
           <lower>-0.68600000000000005</lower>
           <upper>4.5010000000000003</upper>
@@ -1202,6 +1213,7 @@
       <child>rh_lowerleg</child>
       <axis>
         <xyz>0 1 0</xyz>
+        <initial_position>-1.5</initial_position>
         <limit>
           <lower>-2.8180000000000001</lower>
           <upper>-0.88800000000000001</upper>
