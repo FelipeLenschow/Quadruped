@@ -107,6 +107,9 @@ class RealDriver(Node):
 
         state = self.telemetry.standardize(self.low_state, backend="generic")
 
+        # Republish robot state to ROS2 for monitoring (rviz2, rqt, ros2 topic echo)
+        self.telemetry.publish(sim_time=time.time(), state=state)
+
         if self.policy:
             if self.policy.should_step():
                 actions, _ = self.policy.infer(
