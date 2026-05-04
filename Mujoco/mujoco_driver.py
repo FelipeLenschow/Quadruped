@@ -25,10 +25,11 @@ import threading
 from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
 from Controller.Utils.telemetry import TelemetryManager
+from configs.config_loader import load_config
 
 
 class Ros2MujocoDriver(Node):
-    def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49):
+    def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False):
         super().__init__("mujoco_bridge_node")
         self.robot_type = robot_type
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
@@ -43,6 +44,13 @@ class Ros2MujocoDriver(Node):
             self.mj_to_isaac = list(
                 range(12)
             )  # Identity mapping for our standardized bridge
+
+        # 0. Load Central Config
+        self.config = load_config()
+        self.ctrl_cfg = self.config.get("control", {})
+        
+        if self.runner:
+            self.runner.decimation = self.ctrl_cfg.get("decimation", 4)
 
         # 1. Load Go2 MuJoCo Scene
         mjcf_path = os.path.join(
@@ -59,7 +67,7 @@ class Ros2MujocoDriver(Node):
         self._init_physics()
 
         # 2. ROS 2 Managers
-        self.telemetry = TelemetryManager(self, self.isaac_names)
+        self.telemetry = TelemetryManager(self, self.isaac_names, use_estimator=use_estimator)
         self.command_processor = CommandProcessor(
             self, robot_type=robot_type, joint_names=self.isaac_names
         )
@@ -140,6 +148,43 @@ class Ros2MujocoDriver(Node):
         self.pos_err_hist = np.zeros((1, 12), dtype=np.float32)
         self.vel_hist = np.zeros((1, 12), dtype=np.float32)
 
+    def _get_standard_state(self):
+        """Extracts raw state vectors from MuJoCo data."""
+        q = self.data.qpos[self.isaac_qpos_addr]
+        dq = self.data.qvel[self.isaac_qvel_addr]
+        quat = self.data.qpos[3:7]  # [w, x, y, z]
+        pos = self.data.qpos[:3]
+
+        # Body frame rotation
+        w, x, y, z = quat
+        R = np.array([
+            [1-2*y**2-2*z**2, 2*x*y-2*w*z,      2*x*z+2*w*y],
+            [2*x*y+2*w*z,     1-2*x**2-2*z**2,  2*y*z-2*w*x],
+            [2*x*z-2*w*y,     2*y*z+2*w*x,      1-2*x**2-2*y**2],
+        ])
+
+        # Body frame velocities
+        global_ang_vel = self.data.cvel[1][:3]
+        gyro = R.T @ global_ang_vel
+        vel_b = R.T @ self.data.qvel[:3]
+
+        # Contacts
+        contact = [0.0, 0.0, 0.0, 0.0]
+        for i in range(self.data.ncon):
+            con = self.data.contact[i]
+            g1, g2 = con.geom1, con.geom2
+            if g1 == 0 or g2 == 0:
+                for foot_idx, foot_name in enumerate(["FL", "FR", "RL", "RR"]):
+                    name1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g1)
+                    name2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g2)
+                    if (name1 and foot_name.lower() in name1.lower()) or \
+                       (name2 and foot_name.lower() in name2.lower()):
+                        contact[foot_idx] = 1.0
+
+        return self.telemetry.process_state(
+            q=q, dq=dq, quat=quat, gyro=gyro, pos=pos, vel=vel_b, contact=contact
+        )
+
     def teleop_cb(self, msg):
         """Teleop passed through to sensors for the policy runner to see."""
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
@@ -159,7 +204,8 @@ class Ros2MujocoDriver(Node):
         v = self.data.qvel[self.isaac_qvel_addr]
 
         pos_err = targets - q  # Target - Actual
-        kp, kd = 25.0, 0.5
+        kp = self.ctrl_cfg.get("kp", 25.0)
+        kd = self.ctrl_cfg.get("kd", 0.5)
         effort_limit, sat_effort, vel_lim = 23.5, 23.5, 30.0
 
         torques = kp * pos_err + kd * (0 - v)
@@ -190,10 +236,8 @@ class Ros2MujocoDriver(Node):
                 # --- Internal Inference (50 Hz) ---
                 if self.runner:
                     if self.runner.should_step():
-                        # 1. Use centralized parser for Standardization
-                        state = self.telemetry.parse_mujoco(
-                            self.data, self.isaac_qpos_addr, self.isaac_qvel_addr
-                        )
+                        # 1. Use standardized parser
+                        state = self._get_standard_state()
 
                         # 2. Feed Policy (Unified Inference with Timing)
                         actions, _ = self.runner.infer(
@@ -215,9 +259,7 @@ class Ros2MujocoDriver(Node):
                     mujoco.mj_step(self.model, self.data)
 
                 # --- Publish sensors (Standardized & Synchronized) ---
-                state = self.telemetry.parse_mujoco(
-                    self.data, self.isaac_qpos_addr, self.isaac_qvel_addr
-                )
+                state = self._get_standard_state()
                 self.telemetry.publish(sim_time=self.data.time, state=state)
                 viewer.sync()
 
@@ -239,11 +281,15 @@ def main():
         "--internal_policy", type=str, default=None, help="Path to policy checkpoint"
     )
     parser.add_argument("--obs_dim", type=int, default=49)
+    parser.add_argument("--use_estimator", action="store_true", help="Use IMU-based state estimation instead of ground truth")
     args = parser.parse_args()
 
     rclpy.init()
     node = Ros2MujocoDriver(
-        robot_type=args.robot, checkpoint=args.internal_policy, obs_dim=args.obs_dim
+        robot_type=args.robot, 
+        checkpoint=args.internal_policy, 
+        obs_dim=args.obs_dim,
+        use_estimator=args.use_estimator
     )
     try:
         rclpy.spin(node)

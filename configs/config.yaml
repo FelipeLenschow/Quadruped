@@ -1,0 +1,39 @@
+# Unitree Go2 Configuration
+robot_type: "go2"
+
+# --- Control & Gains ---
+control:
+  kp: 25.0
+  kd: 0.5
+  decimation: 4           # Run policy at 50Hz (200Hz / 4)
+  action_scale: 0.25
+  saturation_limit: 0.90  # 90% of physical capacity
+
+# --- State Estimation ---
+state_estimator:
+  use_estimator: false    # Switch between perfect and estimated odom
+  dt: 0.02                # Control loop dt (50Hz)
+  contact_threshold: 50.0 # Raw FSR value threshold for contact
+  # Contact decay parameters (per step at 50Hz)
+  decay:
+    standing: 0.90        # 4 feet
+    trot: 0.98            # 2 feet
+    air: 0.999            # 0 feet
+
+# --- Safety Limits (Radians) ---
+joint_limits:
+  abduction:
+    min: -1.04
+    max: 1.04
+  hip:
+    min: -1.57 
+    max: 3.49
+  knee:
+    min: -2.72
+    max: -0.83
+
+# --- Networking ---
+network:
+  robot_ip: "192.168.123.161"
+  local_ip: "192.168.123.10"
+  interface: "eth0"

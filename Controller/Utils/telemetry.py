@@ -1,10 +1,12 @@
 import rclpy
+import os
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion, Vector3
 import numpy as np
 from Controller.Utils.state_estimator import StateEstimator, rot_from_quat
+from configs.config_loader import load_config
 
 
 # ---------------------------------------------------------------------------
@@ -35,18 +37,48 @@ class TelemetryManager:
     """
     Centralized component to handle ROS 2 telemetry and state standardization.
     Bridges the gap between backend-specific data and the unified Policy Runner.
+    
+    This class is now simulator-agnostic and only deals with standardized 
+    numpy/primitive types.
     """
 
-    def __init__(self, node: Node, joint_names: list = None, estimator_dt: float = 0.02):
+    def __init__(self, node: Node, joint_names: list = None, estimator_dt: float = 0.02,
+                 use_estimator: bool = None):
         self.node = node
+        
+        # Load centralized configuration
+        self.config = load_config()
+        est_cfg = self.config.get("state_estimator", {})
+        
+        # Priority: Constructor arg > ENV variable > YAML config > Default (False)
+        if use_estimator is not None:
+            self.use_estimator = use_estimator
+        else:
+            env_val = os.environ.get("USE_ESTIMATOR")
+            if env_val is not None:
+                self.use_estimator = (env_val == "1")
+            else:
+                self.use_estimator = est_cfg.get("use_estimator", False)
+
         self.joint_names = joint_names or [
             "FL_hip_joint",  "FR_hip_joint",  "RL_hip_joint",  "RR_hip_joint",
             "FL_thigh_joint","FR_thigh_joint","RL_thigh_joint","RR_thigh_joint",
             "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
         ]
 
-        # State estimator (used for real-robot velocity estimation)
-        self.estimator = StateEstimator(dt=estimator_dt)
+        # State estimator setup
+        dt = est_cfg.get("dt", estimator_dt)
+        decay_cfg = est_cfg.get("decay", {})
+        decay_dict = None
+        if decay_cfg:
+            # Map YAML keys to foot counts
+            decay_dict = {
+                0: decay_cfg.get("air", 0.999),
+                2: decay_cfg.get("trot", 0.980),
+                4: decay_cfg.get("standing", 0.900)
+            }
+            
+        self.estimator = StateEstimator(dt=dt, decay_dict=decay_dict)
 
         # ROS 2 Publishers
         self.joint_pub = self.node.create_publisher(JointState, '/sensors/joint_states', 10)
@@ -54,44 +86,53 @@ class TelemetryManager:
         self.odom_pub  = self.node.create_publisher(Odometry,   '/odom',                 10)
 
     # ------------------------------------------------------------------
-    def standardize(self, raw_data, backend="generic", **kwargs):
-        """Standardizes raw data from various backends into a StandardState."""
-        if backend == "mujoco":
-            return self.parse_mujoco(raw_data, **kwargs)
-        elif backend == "isaac":
-            return self.parse_isaac(raw_data, **kwargs)
-        else:
-            # SDK2 LowState (real robot)
-            if hasattr(raw_data, 'motor_state'):
-                q      = [float(raw_data.motor_state[i].q)  for i in range(12)]
-                dq     = [float(raw_data.motor_state[i].dq) for i in range(12)]
-                quat   = raw_data.imu_state.quaternion   # [w, x, y, z]
-                ang_vel = raw_data.imu_state.gyroscope   # body frame
-                accel  = raw_data.imu_state.accelerometer  # body frame specific force
+    def process_state(self, q, dq, quat, gyro, accel=None, pos=None, vel=None, contact=None):
+        """
+        Creates a StandardState from raw vectors and applies estimation if enabled.
+        
+        Args:
+            q, dq: 12-dim joint positions and velocities.
+            quat: [w, x, y, z] orientation.
+            gyro: [wx, wy, wz] angular velocity in body frame.
+            accel: [ax, ay, az] specific force in body frame (default [0,0,9.81]).
+            pos: [x, y, z] global position (optional).
+            vel: [vx, vy, vz] body-frame linear velocity (ground truth).
+            contact: [FL, FR, RL, RR] binary contacts (optional).
+        """
+        state = StandardState()
+        
+        # 1. Populate basic IMU and Joints
+        state.imu.quaternion = quat.tolist() if hasattr(quat, 'tolist') else list(quat)
+        state.imu.gyroscope = gyro.tolist() if hasattr(gyro, 'tolist') else list(gyro)
+        
+        if accel is not None:
+            state.imu.accelerometer = accel.tolist() if hasattr(accel, 'tolist') else list(accel)
+            
+        for i in range(12):
+            state.motorState[i].q = q[i]
+            state.motorState[i].dq = dq[i]
+            
+        if pos is not None:
+            state.base_pos = pos.tolist() if hasattr(pos, 'tolist') else list(pos)
+            
+        if contact is not None:
+            state.feet_contact = contact.tolist() if hasattr(contact, 'tolist') else list(contact)
 
-                # Foot contact from FSR sensors (int16)
-                # Unitree LowState foot_force order: [FR, FL, RR, RL]  → reorder to [FL, FR, RL, RR]
-                if hasattr(raw_data, 'foot_force'):
-                    ff = raw_data.foot_force
-                    thr = 50
-                    contact = [
-                        float(ff[1] > thr),  # FL
-                        float(ff[0] > thr),  # FR
-                        float(ff[3] > thr),  # RL
-                        float(ff[2] > thr),  # RR
-                    ]
-                else:
-                    contact = [0.0, 0.0, 0.0, 0.0]
+        # 2. Velocity logic
+        # If ground truth velocity is provided, we use it by default
+        if vel is not None:
+            state.base_lin_vel = vel.tolist() if hasattr(vel, 'tolist') else list(vel)
 
-                # Estimate linear velocity from IMU + contact
-                v_est = self.estimator.update(quat, accel, contact)
-
-                state = self.parse_bridge_data(q, dq, quat, ang_vel, v_est)
-                state.feet_contact = contact
-                state.imu.accelerometer = list(accel)
-                return state
-
-            return self.parse_bridge_data(**kwargs)
+        # 3. Estimator override
+        if self.use_estimator:
+            # We need quat, accel, and contact for the estimator.
+            # If accel wasn't provided, StandardState defaults to [0,0,9.81] (gravity compensation only).
+            v_est = self.estimator.update(state.imu.quaternion, 
+                                          state.imu.accelerometer, 
+                                          state.feet_contact)
+            state.base_lin_vel = v_est.tolist()
+            
+        return state
 
     # ------------------------------------------------------------------
     def publish(self, sim_time, state: StandardState):
@@ -128,57 +169,3 @@ class TelemetryManager:
         lv = state.base_lin_vel
         odom.twist.twist.linear = Vector3(x=float(lv[0]), y=float(lv[1]), z=float(lv[2]))
         self.odom_pub.publish(odom)
-
-    # ------------------------------------------------------------------
-    # Backend-specific parsers
-    # ------------------------------------------------------------------
-
-    def parse_mujoco(self, data, qpos_addr, qvel_addr):
-        """Converts raw MuJoCo data into StandardState."""
-        state = StandardState()
-        state.imu.quaternion = data.qpos[3:7].tolist()
-        state.base_pos       = data.qpos[:3].tolist()
-
-        w, x, y, z = state.imu.quaternion
-        R = np.array([
-            [1-2*y**2-2*z**2, 2*x*y-2*w*z,      2*x*z+2*w*y],
-            [2*x*y+2*w*z,     1-2*x**2-2*z**2,  2*y*z-2*w*x],
-            [2*x*z-2*w*y,     2*y*z+2*w*x,      1-2*x**2-2*y**2],
-        ])
-
-        # cvel[1] is root trunk: elements 0:3 = global angular vel, 3:6 = global linear vel
-        global_ang_vel = data.cvel[1][:3]
-        state.imu.gyroscope  = (R.T @ global_ang_vel).tolist()
-        state.base_lin_vel   = (R.T @ data.qvel[:3]).tolist()
-
-        for i, (p_addr, v_addr) in enumerate(zip(qpos_addr, qvel_addr)):
-            state.motorState[i].q  = data.qpos[p_addr]
-            state.motorState[i].dq = data.qvel[v_addr]
-        return state
-
-    def parse_isaac(self, robot_data, mapped_idx):
-        """Converts Isaac Sim ArticulationData into StandardState."""
-        state = StandardState()
-        state.imu.quaternion = robot_data.root_quat_w[0].tolist()
-        state.imu.gyroscope  = robot_data.root_ang_vel_b[0].tolist()
-        state.base_lin_vel   = robot_data.root_lin_vel_b[0].tolist()
-        state.base_pos       = robot_data.root_pos_w[0].tolist()
-
-        for i, idx in enumerate(mapped_idx):
-            state.motorState[i].q  = robot_data.joint_pos[0, idx].item()
-            state.motorState[i].dq = robot_data.joint_vel[0, idx].item()
-        return state
-
-    def parse_bridge_data(self, q, dq, quat, ang_vel, lin_vel_b, base_pos=None):
-        """Generic parser for bridges that already have processed attributes (Gazebo)."""
-        state = StandardState()
-        state.imu.quaternion  = quat.tolist()    if hasattr(quat,     'tolist') else list(quat)
-        state.imu.gyroscope   = ang_vel.tolist() if hasattr(ang_vel,  'tolist') else list(ang_vel)
-        state.base_lin_vel    = lin_vel_b.tolist() if hasattr(lin_vel_b, 'tolist') else list(lin_vel_b)
-        if base_pos is not None:
-            state.base_pos = base_pos.tolist() if hasattr(base_pos, 'tolist') else list(base_pos)
-
-        for i in range(12):
-            state.motorState[i].q  = q[i]
-            state.motorState[i].dq = dq[i]
-        return state

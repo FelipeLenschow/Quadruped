@@ -100,12 +100,38 @@ class RealDriver(Node):
     def teleop_cb(self, msg):
         self.cmds_vel = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
 
+    def _get_standard_state(self):
+        """Standardizes LowState into raw vectors for the TelemetryManager."""
+        raw = self.low_state
+        q = [float(raw.motor_state[i].q) for i in range(12)]
+        dq = [float(raw.motor_state[i].dq) for i in range(12)]
+        quat = raw.imu_state.quaternion   # [w, x, y, z]
+        gyro = raw.imu_state.gyroscope    # body frame
+        accel = raw.imu_state.accelerometer # body frame
+
+        # Foot contact from FSR sensors (int16)
+        # Unitree LowState foot_force order: [FR, FL, RR, RL] -> reorder to [FL, FR, RL, RR]
+        contact = [0.0, 0.0, 0.0, 0.0]
+        if hasattr(raw, 'foot_force'):
+            ff = raw.foot_force
+            thr = 50
+            contact = [
+                float(ff[1] > thr),  # FL
+                float(ff[0] > thr),  # FR
+                float(ff[3] > thr),  # RL
+                float(ff[2] > thr),  # RR
+            ]
+
+        return self.telemetry.process_state(
+            q=q, dq=dq, quat=quat, gyro=gyro, accel=accel, contact=contact
+        )
+
     def control_loop(self):
         """Internal inference logic."""
         if self.low_state is None:
             return
 
-        state = self.telemetry.standardize(self.low_state, backend="generic")
+        state = self._get_standard_state()
 
         # Republish robot state to ROS2 for monitoring (rviz2, rqt, ros2 topic echo)
         self.telemetry.publish(sim_time=time.time(), state=state)

@@ -32,6 +32,7 @@ parser.add_argument(
     help="Path to policy checkpoint (Turbo Mode)",
 )
 parser.add_argument("--obs_dim", type=int, default=49, help="Observation dimension")
+parser.add_argument("--use_estimator", action="store_true", help="Use IMU-based state estimation instead of ground truth")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -66,6 +67,7 @@ from isaaclab.utils import configclass
 from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
 from Controller.Utils.telemetry import TelemetryManager
+from configs.config_loader import load_config
 
 from isaaclab_assets.robots.unitree import (
     UNITREE_A1_CFG,
@@ -95,10 +97,14 @@ class BridgeSceneCfg(InteractiveSceneCfg):
 
 
 class Ros2IsaacDriver(Node):
-    def __init__(self, robot, robot_type="go2", checkpoint=None, obs_dim=49):
+    def __init__(self, robot, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False):
         super().__init__("isaac_driver")
         self.robot = robot
         self.robot_type = robot_type
+
+        # 0. Load Central Config
+        self.config = load_config()
+        self.ctrl_cfg = self.config.get("control", {})
 
         # Handles internal policy inference, physics stepping,
         # and standardizes telemetry for ROS 2 monitoring.
@@ -108,7 +114,7 @@ class Ros2IsaacDriver(Node):
             self.runner = PolicyRunner(
                 checkpoint, obs_dim=obs_dim, robot_type=robot_type
             )
-            self.runner.decimation = 4  # Policy at 50Hz (200Hz / 4)
+            self.runner.decimation = self.ctrl_cfg.get("decimation", 4)
             self.desired_qpos = np.array(
                 [
                     0.1,
@@ -173,7 +179,7 @@ class Ros2IsaacDriver(Node):
             )
 
         # ROS 2 Managers
-        self.telemetry = TelemetryManager(self, self.joint_names)
+        self.telemetry = TelemetryManager(self, self.joint_names, use_estimator=use_estimator)
         self.command_processor = CommandProcessor(
             self, robot_type=robot_type, joint_names=self.joint_names
         )
@@ -209,6 +215,20 @@ class Ros2IsaacDriver(Node):
                 f"  - Joint [{i}] (Idx {self.mapped_dof_idx[i]}): {name} | Default: {defaults[i]:.3f}"
             )
 
+    def _get_standard_state(self):
+        """Extracts raw state vectors from Isaac Sim data."""
+        robot_data = self.robot.data
+        q = robot_data.joint_pos[0, self.mapped_dof_idx].cpu().numpy()
+        dq = robot_data.joint_vel[0, self.mapped_dof_idx].cpu().numpy()
+        quat = robot_data.root_quat_w[0].cpu().numpy()  # [w, x, y, z]
+        gyro = robot_data.root_ang_vel_b[0].cpu().numpy()
+        vel_b = robot_data.root_lin_vel_b[0].cpu().numpy()
+        pos = robot_data.root_pos_w[0].cpu().numpy()
+
+        return self.telemetry.process_state(
+            q=q, dq=dq, quat=quat, gyro=gyro, pos=pos, vel=vel_b
+        )
+
     def teleop_cb(self, msg):
         # We just store it; if using policy_bridge, this is mostly for completeness
         # as policy_bridge subscribes to /cmd_vel directly.
@@ -218,9 +238,8 @@ class Ros2IsaacDriver(Node):
         # --- Internal Inference (50 Hz) ---
         if self.runner:
             if self.runner.should_step():
-                # 1. Use centralized parser for Standardization
-                # parse_isaac expects (robot_data, mapped_idx)
-                state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
+                # 1. Use standardized parser
+                state = self._get_standard_state()
 
                 # 2. Feed Policy (Unified Inference with Timing)
                 actions, _ = self.runner.infer(
@@ -239,7 +258,8 @@ class Ros2IsaacDriver(Node):
 
         pos_err = self.latest_targets - curr_jpos
 
-        kp, kd = 25.0, 0.5
+        kp = self.ctrl_cfg.get("kp", 25.0)
+        kd = self.ctrl_cfg.get("kd", 0.5)
         effort_limit = 23.5
 
         torques = kp * pos_err + kd * (0 - curr_jvel)
@@ -276,7 +296,7 @@ class Ros2IsaacDriver(Node):
 
         # 2. Publish Standardized Telemetry (Downsampled to 20Hz for network efficiency)
         if self.step_counter % 5 == 0:
-            state = self.telemetry.parse_isaac(self.robot.data, self.mapped_dof_idx)
+            state = self._get_standard_state()
             self.telemetry.publish(
                 sim_time=float(self.step_counter * 0.005), state=state
             )
@@ -335,6 +355,7 @@ def main():
         args_cli.robot,
         checkpoint=args_cli.internal_policy,
         obs_dim=args_cli.obs_dim,
+        use_estimator=args_cli.use_estimator,
     )
 
     print("[IsaacDriver] Starting simulation loop...")

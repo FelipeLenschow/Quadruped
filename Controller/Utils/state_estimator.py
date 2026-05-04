@@ -70,12 +70,17 @@ class StateEstimator:
 
     _CONTACT_DECAY = {0: 0.999, 1: 0.995, 2: 0.98, 3: 0.95, 4: 0.90}
 
-    def __init__(self, dt: float = 0.02):
+    def __init__(self, dt: float = 0.02, decay_dict: dict = None):
         """
         Args:
             dt: Control timestep in seconds (default 0.02 = 50 Hz).
+            decay_dict: Optional dict mapping foot count to decay rate.
         """
         self.dt = dt
+        if decay_dict:
+            # Update default table with any provided values
+            self._CONTACT_DECAY.update(decay_dict)
+        
         self._v_body  = np.zeros(3, dtype=np.float64)
         self._g_world = np.array([0.0, 0.0, -9.81])
 

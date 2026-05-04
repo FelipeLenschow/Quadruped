@@ -22,6 +22,7 @@ from pathlib import Path
 from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
 from Controller.Utils.telemetry import TelemetryManager
+from configs.config_loader import load_config
 
 # ROS 2 Standard Imports
 import rclpy
@@ -73,11 +74,22 @@ HAA_SIGN = np.array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
 
 class Ros2GazeboDriver(Node):
     def __init__(
-        self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49
+        self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49,
+        use_estimator=False
     ):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
+
+        # 0. Load Central Config
+        self.config = load_config()
+        self.ctrl_cfg = self.config.get("control", {})
+        est_cfg = self.config.get("state_estimator", {})
+        
+        # Priority: CLI arg (if explicitly True) > YAML config
+        effective_use_estimator = use_estimator
+        if not effective_use_estimator:
+            effective_use_estimator = est_cfg.get("use_estimator", False)
 
         # Handles internal policy inference, physics stepping,
         # and standardizes telemetry for ROS 2 monitoring.
@@ -87,12 +99,12 @@ class Ros2GazeboDriver(Node):
             self.runner = PolicyRunner(
                 checkpoint, obs_dim=obs_dim, robot_type=robot_type
             )
-            self.runner.decimation = 4  # 200Hz / 4 = 50Hz
+            self.runner.decimation = self.ctrl_cfg.get("decimation", 4)
             self.mj_to_isaac = list(range(12))  # Identity
         self.world_name = world_name
 
         # 4. ROS 2 Telemetry Manager
-        self.telemetry = TelemetryManager(self, JOINT_NAMES)
+        self.telemetry = TelemetryManager(self, JOINT_NAMES, use_estimator=effective_use_estimator)
         self.command_processor = CommandProcessor(
             self, robot_type=robot_type, joint_names=JOINT_NAMES
         )
@@ -113,6 +125,7 @@ class Ros2GazeboDriver(Node):
         self.base_quat = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
         self.base_ang_vel = np.zeros(3)
         self.base_lin_vel_b = np.zeros(3)
+        self.base_accel = np.array([0., 0., 9.81])  # body-frame specific force (m/s^2)
 
         # 3. Gazebo Transport (Deferred until physics loop for partitioning)
         self.gz_node = None
@@ -148,6 +161,9 @@ class Ros2GazeboDriver(Node):
         self.base_ang_vel = np.array(
             [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
         )
+        if hasattr(msg, 'linear_acceleration'):
+            la = msg.linear_acceleration
+            self.base_accel = np.array([la.x, la.y, la.z])
 
     def _joint_cb(self, msg):
         if hasattr(msg, "header") and hasattr(msg.header, "stamp"):
@@ -317,13 +333,14 @@ class Ros2GazeboDriver(Node):
             if self.runner:
                 if self.runner.should_step():
                     # 1. Use centralized parser for Standardization
-                    state = self.telemetry.parse_bridge_data(
-                        self.q,
-                        self.dq,
-                        self.base_quat,
-                        self.base_ang_vel,
-                        self.base_lin_vel_b,
-                        self.base_pos,
+                    state = self.telemetry.process_state(
+                        q=self.q,
+                        dq=self.dq,
+                        quat=self.base_quat,
+                        gyro=self.base_ang_vel,
+                        vel=self.base_lin_vel_b,
+                        pos=self.base_pos,
+                        accel=self.base_accel,
                     )
 
                     # 2. Feed Policy (Unified Inference with Timing)
@@ -346,7 +363,8 @@ class Ros2GazeboDriver(Node):
             # After computing torques in Isaac space, apply HAA_SIGN again to convert
             # back to Gazebo convention before publishing.
             targets = self.latest_targets
-            kp, kd = 25.0, 0.5
+            kp = self.ctrl_cfg.get("kp", 25.0)
+            kd = self.ctrl_cfg.get("kd", 0.5)
             effort_limit, sat_effort, vel_lim = 23.5, 23.5, 30.0
             
             pos_err = targets - self.q
@@ -372,13 +390,14 @@ class Ros2GazeboDriver(Node):
                 )
 
             if count % 4 == 0:
-                state = self.telemetry.parse_bridge_data(
-                    self.q,
-                    self.dq,
-                    self.base_quat,
-                    self.base_ang_vel,
-                    self.base_lin_vel_b,
-                    self.base_pos,
+                state = self.telemetry.process_state(
+                    q=self.q,
+                    dq=self.dq,
+                    quat=self.base_quat,
+                    gyro=self.base_ang_vel,
+                    vel=self.base_lin_vel_b,
+                    pos=self.base_pos,
+                    accel=self.base_accel,
                 )
                 self.telemetry.publish(sim_time=self.sim_time, state=state)
             count += 1
@@ -414,10 +433,15 @@ def main():
         help="Path to policy checkpoint (Turbo Mode)",
     )
     parser.add_argument("--obs_dim", type=int, default=49)
+    parser.add_argument(
+        "--use_estimator", action="store_true", default=False,
+        help="Replace perfect odometry with contact-aided IMU velocity estimator (for sim2real testing)"
+    )
     args = parser.parse_args()
     rclpy.init()
     node = Ros2GazeboDriver(
-        args.robot, args.world, checkpoint=args.internal_policy, obs_dim=args.obs_dim
+        args.robot, args.world, checkpoint=args.internal_policy,
+        obs_dim=args.obs_dim, use_estimator=args.use_estimator,
     )
     try:
         rclpy.spin(node)
