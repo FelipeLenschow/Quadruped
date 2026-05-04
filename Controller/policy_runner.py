@@ -237,10 +237,16 @@ class PolicyRunner:
             last_actions,
         ]
 
-        if self.obs_dim != 49:
+        if self.obs_dim == 54:
+            f_contact = np.array(state.feet_contact, dtype=np.float32) if hasattr(state, "feet_contact") else np.zeros(4, dtype=np.float32)
+            b_height = np.array([state.base_pos[2]], dtype=np.float32) if hasattr(state, "base_pos") else np.array([0.35], dtype=np.float32)
+            obs_parts.append(f_contact)
+            obs_parts.append(b_height)
+        elif self.obs_dim != 49:
             # Height scan fallback for simulation (not available on real robot without sensor)
             h_val = 0.0 - state.base_pos[2] if hasattr(state, "base_pos") else -0.3
-            hscan = np.full(187, h_val, dtype=np.float32)
+            num_extra = self.obs_dim - 49
+            hscan = np.full(num_extra, h_val, dtype=np.float32)
             obs_parts.append(hscan)
 
         # Debug print once

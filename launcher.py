@@ -9,6 +9,20 @@ TASKS_DIR = "IsaacLab_Tasks"
 LAST_COMMAND_FILE = ".launcher_last_command.json"
 
 
+def ckpt_display_name(path):
+    """Extract the run folder name from a full checkpoint path.
+    e.g. '.../quadruped_direct/2026-04-24_10-30-00/checkpoints/best_agent.pt'
+         → '2026-04-24_10-30-00'
+    """
+    parts = path.replace("\\", "/").split("/")
+    # Walk backwards to find the folder right before 'checkpoints'
+    for i, p in enumerate(parts):
+        if p == "checkpoints" and i > 0:
+            return parts[i - 1]
+    # Fallback: last two parent dirs
+    return os.path.join(*parts[-3:-1]) if len(parts) >= 3 else path
+
+
 def save_last_command(data):
     try:
         with open(LAST_COMMAND_FILE, "w") as f:
@@ -199,7 +213,7 @@ def run_cli_menu():
             print("\nSelect Checkpoint to Resume Training:")
             print("  [0] Train from Scratch (None)")
             for i, path in enumerate(checkpoint_paths):
-                print(f"  [{i+1}] {path}")
+                print(f"  [{i+1}] {ckpt_display_name(path)}")
             ckpt_idx = input(
                 f"Enter choice [0-{len(checkpoint_paths)}] (default 0): "
             ).strip()
@@ -216,7 +230,7 @@ def run_cli_menu():
             # Deployment/Sim2Sim Mode: User wants to pick the checkpoint
             print("\nSelect Trained Checkpoint:")
             for i, path in enumerate(checkpoint_paths):
-                print(f"  [{i+1}] {path}")
+                print(f"  [{i+1}] {ckpt_display_name(path)}")
             ckpt_idx = input(
                 f"Enter choice [1-{len(checkpoint_paths)}] (default 1): "
             ).strip()
@@ -226,7 +240,7 @@ def run_cli_menu():
             except ValueError:
                 idx = 0
             selected_ckpt = checkpoint_paths[idx]
-            print(f"[Launcher] Selected checkpoint: {selected_ckpt}")
+            print(f"[Launcher] Selected checkpoint: {ckpt_display_name(selected_ckpt)}")
 
     if action in ("isaac_sim", "mujoco", "gazebo", "real_deploy"):
         teleop = False  # Using ROS 2 teleop instead of internal WASD
@@ -284,7 +298,7 @@ if __name__ == "__main__":
     print(f"Terrain:  {terrain_cfg}")
     print(f"Envs:     {num_envs if num_envs else 'Config Default'}")
     if action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo"):
-        print(f"Checkpoint: {ckpt}")
+        print(f"Checkpoint: {ckpt_display_name(ckpt) if ckpt else 'None'}")
         print(f"Teleop:   {teleop}")
     else:
         print(f"Headless: {headless}")
@@ -364,6 +378,13 @@ if __name__ == "__main__":
                     env.get("PYTHONPATH", "") + os.pathsep + fallback_path
                 )
 
+            # Ensure ROS 2 shared libraries are in LD_LIBRARY_PATH
+            ros_lib_path = "/opt/ros/humble/lib:/opt/ros/humble/local/lib"
+            if "/opt/ros/humble/lib" not in env.get("LD_LIBRARY_PATH", ""):
+                env["LD_LIBRARY_PATH"] = (
+                    ros_lib_path + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+                )
+
         # Unset virtualenv variables that might confuse the system python
         if action != "isaac_sim":  # Keep env for Isaac
             env.pop("VIRTUAL_ENV", None)
@@ -421,6 +442,8 @@ if __name__ == "__main__":
             cmd.append("--headless")
         if video:
             cmd.append("--video")
+            cmd.append("--video_length=200")
+            cmd.append("--video_interval=5000")
         subprocess.run(cmd, env=env, cwd=module_path)
 
     elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy"):
