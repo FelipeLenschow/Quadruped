@@ -14,7 +14,7 @@ You only need to do this once per machine, or if we add new `pip` or `apt` depen
 
 Run this command from the **root of your `Quadruped` project** (not inside the docker folder):
 ```bash
-sudo docker build -t quadruped_env -f docker/Dockerfile .
+sudo docker build --network host -t quadruped_env -f docker/Dockerfile .
 ```
 *(Note: Building takes a few minutes because it compiles the Unitree SDK communication layer from source).*
 
@@ -80,3 +80,12 @@ When running GUI applications like the MuJoCo Viewer inside the Docker container
 3. **Direct Rendering Infrastructure (`--device /dev/dri:/dev/dri`)**: We bypassed the NVIDIA runtime entirely and mounted the raw Linux graphics devices. While this successfully allowed the container to boot and render the GUI, it did not resolve the low FPS, likely because the VDI's virtualized display pipeline does not expose native hardware acceleration through standard DRI.
 
 *Current Status*: MuJoCo is fully functional for simulation, but the graphical viewer will run at a low framerate on the VDI until the host machine's NVIDIA Docker Runtime is repaired by system administrators.
+
+### Physical Robot Deployment Quirks
+When deploying this Docker image directly onto the physical Unitree robot, several embedded hardware issues were identified and resolved to make the image truly universal:
+
+1. **Architecture Mismatch (`exec format error`)**: The image is based on `ros:humble-ros-base` instead of `desktop` because the robot utilizes an ARM64 processor, whereas laptops use AMD64. The `ros-base` image natively supports both.
+2. **DNS Resolution Failure**: The robot's network configuration often drops Docker's internal DNS requests during the build phase. This is resolved by passing `--network host` to the `docker build` command so it inherits the robot's working internet connection.
+3. **Dead CMOS Battery (Clock Drift)**: Physical robots often lose track of real-world time when powered off, resetting to 1970 or falling hours behind. 
+   - This causes `git pull` to fail due to SSL verification. Workaround: `env GIT_SSL_NO_VERIFY=true git pull`.
+   - This causes `apt-get update` to fail because repository signatures appear to be from the "future". The `Dockerfile` permanently resolves this by passing `-o Acquire::Check-Valid-Until=false` to bypass time-checks.
