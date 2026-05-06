@@ -17,9 +17,10 @@ RUN apt-get update && apt-get install -y \
     libglfw3-dev \
     libgl1-mesa-glx \
     libosmesa6-dev \
-    software-properties-common \
-    ros-humble-plotjuggler-ros \
     && rm -rf /var/lib/apt/lists/*
+
+# 3.5 Install PlotJuggler only if available (it natively supports AMD64 laptops, but is missing from OSRF's ARM64 robot repos)
+RUN apt-get update && apt-get install -y ros-humble-plotjuggler-ros || echo "PlotJuggler unavailable on this architecture. Skipping."
 
 # 4. Create a workspace
 WORKDIR /app
@@ -54,7 +55,7 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
 
 # 8. Set environment variables for the SDK and Domain Isolation
 ENV CYCLONEDDS_HOME=/usr/local
-ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib"
 ENV ROS_DOMAIN_ID=1
 ENV ROS_LOCALHOST_ONLY=0
 
