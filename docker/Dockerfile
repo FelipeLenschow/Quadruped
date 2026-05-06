@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # 3. Enable the Universe repository (required for minimal ARM64 base images) and install dependencies
 RUN sed -i 's/main/main universe/g' /etc/apt/sources.list && \
-    apt-get update && apt-get install -y \
+    apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false && apt-get install -y \
     build-essential \
     cmake \
     git \
@@ -21,7 +21,7 @@ RUN sed -i 's/main/main universe/g' /etc/apt/sources.list && \
     && rm -rf /var/lib/apt/lists/*
 
 # 3.5 Install PlotJuggler only if available (it natively supports AMD64 laptops, but is missing from OSRF's ARM64 robot repos)
-RUN apt-get update && apt-get install -y ros-humble-plotjuggler-ros || echo "PlotJuggler unavailable on this architecture. Skipping."
+RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false && apt-get install -y ros-humble-plotjuggler-ros || echo "PlotJuggler unavailable on this architecture. Skipping."
 
 # 4. Create a workspace
 WORKDIR /app
