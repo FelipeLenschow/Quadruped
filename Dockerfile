@@ -1,0 +1,65 @@
+# 1. Use the official ROS 2 Jazzy image as the base
+FROM osrf/ros:jazzy-desktop
+
+# 2. Prevent interactive prompts during apt installations
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 3. Install system dependencies required for ROS 2, Python, and Simulation
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    python3-pip \
+    python3-venv \
+    wget \
+    curl \
+    libcyclonedds-dev \
+    libglfw3-dev \
+    libgl1-mesa-glx \
+    libosmesa6-dev \
+    software-properties-common \
+    && rm -rf /var/lib/apt/lists/*
+
+# 4. Create a workspace
+WORKDIR /app
+
+# 5. Pre-compile CycloneDDS (0.10.x) for Unitree SDK compatibility
+RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x /tmp/cyclonedds && \
+    mkdir -p /tmp/cyclonedds/build && cd /tmp/cyclonedds/build && \
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    cmake --build . --target install && \
+    rm -rf /tmp/cyclonedds
+
+# 6. Setup Python Virtual Environment
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# 7. Install Python dependencies (Robot + Sim2Sim)
+# Upgrading pip and installing wheel first is good practice
+RUN pip install --no-cache-dir --upgrade pip wheel && \
+    pip install --no-cache-dir \
+    cyclonedds==0.10.2 \
+    numpy \
+    pyyaml \
+    scipy \
+    mujoco \
+    torch \
+    torchvision \
+    torchaudio \
+    onnxruntime \
+    skrl \
+    tensorboard
+
+# 8. Set environment variables for the SDK and Domain Isolation
+ENV CYCLONEDDS_HOME=/usr/local
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+ENV ROS_DOMAIN_ID=1
+ENV ROS_LOCALHOST_ONLY=0
+
+# 9. Source ROS 2 automatically when entering the container
+RUN echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+RUN echo "source /opt/venv/bin/activate" >> ~/.bashrc
+
+# Default command
+CMD ["bash"]
