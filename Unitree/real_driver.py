@@ -16,7 +16,7 @@ sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "unitree_sdk2_python"))
 )
 
-from Controller.policy_runner import PolicyRunner
+# from Controller.policy_runner import PolicyRunner # Moved to local import
 from Controller.policy_bridge import CommandProcessor
 from Controller.Utils.telemetry import TelemetryManager
 
@@ -59,15 +59,20 @@ class RealDriver(Node):
             dtype=np.float32,
         )
         if internal_policy:
-            self.policy = PolicyRunner(
-                internal_policy, obs_dim=obs_dim, robot_type=robot
-            )
-            self.policy.decimation = 4  # Typical for hardware at 200Hz
-            self.desired_qpos = np.array(
-                [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
-                dtype=np.float32,
-            )
-            self.sdk_to_isaac = list(range(12))  # Verified mapping should go here
+            try:
+                from Controller.policy_runner import PolicyRunner
+                self.policy = PolicyRunner(
+                    internal_policy, obs_dim=obs_dim, robot_type=robot
+                )
+                self.policy.decimation = 4  # Typical for hardware at 200Hz
+                self.desired_qpos = np.array(
+                    [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
+                    dtype=np.float32,
+                )
+                self.sdk_to_isaac = list(range(12))  # Verified mapping should go here
+            except ImportError:
+                self.get_logger().error("[RealDriver] PyTorch not found. Internal policy disabled. Running in TELEMETRY ONLY mode.")
+                self.policy = None
 
         # 4. Teleop Subscription
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
