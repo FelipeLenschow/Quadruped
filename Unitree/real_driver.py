@@ -32,13 +32,15 @@ from unitree_sdk2py.utils.crc import CRC
 
 
 class RealDriver(Node):
-    def __init__(self, robot="go2", internal_policy=None, obs_dim=45):
+    def __init__(self, robot="go2", internal_policy=None, obs_dim=45, interface=None):
         super().__init__("real_driver")
         self.robot_type = robot
 
         # 1. SDK2 Initialization
-        # On-robot, we usually use the default network interface
-        ChannelFactoryInitialize(0)
+        # Clear ROS 2 config to prevent conflicts with SDK's internal XML
+        os.environ.pop("CYCLONEDDS_URI", None)
+        
+        ChannelFactoryInitialize(0, networkInterface=interface)
         self.lowcmd_publisher = ChannelPublisher("rt/lowcmd", LowCmd_)
         self.lowcmd_publisher.Init()
         self.lowstate_subscriber = ChannelSubscriber("rt/lowstate", LowState_)
@@ -186,12 +188,13 @@ class RealDriver(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
+    parser.add_argument("--interface", type=str, default=None)
     parser.add_argument("--internal_policy", type=str, default=None)
     parser.add_argument("--obs_dim", type=int, default=45)
     args = parser.parse_args()
 
     rclpy.init()
-    node = RealDriver(args.robot, args.internal_policy, args.obs_dim)
+    node = RealDriver(args.robot, args.internal_policy, args.obs_dim, interface=args.interface)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
