@@ -198,6 +198,8 @@ def main():
         print(f"[SDK2] Failed to initialize ChannelFactory: {e}")
         sys.exit(1)
 
+    # 2. ROS 2 Initialization (Use a different Domain ID to avoid conflict with SDK)
+    os.environ["ROS_DOMAIN_ID"] = "1"
     rclpy.init()
     node = RealDriver(args.robot, args.internal_policy, args.obs_dim, interface=args.interface)
     try:
