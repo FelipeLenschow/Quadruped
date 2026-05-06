@@ -449,7 +449,7 @@ if __name__ == "__main__":
     elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy"):
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
-        sys_python = "/usr/bin/python3"
+        sys_python = sys.executable
 
         if action == "isaac_sim":
             bridge_script = os.path.abspath(os.path.join("IsaacSim", "isaac_driver.py"))

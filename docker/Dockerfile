@@ -1,5 +1,6 @@
-# 1. Use the official ROS 2 Jazzy image as the base
-FROM osrf/ros:jazzy-desktop
+# 1. Use the official ROS 2 Humble image as the base (Ubuntu 22.04)
+# Humble is extremely stable and works perfectly inside Docker on Ubuntu 20/22/24 hosts
+FROM osrf/ros:humble-desktop
 
 # 2. Prevent interactive prompts during apt installations
 ENV DEBIAN_FRONTEND=noninteractive
@@ -13,11 +14,11 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     wget \
     curl \
-    libcyclonedds-dev \
     libglfw3-dev \
     libgl1-mesa-glx \
     libosmesa6-dev \
     software-properties-common \
+    ros-humble-plotjuggler-ros \
     && rm -rf /var/lib/apt/lists/*
 
 # 4. Create a workspace
@@ -58,8 +59,11 @@ ENV ROS_DOMAIN_ID=1
 ENV ROS_LOCALHOST_ONLY=0
 
 # 9. Source ROS 2 automatically when entering the container
-RUN echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 RUN echo "source /opt/venv/bin/activate" >> ~/.bashrc
+
+# 10. Customize the bash prompt so you know you are inside the Docker container
+RUN echo 'export PS1="(Quadruped-Docker) \[\033[01;32m\]\u@docker\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]# "' >> ~/.bashrc
 
 # Default command
 CMD ["bash"]
