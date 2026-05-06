@@ -38,6 +38,10 @@ ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
+# 6.5 Define paths for CycloneDDS (required for pip install cyclonedds)
+ENV CYCLONEDDS_HOME=/usr/local
+ENV LD_LIBRARY_PATH="/usr/local/lib"
+
 # 7. Install Python dependencies (Robot + Sim2Sim)
 # Upgrading pip and installing wheel first is good practice
 RUN pip install --no-cache-dir --upgrade pip wheel && \
@@ -54,9 +58,7 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
     skrl \
     tensorboard
 
-# 8. Set environment variables for the SDK and Domain Isolation
-ENV CYCLONEDDS_HOME=/usr/local
-ENV LD_LIBRARY_PATH="/usr/local/lib"
+# 8. Set environment variables for Domain Isolation
 ENV ROS_DOMAIN_ID=1
 ENV ROS_LOCALHOST_ONLY=0
 
