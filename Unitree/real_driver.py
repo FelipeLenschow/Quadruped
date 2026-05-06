@@ -47,7 +47,7 @@ class RealDriver(Node):
         self.crc = CRC()
 
         # 2. Controller Utilities
-        self.telemetry = TelemetryManager(self, robot_type=robot)
+        self.telemetry = TelemetryManager(self)
         self.command_processor = CommandProcessor(self, robot_type=robot)
 
         # 3. Internal Inference
