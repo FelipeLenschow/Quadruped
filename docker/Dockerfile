@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libosmesa6-dev \
     software-properties-common \
+    ros-humble-plotjuggler-ros \
     && rm -rf /var/lib/apt/lists/*
 
 # 4. Create a workspace
