@@ -15,9 +15,7 @@ import time
 
 # Add parent directory to sys.path to import modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-# from Controller.policy_runner import PolicyRunner, quat_to_rot_matrix
-
-
+from configs.config_loader import load_config
 import yaml
 
 class CommandProcessor:
@@ -30,13 +28,9 @@ class CommandProcessor:
         self.robot_type = robot_type
         
         # Load Configuration
-        config_path = os.path.join(os.path.dirname(__file__), "config", "config.yaml")
-        try:
-            with open(config_path, 'r') as f:
-                self.config = yaml.safe_load(f)
-        except Exception as e:
-            self.node.get_logger().error(f"[CommandProcessor] Failed to load config: {e}")
-            self.config = {}
+        self.config = load_config()
+        if not self.config:
+            self.node.get_logger().error("[CommandProcessor] Failed to load config. Using hardcoded safety defaults.")
 
         self.saturation = self.config.get("saturation_limit", 0.9)
         self.action_scale = self.config.get("action_scale", 0.25)
