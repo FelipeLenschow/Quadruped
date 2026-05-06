@@ -5,8 +5,9 @@ FROM ros:humble-ros-base
 # 2. Prevent interactive prompts during apt installations
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 3. Install system dependencies required for ROS 2, Python, and Simulation
-RUN apt-get update && apt-get install -y \
+# 3. Enable the Universe repository (required for minimal ARM64 base images) and install dependencies
+RUN sed -i 's/main/main universe/g' /etc/apt/sources.list && \
+    apt-get update && apt-get install -y \
     build-essential \
     cmake \
     git \
