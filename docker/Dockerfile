@@ -1,6 +1,6 @@
-# 1. Use the official ROS 2 Humble image as the base (Ubuntu 22.04)
-# Humble is extremely stable and works perfectly inside Docker on Ubuntu 20/22/24 hosts
-FROM osrf/ros:humble-desktop
+# 1. Use the official ROS 2 Humble base image (Ubuntu 22.04)
+# We use 'ros-base' instead of 'desktop' because it officially supports both AMD64 (Laptop) and ARM64 (Robot)!
+FROM ros:humble-ros-base
 
 # 2. Prevent interactive prompts during apt installations
 ENV DEBIAN_FRONTEND=noninteractive
@@ -54,7 +54,7 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
 
 # 8. Set environment variables for the SDK and Domain Isolation
 ENV CYCLONEDDS_HOME=/usr/local
-ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
 ENV ROS_DOMAIN_ID=1
 ENV ROS_LOCALHOST_ONLY=0
 
