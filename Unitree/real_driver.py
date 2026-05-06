@@ -37,10 +37,6 @@ class RealDriver(Node):
         self.robot_type = robot
 
         # 1. SDK2 Initialization
-        # Clear ROS 2 config to prevent conflicts with SDK's internal XML
-        os.environ.pop("CYCLONEDDS_URI", None)
-        
-        ChannelFactoryInitialize(0, networkInterface=interface)
         self.lowcmd_publisher = ChannelPublisher("rt/lowcmd", LowCmd_)
         self.lowcmd_publisher.Init()
         self.lowstate_subscriber = ChannelSubscriber("rt/lowstate", LowState_)
@@ -192,6 +188,15 @@ def main():
     parser.add_argument("--internal_policy", type=str, default=None)
     parser.add_argument("--obs_dim", type=int, default=45)
     args = parser.parse_args()
+
+    # 1. SDK2 Initialization (Must happen BEFORE rclpy.init to claim the DDS domain)
+    # Clear ROS 2 config to prevent conflicts with SDK's internal XML
+    os.environ.pop("CYCLONEDDS_URI", None)
+    try:
+        ChannelFactoryInitialize(0, networkInterface=args.interface)
+    except Exception as e:
+        print(f"[SDK2] Failed to initialize ChannelFactory: {e}")
+        sys.exit(1)
 
     rclpy.init()
     node = RealDriver(args.robot, args.internal_policy, args.obs_dim, interface=args.interface)
