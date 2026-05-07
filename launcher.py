@@ -3,6 +3,7 @@ import sys
 import glob
 import subprocess
 import json
+import platform
 
 
 TASKS_DIR = "IsaacLab_Tasks"
@@ -44,10 +45,17 @@ def load_last_command():
 def run_cli_menu():
     is_docker = os.path.exists("/.dockerenv")
     is_isaac = "env_isaacsim" in os.environ.get("VIRTUAL_ENV", "") or "env_isaacsim" in sys.executable
+    is_robot = platform.machine().lower() in ["aarch64", "arm64"]
 
     print("\n" + "=" * 50)
     print(" Quadruped Unified Launcher")
     print("=" * 50)
+    
+    if is_robot:
+        print(" [HARDWARE]    Physical Robot (ARM64)")
+    else:
+        print(" [HARDWARE]    Remote PC/VDI (AMD64)")
+
     if is_docker:
         print(" [ENVIRONMENT] Docker Container Detected")
         print("               (IsaacLab options disabled)")
@@ -55,6 +63,7 @@ def run_cli_menu():
         print(" [ENVIRONMENT] IsaacSim Native Environment Detected")
     else:
         print(" [ENVIRONMENT] Host Native Environment")
+        
     print("=" * 50 + "\n")
 
     # 0. Load last command
@@ -123,7 +132,12 @@ def run_cli_menu():
         
     print("  [4] Play MuJoCo")
     print("  [5] Play Gazebo")
-    print("  [6] Deploy to Robot")
+    
+    if is_robot:
+        print("  [6] Deploy to Robot")
+    else:
+        print("  [X] Deploy to Robot (DISABLED - MUST RUN ON HARDWARE)")
+        
     print("  [7] Remote Teleop")
     
     tp = input(
@@ -138,7 +152,7 @@ def run_cli_menu():
         action = "isaac_sim"
     elif tp == "5":
         action = "gazebo"
-    elif tp == "6":
+    elif tp == "6" and is_robot:
         action = "real_deploy"
     elif tp == "7":
         action = "teleop"
