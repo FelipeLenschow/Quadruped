@@ -260,7 +260,13 @@ class Ros2IsaacDriver(Node):
 
         kp = self.ctrl_cfg.get("kp", 25.0)
         kd = self.ctrl_cfg.get("kd", 0.5)
-        effort_limit = 23.5
+        
+        # Override with safety watchdog torque
+        effort_limit = self.command_processor.active_max_torque
+
+        if effort_limit <= 0.1:
+            kp = 0.0
+            kd = 0.0
 
         torques = kp * pos_err + kd * (0 - curr_jvel)
         torques = torch.clamp(torques, -effort_limit, effort_limit).to(torch.float32)

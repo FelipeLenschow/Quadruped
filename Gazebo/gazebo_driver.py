@@ -365,15 +365,22 @@ class Ros2GazeboDriver(Node):
             targets = self.latest_targets
             kp = self.ctrl_cfg.get("kp", 25.0)
             kd = self.ctrl_cfg.get("kd", 0.5)
-            effort_limit, sat_effort, vel_lim = 23.5, 23.5, 30.0
+            
+            # Override with safety watchdog torque
+            effort_limit = self.command_processor.active_max_torque
+            sat_effort, vel_lim = 23.5, 30.0
+            
+            if effort_limit <= 0.1:
+                kp = 0.0
+                kd = 0.0
             
             pos_err = targets - self.q
             raw_torques = kp * pos_err - kd * self.dq
             
             vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
             v_clamp = np.clip(self.dq, -vel_at_lim, vel_at_lim)
-            t_top = sat_effort * (1.0 - v_clamp / vel_lim)
-            t_bot = sat_effort * (-1.0 - v_clamp / vel_lim)
+            t_top = effort_limit * (1.0 - v_clamp / vel_lim)
+            t_bot = effort_limit * (-1.0 - v_clamp / vel_lim)
             
             pd_torques = np.clip(
                 raw_torques, np.minimum(t_bot, -effort_limit), np.minimum(t_top, effort_limit)
