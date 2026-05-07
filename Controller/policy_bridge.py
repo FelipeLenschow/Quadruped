@@ -17,6 +17,7 @@ import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from configs.config_loader import load_config
 import yaml
+from std_msgs.msg import Float32
 
 class CommandProcessor:
     """
@@ -62,9 +63,24 @@ class CommandProcessor:
         self.soft_max = (self.center + self.half_range * self.saturation).astype(np.float32)
         
         self.cmd_pub = self.node.create_publisher(JointState, '/commands/joint_commands', 10)
+        
+        # Safety / Max Torque
+        self.active_max_torque = 23.5  # Default Go2 max torque
+        self.last_torque_msg_time = time.time()
+        self.node.create_subscription(Float32, "/safety/max_torque", self.max_torque_cb, 10)
+        
         self.node.get_logger().info(f"[CommandProcessor] Initialized for {robot_type} (Sat: {self.saturation*100}%)")
 
+    def max_torque_cb(self, msg: Float32):
+        self.active_max_torque = msg.data
+        self.last_torque_msg_time = time.time()
+
     def process(self, actions, desired_qpos, action_scale=None, send_to_robot_cb=None):
+        # Watchdog: If no max torque message in 1.0s, drop to 0
+        if time.time() - self.last_torque_msg_time > 1.0:
+            self.active_max_torque = 0.0
+            self.node.get_logger().warn("[CommandProcessor] Safety Watchdog triggered! Max torque set to 0.0", throttle_duration_sec=2.0)
+            
         # Use config action_scale unless overridden
         scale = action_scale if action_scale is not None else self.action_scale
         targets = actions * scale + desired_qpos
@@ -77,6 +93,7 @@ class CommandProcessor:
         msg.header.stamp = self.node.get_clock().now().to_msg()
         msg.name = self.joint_names
         msg.position = limited_targets.tolist()
+        msg.effort = [float(self.active_max_torque)] * len(self.joint_names)
         self.cmd_pub.publish(msg)
         
         return limited_targets

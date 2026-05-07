@@ -506,7 +506,7 @@ if __name__ == "__main__":
                 f"--obs_dim={obs_dim}",
             ]
         elif action == "mujoco_twin":
-            bridge_script = os.path.abspath(os.path.join("Mujoco", "mujoco_twin.py"))
+            bridge_script = os.path.abspath(os.path.join("DigitalTwin", "supervisor.py"))
             cmd = [
                 sys_python,
                 bridge_script,

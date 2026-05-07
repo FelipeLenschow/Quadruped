@@ -170,12 +170,20 @@ class RealDriver(Node):
 
         # Re-using the logic from legacy bridge for now, but targeting motor_cmd
         sdk_indices = [3, 0, 9, 6, 4, 1, 10, 7, 5, 2, 11, 8]
+        max_torque = self.command_processor.active_max_torque
+        
         for i, ros_idx in enumerate(sdk_indices):
             self.low_cmd.motor_cmd[i].q = float(joint_targets[ros_idx])
             self.low_cmd.motor_cmd[i].dq = 0.0
-            self.low_cmd.motor_cmd[i].kp = 45.0  # Typical Go2 gains
-            self.low_cmd.motor_cmd[i].kd = 1.0
-            self.low_cmd.motor_cmd[i].tau = 0.0
+            
+            if max_torque <= 0.1:
+                self.low_cmd.motor_cmd[i].kp = 0.0
+                self.low_cmd.motor_cmd[i].kd = 0.0
+                self.low_cmd.motor_cmd[i].tau = 0.0
+            else:
+                self.low_cmd.motor_cmd[i].kp = 45.0  # Typical Go2 gains
+                self.low_cmd.motor_cmd[i].kd = 1.0
+                self.low_cmd.motor_cmd[i].tau = 0.0
 
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)
         self.lowcmd_publisher.Write(self.low_cmd)
