@@ -42,8 +42,19 @@ def load_last_command():
 
 
 def run_cli_menu():
+    is_docker = os.path.exists("/.dockerenv")
+    is_isaac = "env_isaacsim" in os.environ.get("VIRTUAL_ENV", "") or "env_isaacsim" in sys.executable
+
     print("\n" + "=" * 50)
     print(" Quadruped Unified Launcher")
+    print("=" * 50)
+    if is_docker:
+        print(" [ENVIRONMENT] Docker Container Detected")
+        print("               (IsaacLab options disabled)")
+    elif is_isaac:
+        print(" [ENVIRONMENT] IsaacSim Native Environment Detected")
+    else:
+        print(" [ENVIRONMENT] Host Native Environment")
     print("=" * 50 + "\n")
 
     # 0. Load last command
@@ -100,24 +111,31 @@ def run_cli_menu():
     print(f"\n--- Operating on {selected_module_name} ---\n")
 
     # 1. Action
+    print("Select Action:")
+    if not is_docker:
+        print("  [1] Train Policy")
+        print("  [2] Play Policy (IsaacLab)")
+        print("  [3] Play Policy (IsaacSim Bridge)")
+    else:
+        print("  [X] Train Policy (DISABLED IN DOCKER)")
+        print("  [X] Play Policy (IsaacLab) (DISABLED IN DOCKER)")
+        print("  [X] Play Policy (IsaacSim Bridge) (DISABLED IN DOCKER)")
+        
+    print("  [4] Play MuJoCo")
+    print("  [5] Play Gazebo")
+    print("  [6] Deploy to Robot")
+    print("  [7] Remote Teleop")
+    
     tp = input(
-        "Select Action:\n  [1] Train Policy\n"
-        "  [2] Play Policy\n"
-        "  [3] Play IsaacSim\n"
-        "  [4] Play MuJoCo\n"
-        "  [5] Play Gazebo\n"
-        "  [6] Deploy to Robot\n"
-        "  [7] Remote Teleop\n"
-        "Enter choice [1-7] (default 2): "
+        "Enter choice [1-7] (default 4): " if is_docker else "Enter choice [1-7] (default 2): "
     ).strip()
-    if tp == "1":
+    
+    if tp == "1" and not is_docker:
         action = "train"
-    elif tp == "2":
+    elif tp == "2" and not is_docker:
         action = "isaac_lab"
-    elif tp == "3":
+    elif tp == "3" and not is_docker:
         action = "isaac_sim"
-    elif tp == "4":
-        action = "mujoco"
     elif tp == "5":
         action = "gazebo"
     elif tp == "6":
@@ -125,7 +143,8 @@ def run_cli_menu():
     elif tp == "7":
         action = "teleop"
     else:
-        action = "isaac_lab"  # Default to Isaac Lab play
+        # Default dynamically based on environment if invalid/empty/disabled option chosen
+        action = "mujoco" if is_docker else "isaac_lab"
 
     # 2. Robot selection
     selected_robot_cfg = "UNITREE_GO2_CFG"  # Global default
