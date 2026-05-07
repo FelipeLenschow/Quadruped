@@ -139,9 +139,10 @@ def run_cli_menu():
         print("  [X] Deploy to Robot (DISABLED - MUST RUN ON HARDWARE)")
         
     print("  [7] Remote Teleop")
+    print("  [8] Play MuJoCo Digital Twin")
     
     tp = input(
-        "Enter choice [1-7] (default 4): " if is_docker else "Enter choice [1-7] (default 2): "
+        "Enter choice [1-8] (default 4): " if is_docker else "Enter choice [1-8] (default 2): "
     ).strip()
     
     if tp == "1" and not is_docker:
@@ -156,6 +157,8 @@ def run_cli_menu():
         action = "real_deploy"
     elif tp == "7":
         action = "teleop"
+    elif tp == "8":
+        action = "mujoco_twin"
     else:
         # Default dynamically based on environment if invalid/empty/disabled option chosen
         action = "mujoco" if is_docker else "isaac_lab"
@@ -275,13 +278,13 @@ def run_cli_menu():
             selected_ckpt = checkpoint_paths[idx]
             print(f"[Launcher] Selected checkpoint: {ckpt_display_name(selected_ckpt)}")
 
-    if action in ("isaac_sim", "mujoco", "gazebo", "real_deploy"):
+    if action in ("isaac_sim", "mujoco", "gazebo", "real_deploy", "mujoco_twin"):
         teleop = False  # Using ROS 2 teleop instead of internal WASD
     elif action == "isaac_lab":
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
 
-    if action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo"):
+    if action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo", "mujoco_twin"):
         headless = False
     elif action == "train":
         h_input = input("\nEnable Headless Mode? [Y/n]: ").strip().lower()
@@ -330,7 +333,7 @@ if __name__ == "__main__":
         print(f"Robots:   A1 + Go1 + Go2 (Sim2Sim)")
     print(f"Terrain:  {terrain_cfg}")
     print(f"Envs:     {num_envs if num_envs else 'Config Default'}")
-    if action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo"):
+    if action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo", "mujoco_twin"):
         print(f"Checkpoint: {ckpt_display_name(ckpt) if ckpt else 'None'}")
         print(f"Teleop:   {teleop}")
     else:
@@ -370,7 +373,7 @@ if __name__ == "__main__":
     # Environment Sanitization for ROS 2 Bridges (MuJoCo/Gazebo/Isaac)
     # This prevents pollution from Isaac Sim's site-packages (Python 3.11)
     # when we want to use the system ROS 2 (Python 3.10)
-    if action in ("mujoco", "gazebo", "isaac_sim"):
+    if action in ("mujoco", "gazebo", "isaac_sim", "mujoco_twin"):
         if action == "isaac_sim":
             # Use Isaac Sim's internal ROS 2 libraries (compiled for Python 3.11)
             isaac_ros_path = "/home/05680435969@corp.udesc.br/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/rclpy"
@@ -479,7 +482,7 @@ if __name__ == "__main__":
             cmd.append("--video_interval=5000")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy"):
+    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin"):
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
         sys_python = sys.executable
@@ -501,6 +504,13 @@ if __name__ == "__main__":
                 f"--robot={robot_key}",
                 f"--internal_policy={abs_ckpt}",
                 f"--obs_dim={obs_dim}",
+            ]
+        elif action == "mujoco_twin":
+            bridge_script = os.path.abspath(os.path.join("Mujoco", "mujoco_twin.py"))
+            cmd = [
+                sys_python,
+                bridge_script,
+                f"--robot={robot_key}",
             ]
         elif action == "gazebo":
             bridge_script = os.path.abspath(os.path.join("Gazebo", "gazebo_driver.py"))
