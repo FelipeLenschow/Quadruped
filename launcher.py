@@ -5,24 +5,20 @@ import subprocess
 import json
 import platform
 
-
 TASKS_DIR = "IsaacLab_Tasks"
 LAST_COMMAND_FILE = ".launcher_last_command.json"
 
+# Global Environment Detection
+IS_DOCKER = os.path.exists("/.dockerenv")
+IS_ROBOT = platform.machine().lower() in ["aarch64", "arm64"]
 
 def ckpt_display_name(path):
-    """Extract the run folder name from a full checkpoint path.
-    e.g. '.../quadruped_direct/2026-04-24_10-30-00/checkpoints/best_agent.pt'
-         → '2026-04-24_10-30-00'
-    """
+    """Extract the run folder name from a full checkpoint path."""
     parts = path.replace("\\", "/").split("/")
-    # Walk backwards to find the folder right before 'checkpoints'
     for i, p in enumerate(parts):
         if p == "checkpoints" and i > 0:
             return parts[i - 1]
-    # Fallback: last two parent dirs
     return os.path.join(*parts[-3:-1]) if len(parts) >= 3 else path
-
 
 def save_last_command(data):
     try:
@@ -30,7 +26,6 @@ def save_last_command(data):
             json.dump(data, f)
     except Exception:
         pass
-
 
 def load_last_command():
     if os.path.exists(LAST_COMMAND_FILE):
@@ -41,11 +36,9 @@ def load_last_command():
             pass
     return None
 
-
 def run_cli_menu():
-    is_docker = os.path.exists("/.dockerenv")
     is_isaac = "env_isaacsim" in os.environ.get("VIRTUAL_ENV", "") or "env_isaacsim" in sys.executable
-    is_robot = platform.machine().lower() in ["aarch64", "arm64"]
+    is_robot = IS_ROBOT
 
     print("\n" + "=" * 50)
     print(" Quadruped Unified Launcher")
@@ -56,7 +49,7 @@ def run_cli_menu():
     else:
         print(" [HARDWARE]    Remote PC/VDI (AMD64)")
 
-    if is_docker:
+    if IS_DOCKER:
         print(" [ENVIRONMENT] Docker Container Detected")
         print("               (IsaacLab options disabled)")
     elif is_isaac:
@@ -88,7 +81,7 @@ def run_cli_menu():
 
     # 1. Action Selection
     print("Select Action:")
-    if not is_docker:
+    if not IS_DOCKER:
         print("  [1] Train Policy")
         print("  [2] Play Policy (IsaacLab)")
         print("  [3] Play Policy (IsaacSim Bridge)")
@@ -99,71 +92,48 @@ def run_cli_menu():
         
     print("  [4] Play MuJoCo")
     print("  [5] Play Gazebo")
-    
-    if is_robot:
-        print("  [6] Deploy to Robot")
-    else:
-        print("  [X] Deploy to Robot (DISABLED - MUST RUN ON HARDWARE)")
-        
+    print("  [6] Deploy to Robot")
     print("  [7] Remote Teleop")
     print("  [8] Play MuJoCo Digital Twin")
+
+    action_map = {
+        "1": "train",
+        "2": "isaac_lab",
+        "3": "isaac_sim",
+        "4": "mujoco",
+        "5": "gazebo",
+        "6": "real_deploy",
+        "7": "teleop",
+        "8": "mujoco_twin",
+    }
     
-    tp = input(
-        "Enter choice [1-8] (default 4): " if is_docker else "Enter choice [1-8] (default 2): "
-    ).strip()
+    choice = input("Enter choice [1-8] (default 4): ").strip() or "4"
+    action = action_map.get(choice, "mujoco")
     
-    if tp == "1" and not is_docker:
-        action = "train"
-    elif tp == "2" and not is_docker:
-        action = "isaac_lab"
-    elif tp == "3" and not is_docker:
-        action = "isaac_sim"
-    elif tp == "4":
+    if IS_DOCKER and choice in ["1", "2", "3"]:
+        print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Switching to MuJoCo.")
         action = "mujoco"
-    elif tp == "5":
-        action = "gazebo"
-    elif tp == "6" and is_robot:
-        action = "real_deploy"
-    elif tp == "7":
-        action = "teleop"
-    elif tp == "8":
-        action = "mujoco_twin"
-    else:
-        action = "mujoco" if is_docker else "isaac_lab"
 
     print(f"\n--- Selected Action: {action.upper()} ---\n")
 
     # 2. Module Selection
-    if not os.path.exists(TASKS_DIR):
-        print(f"[ERROR] Tasks directory '{TASKS_DIR}' not found.")
-        sys.exit(1)
-
-    available_modules = [
-        d
-        for d in os.listdir(TASKS_DIR)
-        if os.path.isdir(os.path.join(TASKS_DIR, d)) and not d.startswith(".")
-    ]
-    available_modules.sort()
-
-    if not available_modules:
-        print(f"[ERROR] No task modules found in {TASKS_DIR}/")
+    modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
+    
+    if not modules:
+        print(f"[ERROR] No modules found in {TASKS_DIR}!")
         sys.exit(1)
 
     print("Select Module:")
-    for i, m in enumerate(available_modules):
+    for i, m in enumerate(modules):
         print(f"  [{i+1}] {m}")
-
-    mod_idx = input(f"Enter choice [1-{len(available_modules)}] (default 1): ").strip()
+    
+    module_choice = input(f"Enter choice [1-{len(modules)}] (default 1): ").strip() or "1"
     try:
-        idx = int(mod_idx) - 1
-        if not (0 <= idx < len(available_modules)):
-            idx = 0
-    except ValueError:
-        idx = 0
+        selected_module_name = modules[int(module_choice) - 1]
+    except (ValueError, IndexError):
+        selected_module_name = modules[0]
 
-    selected_module_name = available_modules[idx]
     selected_module_path = os.path.join(TASKS_DIR, selected_module_name)
-
     print(f"\n--- Operating on {selected_module_name} ---\n")
 
     # 3. Checkpoint Selection (Agent)
@@ -181,9 +151,8 @@ def run_cli_menu():
     # Sort and prioritize best_agents
     best_agents.sort(reverse=True)
     other_agents.sort(reverse=True)
-    all_ckpts = best_agents + other_agents
     
-    needs_ckpt = action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo", "real_deploy")
+    all_ckpts = best_agents + other_agents
     selected_ckpt = None
 
     if action != "teleop" and action != "mujoco_twin":
@@ -202,107 +171,52 @@ def run_cli_menu():
         print("  [M] Enter Manual Path")
         
         default_val = "0" if action == "train" else ("1" if all_ckpts else "M")
-        ckpt_idx = input(
-            f"Enter choice [0-{len(all_ckpts)} or M] (default {default_val}): " if action == "train" else f"Enter choice [1-{len(all_ckpts)} or M] (default {default_val}): "
-        ).strip().upper()
+        ckpt_choice = input(f"Enter choice [0-{len(all_ckpts)} or M] (default {default_val}): ").strip() or default_val
         
-        if not ckpt_idx:
-            ckpt_idx = default_val
-
-        if ckpt_idx == "M":
-            selected_ckpt = input("Enter full path to .pt checkpoint: ").strip()
-        elif ckpt_idx == "0" and action == "train":
+        if ckpt_choice.lower() == "m":
+            selected_ckpt = input("Enter full path to .pt file: ").strip()
+        elif ckpt_choice == "0" and action == "train":
             selected_ckpt = None
-        elif ckpt_idx.isdigit():
-            val = int(ckpt_idx) - 1
-            if 0 <= val < len(all_ckpts):
-                selected_ckpt = all_ckpts[val]
-        
-        if selected_ckpt:
-            print(f"[Launcher] Selected agent: {selected_ckpt}")
-        elif needs_ckpt and action != "train":
-            print(f"\n[ERROR] This action requires a checkpoint, but none was selected.")
-            sys.exit(1)
+        else:
+            try:
+                selected_ckpt = all_ckpts[int(ckpt_choice) - 1]
+            except (ValueError, IndexError):
+                selected_ckpt = all_ckpts[0] if all_ckpts else None
 
-    # 4. Robot selection
-    selected_robot_cfg = "UNITREE_GO2_CFG"  # Global default
-    if action == "train":
-        ROBOT_CHOICES = {
-            "1": ("Unitree A1", "UNITREE_A1_CFG"),
-            "2": ("Unitree Go1", "UNITREE_GO1_CFG"),
-            "3": ("Unitree Go2", "UNITREE_GO2_CFG"),
-        }
-        print("\nSelect Robot Configuration for Training:")
-        for key, (name, _) in ROBOT_CHOICES.items():
-            print(f"  [{key}] {name}")
-        rob_idx = input("Enter choice [1-3] (default 3 for Go2): ").strip()
-        if not rob_idx or rob_idx not in ROBOT_CHOICES:
-            rob_idx = "3"
-        _, selected_robot_cfg = ROBOT_CHOICES[rob_idx]
-    elif action == "isaac_lab":
-        # Isaac Play mode (Sim2Sim) currently spawns all three for comparison
-        selected_robot_cfg = None
-    else:
-        selected_robot_cfg = "UNITREE_GO2_CFG"
+    if selected_ckpt:
+        print(f"[Launcher] Selected agent: {selected_ckpt}")
 
-    # 5. Terrain
-    selected_terrain = "flat"
-    if action == "isaac_lab" or action == "train":
-        TERRAIN_CHOICES = {
-            "1": ("Flat Plane", "flat"),
-            "2": ("Random Rough", "rough"),
-            "3": ("All Terrains (Stairs, Slopes, Boxes)", "all"),
-        }
-        print("\nSelect Terrain:")
-        for key, (name, _) in TERRAIN_CHOICES.items():
-            print(f"  [{key}] {name}")
-        ter_idx = input("Enter choice [1-3] (default 1): ").strip()
-        if not ter_idx or ter_idx not in TERRAIN_CHOICES:
-            ter_idx = "1"
-        _, selected_terrain = TERRAIN_CHOICES[ter_idx]
-
-    # 6. Num Envs
-    num_envs = "1"
-    if action in ("train", "isaac_lab"):
-        prompt = "\nEnter number of environments (leave blank for config default): " if action == "train" else "\nEnter number of environments [1-50] (default 1): "
-        num_envs = input(prompt).strip()
-        if not num_envs and action == "isaac_lab":
-            num_envs = "1"
-
-    # 7. Additional Options
-    teleop = False
-    headless = False
+    # 4. Environment & Options
+    robot_cfg = "UNITREE_GO2_CFG" # Default for now
+    terrain_cfg = "flat"
+    num_envs = 1
+    headless = IS_DOCKER
     video = False
+    teleop = False
     run_name = ""
 
-    if action == "isaac_lab":
-        t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
-        teleop = t_input != "n"
-    
-    if action == "train":
-        h_input = input("\nEnable Headless Mode? [Y/n]: ").strip().lower()
-        headless = h_input != "n"
-        v_input = input("\nEnable Video Recording? [Y/n]: ").strip().lower()
-        video = v_input != "n"
+    if action in ["train", "isaac_lab", "isaac_sim"]:
+        robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1] (default 1): ").strip() or "1"
+        robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG"}.get(robot_choice, "UNITREE_GO2_CFG")
+        
+        terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
+        terrain_cfg = "rough" if terrain_choice == "2" else "flat"
+        
+        num_envs = input("Number of Envs (default 1): ").strip() or "1"
+        
+        if not IS_DOCKER:
+            headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
+        
+        if action == "train":
+            run_name = input("Enter Run Name (optional): ").strip()
+            video = input("Record Video? [y/N]: ").lower().strip() == "y"
 
-    return (
-        selected_module_name,
-        selected_module_path,
-        action,
-        selected_robot_cfg,
-        selected_terrain,
-        num_envs,
-        selected_ckpt,
-        teleop,
-        headless,
-        video,
-        run_name,
-    )
+    if action in ["mujoco", "gazebo", "real_deploy"]:
+        teleop = input("Enable Remote Teleop? [y/N]: ").lower().strip() == "y"
 
+    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name
 
-
-
-if __name__ == "__main__":
+def main():
     (
         module_name,
         module_path,
@@ -317,26 +231,7 @@ if __name__ == "__main__":
         run_name,
     ) = run_cli_menu()
 
-    print(f"\n{'='*50}")
-    print(f"Launching {action.upper()} Mode for {module_name}!")
-    if robot_cfg:
-        print(f"Robot:    {robot_cfg}")
-    else:
-        print(f"Robots:   A1 + Go1 + Go2 (Sim2Sim)")
-    print(f"Terrain:  {terrain_cfg}")
-    print(f"Envs:     {num_envs if num_envs else 'Config Default'}")
-    if action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo", "mujoco_twin"):
-        print(f"Checkpoint: {ckpt_display_name(ckpt) if ckpt else 'None'}")
-        print(f"Teleop:   {teleop}")
-    else:
-        print(f"Headless: {headless}")
-        if action == "train":
-            print(f"Video:    {video}")
-            if run_name:
-                print(f"Run Name: {run_name}")
-    print(f"{'='*50}\n")
-
-    # Save last command
+    # Save for next time
     save_last_command({
         "module_name": module_name,
         "module_path": module_path,
@@ -348,105 +243,40 @@ if __name__ == "__main__":
         "teleop": teleop,
         "headless": headless,
         "video": video,
-        "run_name": run_name,
+        "run_name": run_name
     })
 
-    # Prepare environment
+    print("\n" + "=" * 50)
+    print(f"Launching {action.upper()} Mode for {module_name}!")
+    print(f"Robot:    {robot_cfg}")
+    print(f"Terrain:  {terrain_cfg}")
+    print(f"Envs:     {num_envs}")
+    if ckpt:
+        print(f"Checkpoint: {ckpt_display_name(ckpt)}")
+    print(f"Teleop:   {teleop}")
+    print("=" * 50 + "\n")
+
+    # Set up environment variables
     env = os.environ.copy()
-    env["QUADRUPED_TELEOP"] = "1" if teleop else "0"
-    if robot_cfg:
-        env["QUADRUPED_ROBOT"] = robot_cfg
-
-    # Ensure the correct source directory is in PYTHONPATH so 'import Quadruped.tasks' works
-    source_dir = os.path.abspath(os.path.join(module_path, "source", "Quadruped"))
-    if os.path.exists(source_dir):
-        env["PYTHONPATH"] = source_dir + os.pathsep + env.get("PYTHONPATH", "")
-
-    # Environment Sanitization for ROS 2 Bridges (MuJoCo/Gazebo/Isaac)
-    # This prevents pollution from Isaac Sim's site-packages (Python 3.11)
-    # when we want to use the system ROS 2 (Python 3.10)
-    if action in ("mujoco", "gazebo", "isaac_sim", "mujoco_twin"):
-        if action == "isaac_sim":
-            # Use Isaac Sim's internal ROS 2 libraries (compiled for Python 3.11)
-            isaac_ros_path = "/home/05680435969@corp.udesc.br/env_isaacsim/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge/humble/rclpy"
-            if os.path.exists(isaac_ros_path):
-                env["PYTHONPATH"] = (
-                    isaac_ros_path + os.pathsep + env.get("PYTHONPATH", "")
-                )
-                # Also add the lib folder for shared objects
-                env["LD_LIBRARY_PATH"] = (
-                    os.path.join(os.path.dirname(isaac_ros_path), "lib")
-                    + os.pathsep
-                    + env.get("LD_LIBRARY_PATH", "")
-                )
-
-            # Add IsaacLab source paths
-            isaaclab_path = "/home/05680435969@corp.udesc.br/IsaacLab"
-            isaaclab_sources = [
-                os.path.join(isaaclab_path, "source", "isaaclab"),
-                os.path.join(isaaclab_path, "source", "isaaclab_assets"),
-                os.path.join(isaaclab_path, "source", "isaaclab_tasks"),
-                os.path.join(isaaclab_path, "source", "isaaclab_rl"),
-            ]
-            for src in isaaclab_sources:
-                if os.path.exists(src):
-                    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
-        else:
-            # Ensure ROS 2 standard paths are present (Humble uses dist-packages)
-            ros_python_path = "/opt/ros/humble/local/lib/python3.10/dist-packages"
-            if ros_python_path not in env.get("PYTHONPATH", ""):
-                env["PYTHONPATH"] = (
-                    ros_python_path + os.pathsep + env.get("PYTHONPATH", "")
-                )
-
-            # Add fallback just in case
-            fallback_path = "/opt/ros/humble/lib/python3.10/site-packages"
-            if fallback_path not in env.get("PYTHONPATH", ""):
-                env["PYTHONPATH"] = (
-                    env.get("PYTHONPATH", "") + os.pathsep + fallback_path
-                )
-
-            # Ensure ROS 2 shared libraries are in LD_LIBRARY_PATH
-            ros_lib_path = "/opt/ros/humble/lib:/opt/ros/humble/local/lib"
-            if "/opt/ros/humble/lib" not in env.get("LD_LIBRARY_PATH", ""):
-                env["LD_LIBRARY_PATH"] = (
-                    ros_lib_path + os.pathsep + env.get("LD_LIBRARY_PATH", "")
-                )
-
-        # Unset virtualenv variables that might confuse the system python
-        if action != "isaac_sim":  # Keep env for Isaac
-            env.pop("VIRTUAL_ENV", None)
-            env.pop("PYTHONHOME", None)
-
-        # VDI Fixes - Only force software render for Gazebo if it has GL issues
-        if action == "gazebo":
-            env["FORCE_SOFTWARE_RENDER"] = "1"
-            env["GZ_PARTITION"] = "quadruped_sim"
-        else:
-            env.pop("FORCE_SOFTWARE_RENDER", None)
-
-
-        # GZ_HEADLESS=1 can be used to disable GUI for performance
-        # env["GZ_HEADLESS"] = "1"
-
-    # Dynamic observation space detection
-    if ckpt and os.path.exists(ckpt):
-        try:
-            import torch
-
-            data = torch.load(ckpt, map_location="cpu")
-            # skrl stores weights in 'policy.net.0.weight' or 'policy.net_container.0.weight'
-            # We check the input dimension (last element of shape)
-            policy_state = data.get("policy", {})
-            obs_dim = 236  # Default
-            for k, v in policy_state.items():
-                if "net" in k and hasattr(v, "shape") and len(v.shape) == 2:
-                    obs_dim = v.shape[1]
-                    break
-            print(f"[INFO] Detected observation dimension from checkpoint: {obs_dim}")
-            env["QUADRUPED_OBS_DIM"] = str(obs_dim)
-        except Exception as e:
-            print(f"[WARNING] Could not inspect checkpoint dimensions: {e}")
+    env["QUADRUPED_ROBOT_CFG"] = robot_cfg
+    
+    # Search for OBS_DIM in the same folder as the checkpoint
+    if ckpt:
+        ckpt_dir = os.path.dirname(ckpt)
+        params_dir = os.path.abspath(os.path.join(ckpt_dir, "..", "params"))
+        agent_cfg = os.path.join(params_dir, "agent.yaml")
+        if os.path.exists(agent_cfg):
+            try:
+                with open(agent_cfg, 'r') as f:
+                    import yaml
+                    data = yaml.safe_load(f)
+                    # Support for different skrl/rl_games config structures
+                    obs_dim = data.get("models", {}).get("policy", {}).get("input_shape", [0])[0]
+                    if obs_dim:
+                        env["QUADRUPED_OBS_DIM"] = str(obs_dim)
+                        print(f"[INFO] Detected observation dimension from checkpoint: {obs_dim}")
+            except Exception:
+                pass
 
     # Prepare environment
     env["QUADRUPED_TERRAIN"] = terrain_cfg
@@ -481,7 +311,7 @@ if __name__ == "__main__":
 
     elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin"):
         # Unified Driver Pipeline
-        isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
+        isaac_python = "/home/05680435969@env_isaacsim/bin/python"
         # Use the current Python interpreter to ensure we pick up the correct virtualenv/environment
         sys_python = sys.executable 
 
@@ -513,6 +343,8 @@ if __name__ == "__main__":
                 sys_python,
                 bridge_script,
                 f"--robot={robot_key}",
+                f"--internal_policy={abs_ckpt}",
+                f"--obs_dim={obs_dim}",
             ]
         elif action == "gazebo":
             bridge_script = os.path.abspath(os.path.join("Gazebo", "gazebo_driver.py"))
@@ -524,7 +356,7 @@ if __name__ == "__main__":
                 f"--obs_dim={obs_dim}",
             ]
         elif action == "real_deploy":
-            bridge_script = os.path.abspath(os.path.join("Unitree", "real_driver.py"))
+            bridge_script = os.path.abspath(os.path.join("Unitree", "unitree_driver.py"))
             cmd = [
                 sys_python,
                 bridge_script,
@@ -533,32 +365,10 @@ if __name__ == "__main__":
                 f"--obs_dim={obs_dim}",
             ]
 
-        print(f"[Launcher] Starting Driver: {' '.join(cmd)}")
-        bridge_env = env.copy()
-        if action != "isaac_sim":
-            bridge_env.pop("VIRTUAL_ENV", None)
-            bridge_env.pop("PYTHONHOME", None)
+        if teleop:
+            cmd.append("--teleop")
 
-        proc = subprocess.Popen(cmd, env=bridge_env, cwd=module_path)
-        try:
-            proc.wait()
-        except KeyboardInterrupt:
-            proc.terminate()
-        sys.exit(0)
+        subprocess.run(cmd, env=env)
 
-    elif action == "teleop":
-        print(f"\n{'='*50}")
-        print(f"Launching REMOTE TELEOP!")
-        print(f"Controls: I/K=fwd/back, J/L=left/right, U/O=turn")
-        print(f"{'='*50}\n")
-        cmd = ["ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard"]
-        subprocess.run(cmd, env=env, cwd=module_path)
-
-    else:  # isaac play
-        script_path = os.path.join("scripts", "skrl", "play.py")
-        cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
-        if num_envs:
-            cmd.append(f"--num_envs={num_envs}")
-        if ckpt:
-            cmd.append(f"--checkpoint={abs_ckpt}")
-        subprocess.run(cmd, env=env, cwd=module_path)
+if __name__ == "__main__":
+    main()
