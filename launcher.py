@@ -167,11 +167,13 @@ def run_cli_menu():
     print(f"\n--- Operating on {selected_module_name} ---\n")
 
     # 3. Checkpoint Selection (Agent)
-    # Search for any .pt files in checkpoints folders recursively
-    checkpoint_paths = glob.glob(
-        os.path.join(selected_module_path, "logs", "**", "checkpoints", "*.pt"),
-        recursive=True
-    )
+    # Search for any .pt files in logs folder recursively
+    search_pattern = os.path.join(selected_module_path, "logs", "**", "*.pt")
+    checkpoint_paths = glob.glob(search_pattern, recursive=True)
+    
+    # Also check a 'checkpoints' folder at the module root just in case
+    checkpoint_paths += glob.glob(os.path.join(selected_module_path, "checkpoints", "*.pt"))
+    
     # Filter to prioritize 'best_agent.pt' but keep others
     best_agents = [p for p in checkpoint_paths if os.path.basename(p) == "best_agent.pt"]
     other_agents = [p for p in checkpoint_paths if os.path.basename(p) != "best_agent.pt"]
@@ -190,7 +192,9 @@ def run_cli_menu():
             print("  [0] Train from Scratch (None)")
         
         if not all_ckpts:
-            print("  [X] No checkpoints found automatically.")
+            print(f"  [X] No checkpoints found automatically in:")
+            print(f"      - {os.path.join(selected_module_path, 'logs/')}")
+            print(f"      - {os.path.join(selected_module_path, 'checkpoints/')}")
         
         for i, path in enumerate(all_ckpts):
             print(f"  [{i+1}] {ckpt_display_name(path)} ({os.path.basename(path)})")
