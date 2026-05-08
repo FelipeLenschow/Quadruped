@@ -504,6 +504,9 @@ if __name__ == "__main__":
                 f"--internal_policy={abs_ckpt}",
                 f"--obs_dim={obs_dim}",
             ]
+            # Automatically enable headless in Docker or if headless flag is set
+            if IS_DOCKER or headless:
+                cmd.append("--headless")
         elif action == "mujoco_twin":
             bridge_script = os.path.abspath(os.path.join("DigitalTwin", "supervisor.py"))
             cmd = [

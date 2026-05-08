@@ -29,10 +29,11 @@ from configs.config_loader import load_config
 
 
 class Ros2MujocoDriver(Node):
-    def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False):
+    def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False, headless=False):
         super().__init__("mujoco_bridge_node")
         self.robot_type = robot_type
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
+        self.headless = headless
 
         # Internal Policy Runner
         self.runner = None
@@ -76,7 +77,7 @@ class Ros2MujocoDriver(Node):
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
 
         # 4. Physics Thread
-        self.physics_thread = threading.Thread(target=self._physics_loop, daemon=True)
+        self.physics_thread = threading.Thread(target=self._physics_loop, args=(self.headless,), daemon=True)
         self.physics_thread.start()
 
         print(
@@ -226,21 +227,42 @@ class Ros2MujocoDriver(Node):
             torques, np.minimum(t_bot, -effort_limit), np.minimum(t_top, effort_limit)
         )
 
-    def _physics_loop(self):
+    def _physics_loop(self, headless=False):
         """Primary simulation thread running PD at 200 Hz and Physics at 1000 Hz."""
-        with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
-            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-            track_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
-            if track_id == -1:
-                track_id = mujoco.mj_name2id(
-                    self.model, mujoco.mjtObj.mjOBJ_BODY, "base"
-                )
-            viewer.cam.trackbodyid = track_id
+        
+        # Helper to handle viewer synchronization if not headless
+        def sync_viewer(v):
+            if v:
+                v.sync()
+
+        # Context manager for optional viewer
+        class DummyViewer:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def is_running(self): return True
+            def sync(self): pass
+
+        viewer_ctx = mujoco.viewer.launch_passive(self.model, self.data) if not headless else DummyViewer()
+
+        with viewer_ctx as viewer:
+            if not headless:
+                viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+                track_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
+                if track_id == -1:
+                    track_id = mujoco.mj_name2id(
+                        self.model, mujoco.mjtObj.mjOBJ_BODY, "base"
+                    )
+                viewer.cam.trackbodyid = track_id
 
             self._reset_robot()
             next_time = time.time()
             self.step_counter = 0
-            while rclpy.ok() and viewer.is_running():
+            
+            # Use a slightly different loop condition for headless
+            while rclpy.ok():
+                if not headless and not viewer.is_running():
+                    break
+                
                 # --- Internal Inference (50 Hz) ---
                 if self.runner:
                     if self.runner.should_step():
@@ -269,7 +291,9 @@ class Ros2MujocoDriver(Node):
                 # --- Publish sensors (Standardized & Synchronized) ---
                 state = self._get_standard_state()
                 self.telemetry.publish(sim_time=self.data.time, state=state)
-                viewer.sync()
+                
+                if not headless:
+                    viewer.sync()
 
                 self.step_counter += 1
 
@@ -290,6 +314,7 @@ def main():
     )
     parser.add_argument("--obs_dim", type=int, default=49)
     parser.add_argument("--use_estimator", action="store_true", help="Use IMU-based state estimation instead of ground truth")
+    parser.add_argument("--headless", action="store_true", help="Run without GUI")
     args = parser.parse_args()
 
     rclpy.init()
@@ -297,7 +322,8 @@ def main():
         robot_type=args.robot, 
         checkpoint=args.internal_policy, 
         obs_dim=args.obs_dim,
-        use_estimator=args.use_estimator
+        use_estimator=args.use_estimator,
+        headless=args.headless
     )
     try:
         rclpy.spin(node)
