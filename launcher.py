@@ -167,61 +167,58 @@ def run_cli_menu():
     print(f"\n--- Operating on {selected_module_name} ---\n")
 
     # 3. Checkpoint Selection (Agent)
+    # Search for any .pt files in checkpoints folders recursively
     checkpoint_paths = glob.glob(
-        os.path.join(
-            selected_module_path,
-            "logs",
-            "skrl",
-            "quadruped_direct",
-            "*",
-            "checkpoints",
-            "best_agent.pt",
-        )
+        os.path.join(selected_module_path, "logs", "**", "checkpoints", "*.pt"),
+        recursive=True
     )
-    checkpoint_paths.sort(reverse=True)
-
+    # Filter to prioritize 'best_agent.pt' but keep others
+    best_agents = [p for p in checkpoint_paths if os.path.basename(p) == "best_agent.pt"]
+    other_agents = [p for p in checkpoint_paths if os.path.basename(p) != "best_agent.pt"]
+    
+    # Sort and prioritize best_agents
+    best_agents.sort(reverse=True)
+    other_agents.sort(reverse=True)
+    all_ckpts = best_agents + other_agents
+    
     needs_ckpt = action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo", "real_deploy")
     selected_ckpt = None
 
-    if needs_ckpt and not checkpoint_paths:
-        print(
-            f"\n[ERROR] No best_agent.pt checkpoints found in {selected_module_path}/logs/skrl/quadruped_direct/"
-        )
-        sys.exit(1)
-
-    if checkpoint_paths:
+    if action != "teleop" and action != "mujoco_twin":
+        print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
-            print("\nSelect Checkpoint to Resume Training:")
             print("  [0] Train from Scratch (None)")
-            for i, path in enumerate(checkpoint_paths):
-                print(f"  [{i+1}] {ckpt_display_name(path)}")
-            ckpt_idx = input(
-                f"Enter choice [0-{len(checkpoint_paths)}] (default 0): "
-            ).strip()
-            try:
-                val = int(ckpt_idx)
-                if val == 0:
-                    selected_ckpt = None
-                else:
-                    idx = (val - 1) if 1 <= val <= len(checkpoint_paths) else 0
-                    selected_ckpt = checkpoint_paths[idx]
-            except ValueError:
-                selected_ckpt = None
-        elif action != "teleop" and action != "mujoco_twin":
-            # Deployment/Sim2Sim Mode: User wants to pick the checkpoint
-            print("\nSelect Trained Checkpoint (Agent):")
-            for i, path in enumerate(checkpoint_paths):
-                print(f"  [{i+1}] {ckpt_display_name(path)}")
-            ckpt_idx = input(
-                f"Enter choice [1-{len(checkpoint_paths)}] (default 1): "
-            ).strip()
-            try:
-                val = int(ckpt_idx) - 1
-                idx = val if 0 <= val < len(checkpoint_paths) else 0
-            except ValueError:
-                idx = 0
-            selected_ckpt = checkpoint_paths[idx]
-            print(f"[Launcher] Selected agent: {ckpt_display_name(selected_ckpt)}")
+        
+        if not all_ckpts:
+            print("  [X] No checkpoints found automatically.")
+        
+        for i, path in enumerate(all_ckpts):
+            print(f"  [{i+1}] {ckpt_display_name(path)} ({os.path.basename(path)})")
+        
+        print("  [M] Enter Manual Path")
+        
+        default_val = "0" if action == "train" else ("1" if all_ckpts else "M")
+        ckpt_idx = input(
+            f"Enter choice [0-{len(all_ckpts)} or M] (default {default_val}): " if action == "train" else f"Enter choice [1-{len(all_ckpts)} or M] (default {default_val}): "
+        ).strip().upper()
+        
+        if not ckpt_idx:
+            ckpt_idx = default_val
+
+        if ckpt_idx == "M":
+            selected_ckpt = input("Enter full path to .pt checkpoint: ").strip()
+        elif ckpt_idx == "0" and action == "train":
+            selected_ckpt = None
+        elif ckpt_idx.isdigit():
+            val = int(ckpt_idx) - 1
+            if 0 <= val < len(all_ckpts):
+                selected_ckpt = all_ckpts[val]
+        
+        if selected_ckpt:
+            print(f"[Launcher] Selected agent: {selected_ckpt}")
+        elif needs_ckpt and action != "train":
+            print(f"\n[ERROR] This action requires a checkpoint, but none was selected.")
+            sys.exit(1)
 
     # 4. Robot selection
     selected_robot_cfg = "UNITREE_GO2_CFG"  # Global default
