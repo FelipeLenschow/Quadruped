@@ -482,9 +482,8 @@ if __name__ == "__main__":
     elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin"):
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
-        # Use system python (3.10) for ROS 2 actions to avoid version mismatch with rclpy
-        # when running the launcher from within the Isaac Sim (3.11) environment.
-        sys_python = "/usr/bin/python3" 
+        # Use the current Python interpreter to ensure we pick up the correct virtualenv/environment
+        sys_python = sys.executable 
 
 
         if action == "isaac_sim":
