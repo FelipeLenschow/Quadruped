@@ -66,7 +66,7 @@ class CommandProcessor:
         
         # Safety / Max Torque
         self.active_max_torque = 23.5  # Default Go2 max torque
-        self.last_torque_msg_time = time.time()
+        self.last_torque_msg_time = 0.0 # 0 means no supervisor heartbeat received yet
         self.node.create_subscription(Float32, "/safety/max_torque", self.max_torque_cb, 10)
         
         self.node.get_logger().info(f"[CommandProcessor] Initialized for {robot_type} (Sat: {self.saturation*100}%)")
@@ -76,8 +76,8 @@ class CommandProcessor:
         self.last_torque_msg_time = time.time()
 
     def process(self, actions, desired_qpos, action_scale=None, send_to_robot_cb=None):
-        # Watchdog: If no max torque message in 1.0s, drop to 0
-        if time.time() - self.last_torque_msg_time > 1.0:
+        # Watchdog: If we have received a heartbeat, but it's been >1.0s since the last one, drop to 0
+        if self.last_torque_msg_time > 0.0 and time.time() - self.last_torque_msg_time > 1.0:
             self.active_max_torque = 0.0
             self.node.get_logger().warn("[CommandProcessor] Safety Watchdog triggered! Max torque set to 0.0", throttle_duration_sec=2.0)
             

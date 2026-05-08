@@ -86,7 +86,54 @@ def run_cli_menu():
                 last_cmd.get("run_name", ""),
             )
 
-    # 1. Selection: Dynamic Module Detection
+    # 1. Action Selection
+    print("Select Action:")
+    if not is_docker:
+        print("  [1] Train Policy")
+        print("  [2] Play Policy (IsaacLab)")
+        print("  [3] Play Policy (IsaacSim Bridge)")
+    else:
+        print("  [X] Train Policy (DISABLED IN DOCKER)")
+        print("  [X] Play Policy (IsaacLab) (DISABLED IN DOCKER)")
+        print("  [X] Play Policy (IsaacSim Bridge) (DISABLED IN DOCKER)")
+        
+    print("  [4] Play MuJoCo")
+    print("  [5] Play Gazebo")
+    
+    if is_robot:
+        print("  [6] Deploy to Robot")
+    else:
+        print("  [X] Deploy to Robot (DISABLED - MUST RUN ON HARDWARE)")
+        
+    print("  [7] Remote Teleop")
+    print("  [8] Play MuJoCo Digital Twin")
+    
+    tp = input(
+        "Enter choice [1-8] (default 4): " if is_docker else "Enter choice [1-8] (default 2): "
+    ).strip()
+    
+    if tp == "1" and not is_docker:
+        action = "train"
+    elif tp == "2" and not is_docker:
+        action = "isaac_lab"
+    elif tp == "3" and not is_docker:
+        action = "isaac_sim"
+    elif tp == "4":
+        action = "mujoco"
+    elif tp == "5":
+        action = "gazebo"
+    elif tp == "6" and is_robot:
+        action = "real_deploy"
+    elif tp == "7":
+        action = "teleop"
+    elif tp == "8":
+        action = "mujoco_twin"
+    else:
+        action = "mujoco" if is_docker else "isaac_lab"
+
+    print(f"\n--- Selected Action: {action.upper()} ---\n")
+
+    # 2. Module Selection
     if not os.path.exists(TASKS_DIR):
         print(f"[ERROR] Tasks directory '{TASKS_DIR}' not found.")
         sys.exit(1)
@@ -119,110 +166,7 @@ def run_cli_menu():
 
     print(f"\n--- Operating on {selected_module_name} ---\n")
 
-    # 1. Action
-    print("Select Action:")
-    if not is_docker:
-        print("  [1] Train Policy")
-        print("  [2] Play Policy (IsaacLab)")
-        print("  [3] Play Policy (IsaacSim Bridge)")
-    else:
-        print("  [X] Train Policy (DISABLED IN DOCKER)")
-        print("  [X] Play Policy (IsaacLab) (DISABLED IN DOCKER)")
-        print("  [X] Play Policy (IsaacSim Bridge) (DISABLED IN DOCKER)")
-        
-    print("  [4] Play MuJoCo")
-    print("  [5] Play Gazebo")
-    
-    if is_robot:
-        print("  [6] Deploy to Robot")
-    else:
-        print("  [X] Deploy to Robot (DISABLED - MUST RUN ON HARDWARE)")
-        
-    print("  [7] Remote Teleop")
-    print("  [8] Play MuJoCo Digital Twin")
-    
-    tp = input(
-        "Enter choice [1-8] (default 4): " if is_docker else "Enter choice [1-8] (default 2): "
-    ).strip()
-    
-    if tp == "1" and not is_docker:
-        action = "train"
-    elif tp == "2" and not is_docker:
-        action = "isaac_lab"
-    elif tp == "3" and not is_docker:
-        action = "isaac_sim"
-    elif tp == "5":
-        action = "gazebo"
-    elif tp == "6" and is_robot:
-        action = "real_deploy"
-    elif tp == "7":
-        action = "teleop"
-    elif tp == "8":
-        action = "mujoco_twin"
-    else:
-        # Default dynamically based on environment if invalid/empty/disabled option chosen
-        action = "mujoco" if is_docker else "isaac_lab"
-
-    # 2. Robot selection
-    selected_robot_cfg = "UNITREE_GO2_CFG"  # Global default
-    if action == "train":
-        ROBOT_CHOICES = {
-            "1": ("Unitree A1", "UNITREE_A1_CFG"),
-            "2": ("Unitree Go1", "UNITREE_GO1_CFG"),
-            "3": ("Unitree Go2", "UNITREE_GO2_CFG"),
-        }
-        print("\nSelect Robot Configuration for Training:")
-        for key, (name, _) in ROBOT_CHOICES.items():
-            print(f"  [{key}] {name}")
-        rob_idx = input("Enter choice [1-3] (default 3 for Go2): ").strip()
-        if not rob_idx or rob_idx not in ROBOT_CHOICES:
-            rob_idx = "3"
-        _, selected_robot_cfg = ROBOT_CHOICES[rob_idx]
-    elif action == "isaac_lab":
-        # Isaac Play mode (Sim2Sim) currently spawns all three for comparison
-        selected_robot_cfg = None
-    else:
-        # MuJoCo/Gazebo/Real deployments now default to Go2 as per user requested standardization
-        selected_robot_cfg = "UNITREE_GO2_CFG"
-
-    # 3. Terrain
-    selected_terrain = "flat"
-    if action == "isaac_lab" or action == "train":
-        TERRAIN_CHOICES = {
-            "1": ("Flat Plane", "flat"),
-            "2": ("Random Rough", "rough"),
-            "3": ("All Terrains (Stairs, Slopes, Boxes)", "all"),
-        }
-        print("\nSelect Terrain:")
-        for key, (name, _) in TERRAIN_CHOICES.items():
-            print(f"  [{key}] {name}")
-        ter_idx = input("Enter choice [1-3] (default 1): ").strip()
-        if not ter_idx or ter_idx not in TERRAIN_CHOICES:
-            ter_idx = "1"
-        _, selected_terrain = TERRAIN_CHOICES[ter_idx]
-
-    # 4. Num Envs
-    num_envs = ""
-    if action in ("train", "isaac_lab"):
-        num_envs = input(
-            "\nEnter number of environments (leave blank to use config default): "
-        ).strip()
-    elif action == "isaac_lab":
-        num_envs = input(
-            "\nEnter number of environments [1-50] (default 1): "
-        ).strip()
-        if not num_envs:
-            num_envs = "1"
-    else:
-        num_envs = "1"
-
-    selected_ckpt = None
-    teleop = False
-    headless = False
-    video = False
-    run_name = ""
-
-    # 5. Checkpoint Selection
+    # 3. Checkpoint Selection (Agent)
     checkpoint_paths = glob.glob(
         os.path.join(
             selected_module_path,
@@ -237,6 +181,7 @@ def run_cli_menu():
     checkpoint_paths.sort(reverse=True)
 
     needs_ckpt = action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo", "real_deploy")
+    selected_ckpt = None
 
     if needs_ckpt and not checkpoint_paths:
         print(
@@ -262,9 +207,9 @@ def run_cli_menu():
                     selected_ckpt = checkpoint_paths[idx]
             except ValueError:
                 selected_ckpt = None
-        else:
+        elif action != "teleop" and action != "mujoco_twin":
             # Deployment/Sim2Sim Mode: User wants to pick the checkpoint
-            print("\nSelect Trained Checkpoint:")
+            print("\nSelect Trained Checkpoint (Agent):")
             for i, path in enumerate(checkpoint_paths):
                 print(f"  [{i+1}] {ckpt_display_name(path)}")
             ckpt_idx = input(
@@ -276,22 +221,66 @@ def run_cli_menu():
             except ValueError:
                 idx = 0
             selected_ckpt = checkpoint_paths[idx]
-            print(f"[Launcher] Selected checkpoint: {ckpt_display_name(selected_ckpt)}")
+            print(f"[Launcher] Selected agent: {ckpt_display_name(selected_ckpt)}")
 
-    if action in ("isaac_sim", "mujoco", "gazebo", "real_deploy", "mujoco_twin"):
-        teleop = False  # Using ROS 2 teleop instead of internal WASD
+    # 4. Robot selection
+    selected_robot_cfg = "UNITREE_GO2_CFG"  # Global default
+    if action == "train":
+        ROBOT_CHOICES = {
+            "1": ("Unitree A1", "UNITREE_A1_CFG"),
+            "2": ("Unitree Go1", "UNITREE_GO1_CFG"),
+            "3": ("Unitree Go2", "UNITREE_GO2_CFG"),
+        }
+        print("\nSelect Robot Configuration for Training:")
+        for key, (name, _) in ROBOT_CHOICES.items():
+            print(f"  [{key}] {name}")
+        rob_idx = input("Enter choice [1-3] (default 3 for Go2): ").strip()
+        if not rob_idx or rob_idx not in ROBOT_CHOICES:
+            rob_idx = "3"
+        _, selected_robot_cfg = ROBOT_CHOICES[rob_idx]
     elif action == "isaac_lab":
+        # Isaac Play mode (Sim2Sim) currently spawns all three for comparison
+        selected_robot_cfg = None
+    else:
+        selected_robot_cfg = "UNITREE_GO2_CFG"
+
+    # 5. Terrain
+    selected_terrain = "flat"
+    if action == "isaac_lab" or action == "train":
+        TERRAIN_CHOICES = {
+            "1": ("Flat Plane", "flat"),
+            "2": ("Random Rough", "rough"),
+            "3": ("All Terrains (Stairs, Slopes, Boxes)", "all"),
+        }
+        print("\nSelect Terrain:")
+        for key, (name, _) in TERRAIN_CHOICES.items():
+            print(f"  [{key}] {name}")
+        ter_idx = input("Enter choice [1-3] (default 1): ").strip()
+        if not ter_idx or ter_idx not in TERRAIN_CHOICES:
+            ter_idx = "1"
+        _, selected_terrain = TERRAIN_CHOICES[ter_idx]
+
+    # 6. Num Envs
+    num_envs = "1"
+    if action in ("train", "isaac_lab"):
+        prompt = "\nEnter number of environments (leave blank for config default): " if action == "train" else "\nEnter number of environments [1-50] (default 1): "
+        num_envs = input(prompt).strip()
+        if not num_envs and action == "isaac_lab":
+            num_envs = "1"
+
+    # 7. Additional Options
+    teleop = False
+    headless = False
+    video = False
+    run_name = ""
+
+    if action == "isaac_lab":
         t_input = input("\nEnable WASD Teleoperation? [Y/n]: ").strip().lower()
         teleop = t_input != "n"
-
-    if action in ("isaac_lab", "isaac_sim", "mujoco", "gazebo", "mujoco_twin"):
-        headless = False
-    elif action == "train":
+    
+    if action == "train":
         h_input = input("\nEnable Headless Mode? [Y/n]: ").strip().lower()
         headless = h_input != "n"
-
-    run_name = ""
-    if action == "train":
         v_input = input("\nEnable Video Recording? [Y/n]: ").strip().lower()
         video = v_input != "n"
 
@@ -308,6 +297,8 @@ def run_cli_menu():
         video,
         run_name,
     )
+
+
 
 
 if __name__ == "__main__":
@@ -426,9 +417,14 @@ if __name__ == "__main__":
             env.pop("VIRTUAL_ENV", None)
             env.pop("PYTHONHOME", None)
 
-        # VDI Fixes for Gazebo/ROS 2
-        env["FORCE_SOFTWARE_RENDER"] = "1"
-        env["GZ_PARTITION"] = "quadruped_sim"
+        # VDI Fixes - Only force software render for Gazebo if it has GL issues
+        if action == "gazebo":
+            env["FORCE_SOFTWARE_RENDER"] = "1"
+            env["GZ_PARTITION"] = "quadruped_sim"
+        else:
+            env.pop("FORCE_SOFTWARE_RENDER", None)
+
+
         # GZ_HEADLESS=1 can be used to disable GUI for performance
         # env["GZ_HEADLESS"] = "1"
 
@@ -485,7 +481,10 @@ if __name__ == "__main__":
     elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin"):
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@corp.udesc.br/env_isaacsim/bin/python"
-        sys_python = sys.executable
+        # Use system python (3.10) for ROS 2 actions to avoid version mismatch with rclpy
+        # when running the launcher from within the Isaac Sim (3.11) environment.
+        sys_python = "/usr/bin/python3" 
+
 
         if action == "isaac_sim":
             bridge_script = os.path.abspath(os.path.join("IsaacSim", "isaac_driver.py"))

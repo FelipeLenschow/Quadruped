@@ -8,8 +8,11 @@ ros2 run plotjuggler plotjuggler
 
 
 
+
+
 sudo ip route add default via 192.168.123.40 dev eth0
 
 source venv_robot/bin/activate
 
 sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+export ROS_DOMAIN_ID=1
