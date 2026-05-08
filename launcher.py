@@ -4,6 +4,7 @@ import glob
 import subprocess
 import json
 import platform
+import yaml
 
 TASKS_DIR = "IsaacLab_Tasks"
 LAST_COMMAND_FILE = ".launcher_last_command.json"
@@ -187,7 +188,16 @@ def run_cli_menu():
         print(f"[Launcher] Selected agent: {selected_ckpt}")
 
     # 4. Environment & Options
-    domain_id = input("Enter ROS_DOMAIN_ID (default 1): ").strip() or "1"
+    # Load default domain from config.yaml
+    default_domain = "1"
+    try:
+        with open("configs/config.yaml", 'r') as f:
+            cfg_data = yaml.safe_load(f)
+            default_domain = str(cfg_data.get("network", {}).get("ros_domain_id", "1"))
+    except Exception:
+        pass
+
+    domain_id = input(f"Enter ROS_DOMAIN_ID (default {default_domain}): ").strip() or default_domain
     robot_cfg = "UNITREE_GO2_CFG" # Default for now
     terrain_cfg = "flat"
     num_envs = 1
@@ -272,7 +282,6 @@ def main():
         if os.path.exists(agent_cfg):
             try:
                 with open(agent_cfg, 'r') as f:
-                    import yaml
                     data = yaml.safe_load(f)
                     # Support for different skrl/rl_games config structures
                     obs_dim = data.get("models", {}).get("policy", {}).get("input_shape", [0])[0]
