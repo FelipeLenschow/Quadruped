@@ -23,8 +23,13 @@ share/python-wheels/
 *.egg
 
 # Simulation / Logs
-logs/
-*.pt
+**/logs/**
+!**/logs/**/
+**/logs/**/*.mp4
+**/logs/**/*.tfevents*
+**/logs/**/*.pt
+!**/logs/**/best_agent.pt
+!**/logs/**/*.yaml
 *.jit
 .launcher_last_command.json
 
