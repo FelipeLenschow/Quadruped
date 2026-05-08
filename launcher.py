@@ -187,6 +187,7 @@ def run_cli_menu():
         print(f"[Launcher] Selected agent: {selected_ckpt}")
 
     # 4. Environment & Options
+    domain_id = input("Enter ROS_DOMAIN_ID (default 1): ").strip() or "1"
     robot_cfg = "UNITREE_GO2_CFG" # Default for now
     terrain_cfg = "flat"
     num_envs = 1
@@ -214,7 +215,7 @@ def run_cli_menu():
     if action in ["mujoco", "gazebo", "real_deploy"]:
         teleop = input("Enable Remote Teleop? [y/N]: ").lower().strip() == "y"
 
-    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name
+    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id
 
 def main():
     (
@@ -229,6 +230,7 @@ def main():
         headless,
         video,
         run_name,
+        domain_id,
     ) = run_cli_menu()
 
     # Save for next time
@@ -243,14 +245,15 @@ def main():
         "teleop": teleop,
         "headless": headless,
         "video": video,
-        "run_name": run_name
+        "run_name": run_name,
+        "domain_id": domain_id
     })
 
     print("\n" + "=" * 50)
     print(f"Launching {action.upper()} Mode for {module_name}!")
     print(f"Robot:    {robot_cfg}")
     print(f"Terrain:  {terrain_cfg}")
-    print(f"Envs:     {num_envs}")
+    print(f"Domain ID: {domain_id}")
     if ckpt:
         print(f"Checkpoint: {ckpt_display_name(ckpt)}")
     print(f"Teleop:   {teleop}")
@@ -258,6 +261,7 @@ def main():
 
     # Set up environment variables
     env = os.environ.copy()
+    env["ROS_DOMAIN_ID"] = str(domain_id)
     env["QUADRUPED_ROBOT_CFG"] = robot_cfg
     
     # Search for OBS_DIM in the same folder as the checkpoint
