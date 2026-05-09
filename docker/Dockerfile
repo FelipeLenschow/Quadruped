@@ -20,8 +20,12 @@ RUN sed -i 's/main/main universe/g' /etc/apt/sources.list && \
     libosmesa6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 3.5 Install PlotJuggler only if available (it natively supports AMD64 laptops, but is missing from OSRF's ARM64 robot repos)
-RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false && apt-get install -y ros-humble-plotjuggler-ros || echo "PlotJuggler unavailable on this architecture. Skipping."
+# 3.5 Install PlotJuggler and Teleop tools
+RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false && \
+    apt-get install -y \
+    ros-humble-plotjuggler-ros \
+    ros-humble-teleop-twist-keyboard \
+    || echo "Some ROS tools unavailable on this architecture. Continuing."
 
 # 4. Create a workspace
 WORKDIR /app
