@@ -205,7 +205,7 @@ def run_cli_menu():
     robot_cfg = "UNITREE_GO2_CFG" # Default for now
     terrain_cfg = "flat"
     num_envs = 1
-    headless = IS_DOCKER
+    headless = IS_ROBOT
     video = False
     teleop = False
     run_name = ""
@@ -219,7 +219,7 @@ def run_cli_menu():
         
         num_envs = input("Number of Envs (default 1): ").strip() or "1"
         
-        if not IS_DOCKER:
+        if not IS_ROBOT:
             headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
         
         if action == "train":
@@ -352,7 +352,7 @@ def main():
                 f"--obs_dim={obs_dim}",
             ]
             # Automatically enable headless in Docker or if headless flag is set
-            if IS_DOCKER or headless:
+            if headless:
                 cmd.append("--headless")
         elif action == "mujoco_twin":
             bridge_script = os.path.abspath(os.path.join("DigitalTwin", "supervisor.py"))
