@@ -118,24 +118,28 @@ def run_cli_menu():
     print(f"\n--- Selected Action: {action.upper()} ---\n")
 
     # 2. Module Selection
-    modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
+    selected_module_name = "None"
+    selected_module_path = "."
     
-    if not modules:
-        print(f"[ERROR] No modules found in {TASKS_DIR}!")
-        sys.exit(1)
+    if action not in ["mujoco_twin", "teleop"]:
+        modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
+        
+        if not modules:
+            print(f"[ERROR] No modules found in {TASKS_DIR}!")
+            sys.exit(1)
 
-    print("Select Module:")
-    for i, m in enumerate(modules):
-        print(f"  [{i+1}] {m}")
-    
-    module_choice = input(f"Enter choice [1-{len(modules)}] (default 1): ").strip() or "1"
-    try:
-        selected_module_name = modules[int(module_choice) - 1]
-    except (ValueError, IndexError):
-        selected_module_name = modules[0]
+        print("Select Module:")
+        for i, m in enumerate(modules):
+            print(f"  [{i+1}] {m}")
+        
+        module_choice = input(f"Enter choice [1-{len(modules)}] (default 1): ").strip() or "1"
+        try:
+            selected_module_name = modules[int(module_choice) - 1]
+        except (ValueError, IndexError):
+            selected_module_name = modules[0]
 
-    selected_module_path = os.path.join(TASKS_DIR, selected_module_name)
-    print(f"\n--- Operating on {selected_module_name} ---\n")
+        selected_module_path = os.path.join(TASKS_DIR, selected_module_name)
+        print(f"\n--- Operating on {selected_module_name} ---\n")
 
     # 3. Checkpoint Selection (Agent)
     # Search for any .pt files in logs folder recursively
@@ -378,7 +382,11 @@ def main():
                 f"--obs_dim={obs_dim}",
             ]
 
-        if teleop:
+        elif action == "teleop":
+            cmd = ["ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard"]
+            # No robot_key or ckpt needed for this
+
+        if teleop and action != "teleop":
             cmd.append("--teleop")
 
         subprocess.run(cmd, env=env)
