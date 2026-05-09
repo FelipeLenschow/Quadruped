@@ -360,8 +360,6 @@ def main():
                 sys_python,
                 bridge_script,
                 f"--robot={robot_key}",
-                f"--internal_policy={abs_ckpt}",
-                f"--obs_dim={obs_dim}",
             ]
         elif action == "gazebo":
             bridge_script = os.path.abspath(os.path.join("Gazebo", "gazebo_driver.py"))
@@ -373,7 +371,7 @@ def main():
                 f"--obs_dim={obs_dim}",
             ]
         elif action == "real_deploy":
-            bridge_script = os.path.abspath(os.path.join("Unitree", "unitree_driver.py"))
+            bridge_script = os.path.abspath(os.path.join("Unitree", "real_driver.py"))
             cmd = [
                 sys_python,
                 bridge_script,
@@ -386,7 +384,7 @@ def main():
             cmd = ["ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard"]
             # No robot_key or ckpt needed for this
 
-        if teleop and action != "teleop":
+        if teleop and action in ["mujoco", "isaac_sim"]:
             cmd.append("--teleop")
 
         subprocess.run(cmd, env=env)
