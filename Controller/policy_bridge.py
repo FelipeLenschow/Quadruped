@@ -65,21 +65,36 @@ class CommandProcessor:
         self.cmd_pub = self.node.create_publisher(JointState, '/commands/joint_commands', 10)
         
         # Safety / Max Torque
-        self.active_max_torque = 23.5  # Default Go2 max torque
-        self.last_torque_msg_time = 0.0 # 0 means no supervisor heartbeat received yet
+        self.safety_cfg = self.config.get("safety", {})
+        self.watchdog_timeout = self.safety_cfg.get("watchdog_timeout", 1.0)
+        self.global_max_torque = self.safety_cfg.get("global_max_torque", 23.5)
+        
+        self.active_max_torque = 0.0     # Fail-safe start: Zero torque until supervisor says otherwise
+        self.last_torque_msg_time = 0.0  # 0 means no supervisor heartbeat received yet
+        self.has_received_supervisor_msg = False
+        
         self.node.create_subscription(Float32, "/safety/max_torque", self.max_torque_cb, 10)
         
         self.node.get_logger().info(f"[CommandProcessor] Initialized for {robot_type} (Sat: {self.saturation*100}%)")
+        self.node.get_logger().info(f"[CommandProcessor] Safety: Timeout={self.watchdog_timeout}s, GlobalMax={self.global_max_torque}Nm")
 
     def max_torque_cb(self, msg: Float32):
-        self.active_max_torque = msg.data
+        # Apply global limit
+        self.active_max_torque = min(msg.data, self.global_max_torque)
         self.last_torque_msg_time = time.time()
+        self.has_received_supervisor_msg = True
 
     def process(self, actions, desired_qpos, action_scale=None, send_to_robot_cb=None):
-        # Watchdog: If we have received a heartbeat, but it's been >1.0s since the last one, drop to 0
-        if self.last_torque_msg_time > 0.0 and time.time() - self.last_torque_msg_time > 1.0:
+        # Watchdog logic
+        now = time.time()
+        if not self.has_received_supervisor_msg:
+            # Haven't received anything yet
             self.active_max_torque = 0.0
-            self.node.get_logger().warn("[CommandProcessor] Safety Watchdog triggered! Max torque set to 0.0", throttle_duration_sec=2.0)
+        elif now - self.last_torque_msg_time > self.watchdog_timeout:
+            # Heartbeat lost
+            if self.active_max_torque > 0.0:
+                self.node.get_logger().warn(f"[CommandProcessor] Safety Watchdog triggered (> {self.watchdog_timeout}s)! Max torque set to 0.0", throttle_duration_sec=2.0)
+            self.active_max_torque = 0.0
             
         # Use config action_scale unless overridden
         scale = action_scale if action_scale is not None else self.action_scale

@@ -14,22 +14,16 @@ from std_msgs.msg import Float32
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from Controller.Utils.state_estimator import rot_from_quat
-from DigitalTwin.mujoco_twin import MujocoTwin
 
 class SupervisorNode(Node):
     """
     Supervisor Node.
-    Subscribes to robot telemetry, feeds data to the Digital Twin for rendering,
-    and runs a safety check loop. Publishes max torque overrides if necessary.
+    Subscribes to robot telemetry and runs a safety check loop. 
+    Publishes max torque overrides to /safety/max_torque.
     """
     def __init__(self, robot_type="go2"):
         super().__init__("supervisor_node")
         self.robot_type = robot_type
-
-        # 1. Initialize the Twin
-        self.twin = MujocoTwin(robot_type=robot_type)
-        
-        self.isaac_names = self.twin.isaac_names
 
         # State Variables
         self.base_pos = np.array([0.0, 0.0, 0.35], dtype=np.float64)
@@ -37,8 +31,6 @@ class SupervisorNode(Node):
         self.joint_pos = np.zeros(12, dtype=np.float64)
         self.base_lin_vel_body = np.zeros(3, dtype=np.float64)
         
-        self.last_odom_time = time.time()
-
         # 2. ROS Subscriptions
         self.create_subscription(JointState, "/sensors/joint_states", self.joint_cb, 10)
         self.create_subscription(Imu, "/sensors/imu", self.imu_cb, 10)
@@ -48,21 +40,14 @@ class SupervisorNode(Node):
         self.max_torque_pub = self.create_publisher(Float32, "/safety/max_torque", 10)
 
         # 4. Timer Loops
-        # Physics update loop (~60 Hz to match rendering)
-        self.create_timer(1.0 / 60.0, self.update_twin_loop)
-        
         # Safety / NN Loop (~10 Hz)
         self.create_timer(0.1, self.safety_loop)
 
-        self.get_logger().info("Supervisor Node initialized. Twin is running.")
+        self.get_logger().info("Supervisor Node initialized. Safety loop running.")
 
     def joint_cb(self, msg: JointState):
-        for i, name in enumerate(msg.name):
-            try:
-                idx = self.isaac_names.index(name)
-                self.joint_pos[idx] = msg.position[i]
-            except ValueError:
-                pass
+        # We don't strictly need this for safety yet, but good for future NN checks
+        pass
 
     def imu_cb(self, msg: Imu):
         q = msg.orientation
@@ -71,21 +56,6 @@ class SupervisorNode(Node):
     def odom_cb(self, msg: Odometry):
         v = msg.twist.twist.linear
         self.base_lin_vel_body = np.array([v.x, v.y, v.z])
-
-    def update_twin_loop(self):
-        current_time = time.time()
-        dt = current_time - self.last_odom_time
-        self.last_odom_time = current_time
-
-        # Integrate position (rotate body velocity to world frame)
-        R = rot_from_quat(self.base_quat)
-        v_world = R @ self.base_lin_vel_body
-        
-        self.base_pos[0] += v_world[0] * dt
-        self.base_pos[1] += v_world[1] * dt
-        
-        # Feed data to the twin
-        self.twin.update_state(self.joint_pos, self.base_quat, self.base_pos)
 
     def safety_loop(self):
         """
@@ -97,7 +67,7 @@ class SupervisorNode(Node):
         
         msg = Float32()
         if robot_is_safe:
-            msg.data = 23.5  # Typical Go2 max torque
+            msg.data = 23.5  # Typical Go2 max torque (will be clipped by CommandProcessor if needed)
         else:
             msg.data = 0.0
             
@@ -113,7 +83,7 @@ def main():
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.twin.stop()
+        pass
     
     node.destroy_node()
     rclpy.shutdown()

@@ -96,6 +96,7 @@ def run_cli_menu():
     print("  [6] Deploy to Robot")
     print("  [7] Remote Teleop")
     print("  [8] Play MuJoCo Digital Twin")
+    print("  [9] Play Safety Supervisor")
 
     action_map = {
         "1": "train",
@@ -106,9 +107,10 @@ def run_cli_menu():
         "6": "real_deploy",
         "7": "teleop",
         "8": "mujoco_twin",
+        "9": "supervisor",
     }
     
-    choice = input("Enter choice [1-8] (default 4): ").strip() or "4"
+    choice = input("Enter choice [1-9] (default 4): ").strip() or "4"
     action = action_map.get(choice, "mujoco")
     
     if IS_DOCKER and choice in ["1", "2", "3"]:
@@ -121,7 +123,7 @@ def run_cli_menu():
     selected_module_name = "None"
     selected_module_path = "."
     
-    if action not in ["mujoco_twin", "teleop"]:
+    if action not in ["mujoco_twin", "supervisor", "teleop"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         
         if not modules:
@@ -160,7 +162,7 @@ def run_cli_menu():
     all_ckpts = best_agents + other_agents
     selected_ckpt = None
 
-    if action != "teleop" and action != "mujoco_twin":
+    if action not in ["teleop", "mujoco_twin", "supervisor"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -333,7 +335,7 @@ def main():
             cmd.append("--video_interval=5000")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin", "teleop"):
+    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin", "supervisor", "teleop"):
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@env_isaacsim/bin/python"
         # Use the current Python interpreter to ensure we pick up the correct virtualenv/environment
@@ -362,6 +364,13 @@ def main():
             if headless:
                 cmd.append("--headless")
         elif action == "mujoco_twin":
+            bridge_script = os.path.abspath(os.path.join("DigitalTwin", "mujoco_twin.py"))
+            cmd = [
+                sys_python,
+                bridge_script,
+                f"--robot={robot_key}",
+            ]
+        elif action == "supervisor":
             bridge_script = os.path.abspath(os.path.join("DigitalTwin", "supervisor.py"))
             cmd = [
                 sys_python,
