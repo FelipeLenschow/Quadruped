@@ -60,28 +60,12 @@ def run_cli_menu():
         
     print("=" * 50 + "\n")
 
-    # 0. Load last command
-    last_cmd = load_last_command()
-    if last_cmd:
-        print(f"Last command: {last_cmd.get('action')} on {last_cmd.get('module_name')}")
-        quick_start = input("Press Enter to repeat last command or any key to select new: ").strip()
-        if not quick_start:
-            return (
-                last_cmd["module_name"],
-                last_cmd["module_path"],
-                last_cmd["action"],
-                last_cmd["robot_cfg"],
-                last_cmd["terrain_cfg"],
-                last_cmd["num_envs"],
-                last_cmd["ckpt"],
-                last_cmd["teleop"],
-                last_cmd["headless"],
-                last_cmd.get("video", False),
-                last_cmd.get("run_name", ""),
-            )
-
     # 1. Action Selection
+    last_cmd = load_last_command()
     print("Select Action:")
+    if last_cmd:
+        print(f"  [0] Repeat Last: {last_cmd.get('action')} on {last_cmd.get('module_name')}")
+    
     if not IS_DOCKER:
         print("  [1] Train Policy")
         print("  [2] Play Policy (IsaacLab)")
@@ -99,6 +83,7 @@ def run_cli_menu():
     print("  [9] Play Safety Supervisor")
 
     action_map = {
+        "0": "repeat",
         "1": "train",
         "2": "isaac_lab",
         "3": "isaac_sim",
@@ -110,9 +95,34 @@ def run_cli_menu():
         "9": "supervisor",
     }
     
-    choice = input("Enter choice [1-9] (default 4): ").strip() or "4"
+    default_action = "0" if last_cmd else "4"
+    choice = input(f"Enter choice [0-9] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice, "mujoco")
     
+    if action == "repeat" and last_cmd:
+        # Load with defaults to avoid KeyError on old config files
+        action = last_cmd.get("action", "mujoco")
+        
+        # Enforce Docker restrictions even on repeated commands
+        if IS_DOCKER and action in ["train", "isaac_lab", "isaac_sim"]:
+            print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
+            action = "mujoco"
+
+        return (
+            last_cmd.get("module_name", "None"),
+            last_cmd.get("module_path", "."),
+            action,
+            last_cmd.get("robot_cfg", "UNITREE_GO2_CFG"),
+            last_cmd.get("terrain_cfg", "flat"),
+            last_cmd.get("num_envs", "1"),
+            last_cmd.get("ckpt"),
+            last_cmd.get("teleop", False),
+            last_cmd.get("headless", IS_DOCKER),
+            last_cmd.get("video", False),
+            last_cmd.get("run_name", ""),
+            last_cmd.get("domain_id", "1")
+        )
+
     if IS_DOCKER and choice in ["1", "2", "3"]:
         print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Switching to MuJoCo.")
         action = "mujoco"
