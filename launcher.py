@@ -151,15 +151,9 @@ def run_cli_menu():
     # Also check a 'checkpoints' folder at the module root just in case
     checkpoint_paths += glob.glob(os.path.join(selected_module_path, "checkpoints", "*.pt"))
     
-    # Filter to prioritize 'best_agent.pt' but keep others
-    best_agents = [p for p in checkpoint_paths if os.path.basename(p) == "best_agent.pt"]
-    other_agents = [p for p in checkpoint_paths if os.path.basename(p) != "best_agent.pt"]
-    
-    # Sort and prioritize best_agents
-    best_agents.sort(reverse=True)
-    other_agents.sort(reverse=True)
-    
-    all_ckpts = best_agents + other_agents
+    # Filter to only show 'best_agent.pt'
+    all_ckpts = [p for p in checkpoint_paths if os.path.basename(p) == "best_agent.pt"]
+    all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
     if action not in ["teleop", "mujoco_twin", "supervisor"]:
@@ -338,8 +332,19 @@ def main():
     elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin", "supervisor", "teleop"):
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@env_isaacsim/bin/python"
-        # Use the current Python interpreter to ensure we pick up the correct virtualenv/environment
         sys_python = sys.executable 
+        # ROS 2 Humble is strictly tied to Python 3.10. 
+        # If we are in an IsaacSim env (3.11), we must fallback to 3.10 for ROS drivers.
+        if action in ("mujoco", "gazebo", "real_deploy", "mujoco_twin", "supervisor"):
+            if sys.version_info[:2] != (3, 10):
+                if os.path.exists("/usr/bin/python3.10"):
+                    sys_python = "/usr/bin/python3.10"
+                    print(f"[INFO] ROS 2 Humble requires Python 3.10. Switching from {sys.version_info[0]}.{sys.version_info[1]} to {sys_python}.")
+                else:
+                    print(f"\n" + "!" * 50)
+                    print(f"[WARNING] ROS 2 Humble requires Python 3.10, but you are running {sys.version_info[0]}.{sys.version_info[1]}.")
+                    print(f"          /usr/bin/python3.10 was not found. This will likely cause 'rclpy' errors.")
+                    print("!" * 50 + "\n")
 
 
         if action == "isaac_sim":
