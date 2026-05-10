@@ -333,7 +333,7 @@ def main():
             cmd.append("--video_interval=5000")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin"):
+    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin", "teleop"):
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@env_isaacsim/bin/python"
         # Use the current Python interpreter to ensure we pick up the correct virtualenv/environment
