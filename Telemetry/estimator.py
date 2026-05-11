@@ -20,6 +20,9 @@ import numpy as np
 # Helpers
 # ---------------------------------------------------------------------------
 
+_GRAVITY_WORLD = np.array([0.0, 0.0, -9.81])
+
+
 def rot_from_quat(quat_wxyz) -> np.ndarray:
     """Return 3×3 rotation matrix (body → world) from quaternion [w, x, y, z]."""
     w, x, y, z = quat_wxyz
@@ -28,6 +31,31 @@ def rot_from_quat(quat_wxyz) -> np.ndarray:
         [2*x*y + 2*w*z,         1 - 2*x**2 - 2*z**2,  2*y*z - 2*w*x],
         [2*x*z - 2*w*y,         2*y*z + 2*w*x,        1 - 2*x**2 - 2*y**2],
     ])
+
+
+def projected_gravity_b(quat_wxyz) -> np.ndarray:
+    """
+    Return the gravity vector expressed in the robot body frame.
+
+    Mirrors Isaac Lab's ``projected_gravity_b`` observation:
+        projected_gravity = R^T @ g_world
+    where R = rot_from_quat(quat_wxyz)  (body → world).
+
+    Typical values
+    --------------
+    Upright robot : [~0,  ~0, -9.81]   z-component ≈ -9.81
+    On its side   : z-component ≈  0
+    Upside down   : z-component ≈ +9.81
+
+    Tilt cosine (used for fall detection)
+    --------------------------------------
+        base_tilt_cos = -projected_gravity_b(q)[2] / 9.81
+        → 1.0  perfectly upright
+        → 0.0  robot on its side
+        → 0.7  ≈ 45° (training termination default)
+    """
+    R = rot_from_quat(quat_wxyz)
+    return R.T @ _GRAVITY_WORLD
 
 
 # ---------------------------------------------------------------------------

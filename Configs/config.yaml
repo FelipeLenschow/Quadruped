@@ -44,3 +44,12 @@ safety:
   watchdog_timeout: 1.0     # Seconds before torque is zeroed if no heartbeat
   supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
   global_max_torque: 10.0    # Absolute limit (Nm) even if supervisor allows more
+
+  # Fall-detection threshold (mirrors training's base_angle_termination_thresh).
+  # Cosine of the tilt angle between the robot's z-axis and world z-axis.
+  #   1.0 = perfectly upright
+  #   0.7 = ~45° tilt  (training default — aggressive, use for sim)
+  #   0.5 = ~60° tilt  (supervisor default — safer for real hardware)
+  #   0.0 = robot on its side
+  # Robot is shut down (torque → 0) when cos(θ) falls below this value.
+  base_angle_termination_thresh: 0.5

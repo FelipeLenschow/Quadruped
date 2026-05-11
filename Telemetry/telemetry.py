@@ -4,8 +4,9 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion, Vector3
+from std_msgs.msg import Float32, Float32MultiArray
 import numpy as np
-from .estimator import StateEstimator, rot_from_quat
+from .estimator import StateEstimator, rot_from_quat, projected_gravity_b
 from Configs.config_loader import load_config
 
 
@@ -80,10 +81,20 @@ class TelemetryManager:
             
         self.estimator = StateEstimator(dt=dt, decay_dict=decay_dict)
 
-        # ROS 2 Publishers
+        # ROS 2 Publishers — raw sensors
         self.joint_pub = self.node.create_publisher(JointState, '/sensors/joint_states', 10)
         self.imu_pub   = self.node.create_publisher(Imu,        '/sensors/imu',          10)
         self.odom_pub  = self.node.create_publisher(Odometry,   '/odom',                 10)
+
+        # ROS 2 Publishers — derived / estimated state
+        # These are computed from raw sensor data by the TelemetryManager so that
+        # downstream nodes (Supervisor, Controller, Digital Twin) do not need to
+        # re-implement any geometry or estimation logic.
+        self.proj_gravity_pub  = self.node.create_publisher(Vector3,          '/estimator/projected_gravity', 10)
+        self.base_lin_vel_pub  = self.node.create_publisher(Vector3,          '/estimator/base_lin_vel',      10)
+        self.base_ang_vel_pub  = self.node.create_publisher(Vector3,          '/estimator/base_ang_vel',      10)
+        self.base_height_pub   = self.node.create_publisher(Float32,          '/estimator/base_height',       10)
+        self.feet_contact_pub  = self.node.create_publisher(Float32MultiArray,'/estimator/feet_contact',      10)
 
     # ------------------------------------------------------------------
     def process_state(self, q, dq, quat, gyro, accel=None, pos=None, vel=None, contact=None):
@@ -136,10 +147,12 @@ class TelemetryManager:
 
     # ------------------------------------------------------------------
     def publish(self, sim_time, state: StandardState):
-        """Publishes the standardized state to ROS 2 topics."""
+        """Publishes raw sensor data and all derived/estimated state to ROS 2 topics."""
         msg_time = rclpy.time.Time(seconds=sim_time).to_msg()
 
-        # 1. Joint States
+        # ── 1. Raw sensors ────────────────────────────────────────────────
+
+        # 1a. Joint States
         js = JointState()
         js.header.stamp = msg_time
         js.name         = self.joint_names
@@ -147,7 +160,7 @@ class TelemetryManager:
         js.velocity     = [float(m.dq) for m in state.motorState]
         self.joint_pub.publish(js)
 
-        # 2. IMU
+        # 1b. IMU
         imu = Imu()
         imu.header.stamp    = msg_time
         imu.header.frame_id = 'imu_link'
@@ -161,11 +174,43 @@ class TelemetryManager:
             imu.linear_acceleration = Vector3(x=float(ac[0]), y=float(ac[1]), z=float(ac[2]))
         self.imu_pub.publish(imu)
 
-        # 3. Odometry (estimated or measured velocity)
+        # 1c. Odometry (estimated or measured velocity)
         odom = Odometry()
-        odom.header.stamp      = msg_time
-        odom.header.frame_id   = 'odom'
-        odom.child_frame_id    = 'base'
+        odom.header.stamp       = msg_time
+        odom.header.frame_id    = 'odom'
+        odom.child_frame_id     = 'base'
         lv = state.base_lin_vel
         odom.twist.twist.linear = Vector3(x=float(lv[0]), y=float(lv[1]), z=float(lv[2]))
         self.odom_pub.publish(odom)
+
+        # ── 2. Derived / Estimated state (/estimator/*) ───────────────────
+        # These are computed once here so all downstream nodes get a
+        # consistent, geometry-free view of the robot state.
+
+        # 2a. Projected gravity — gravity vector in body frame.
+        #     Mirrors Isaac Lab's projected_gravity_b observation.
+        #     Upright: ≈ [0, 0, -9.81]  |  On side: z ≈ 0
+        pg = projected_gravity_b(state.imu.quaternion)
+        self.proj_gravity_pub.publish(
+            Vector3(x=float(pg[0]), y=float(pg[1]), z=float(pg[2]))
+        )
+
+        # 2b. Linear base velocity in body frame (estimated or GT)
+        self.base_lin_vel_pub.publish(
+            Vector3(x=float(lv[0]), y=float(lv[1]), z=float(lv[2]))
+        )
+
+        # 2c. Angular base velocity in body frame (from IMU gyroscope)
+        self.base_ang_vel_pub.publish(
+            Vector3(x=float(gv[0]), y=float(gv[1]), z=float(gv[2]))
+        )
+
+        # 2d. Base height (z from odom position, or default if not available)
+        height_msg = Float32()
+        height_msg.data = float(state.base_pos[2]) if state.base_pos else 0.35
+        self.base_height_pub.publish(height_msg)
+
+        # 2e. Feet contact flags [FL, FR, RL, RR] — binary floats
+        fc_msg = Float32MultiArray()
+        fc_msg.data = [float(c) for c in state.feet_contact]
+        self.feet_contact_pub.publish(fc_msg)
