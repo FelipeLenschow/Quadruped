@@ -23,7 +23,7 @@ Fix Gazebo
 Make the same get_dones from training to the Supervisor
 Make multiple policies available for the user to choose with a smoth transition
 Make a way to reward a walking pattern
-Add the forward kinematics to the state estimator
+- Add the forward kinematics to the state estimator (DONE: LKF + FK leg odometry)
 
 
 cp5: Added sensor noise

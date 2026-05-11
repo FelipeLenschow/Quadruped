@@ -13,12 +13,15 @@ control:
 state_estimator:
   use_estimator: false    # Switch between perfect and estimated odom
   dt: 0.02                # Control loop dt (50Hz)
-  contact_threshold: 50.0 # Raw FSR value threshold for contact
-  # Contact decay parameters (per step at 50Hz)
-  decay:
-    standing: 0.90        # 4 feet
-    trot: 0.98            # 2 feet
-    air: 0.999            # 0 feet
+  contact_threshold: 50.0 # Raw FSR value threshold for binary contact flag
+
+  # Linear Kalman Filter (LKF) — 6-state: body velocity + accelerometer bias
+  # Increase q_vel  → trust IMU more  (faster response, more noise)
+  # Increase r_meas → trust FK less   (smoother, but slower correction)
+  kalman:
+    process_noise_vel:  0.01   # Q diagonal — velocity states  (m/s)²/step
+    process_noise_bias: 0.001  # Q diagonal — accel bias states (m/s²)²/step
+    measurement_noise:  0.05   # R diagonal — leg odometry measurement (m/s)²
 
 # --- Safety Limits (Radians) ---
 joint_limits:

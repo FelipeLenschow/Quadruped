@@ -1,0 +1,32 @@
+# Unitree Go2 — Forward Kinematics Parameters
+# Source: Mujoco/mujoco_menagerie/unitree_go2/go2.xml
+#
+# Leg order: FL=0, FR=1, RL=2, RR=3
+# Joint order per leg: [hip_abduction, thigh, calf]
+# Joint axes (body frame): abduction=X, thigh=Y, calf=Y
+
+go2_kinematics:
+
+  # Hip origins in body frame [x, y, z] (m)
+  # Extracted from <body name="XX_hip" pos="..."> in go2.xml
+  hip_origins:
+    FL: [ 0.1934,  0.0465, 0.0]
+    FR: [ 0.1934, -0.0465, 0.0]
+    RL: [-0.1934,  0.0465, 0.0]
+    RR: [-0.1934, -0.0465, 0.0]
+
+  # Abduction offset: distance from hip joint to thigh joint along Y (m)
+  # Extracted from <body name="XX_thigh" pos="0 ±0.0955 0">
+  # Positive for left legs (FL, RL), negative for right legs (FR, RR).
+  thigh_offset_y:
+    FL:  0.0955
+    FR: -0.0955
+    RL:  0.0955
+    RR: -0.0955
+
+  # Link lengths (m)
+  # thigh: distance from thigh joint to calf joint (from <body name="XX_calf" pos="0 0 -0.213">)
+  # calf:  distance from calf joint to foot contact point (from <geom class="foot" pos="-0.002 0 -0.213">)
+  thigh_length: 0.213
+  calf_length:  0.213
+  foot_x_offset: -0.002   # small forward offset of the foot sphere in calf frame
