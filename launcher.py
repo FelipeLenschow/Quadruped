@@ -140,7 +140,8 @@ def run_cli_menu():
             last_cmd.get("headless", IS_DOCKER),
             last_cmd.get("video", False),
             last_cmd.get("run_name", ""),
-            last_cmd.get("domain_id", "1")
+            last_cmd.get("domain_id", "1"),
+            last_cmd.get("use_estimator", False),
         )
 
     # 1.2 Validation
@@ -241,6 +242,7 @@ def run_cli_menu():
     video = False
     teleop = False
     run_name = ""
+    use_estimator = False
 
     if action in ["train", "isaac_lab", "isaac_sim"]:
         robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1] (default 1): ").strip() or "1"
@@ -268,7 +270,11 @@ def run_cli_menu():
         if not IS_ROBOT and action != "real_deploy":
             headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
 
-    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id
+    if action in ["mujoco", "gazebo", "isaac_sim"]:
+        ans = input("Use State Estimator? [Y/n] (default Y): ").lower().strip()
+        use_estimator = ans != "n"
+
+    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator
 
 def main():
     (
@@ -284,6 +290,7 @@ def main():
         video,
         run_name,
         domain_id,
+        use_estimator,
     ) = run_cli_menu()
 
     # Save for next time
@@ -299,7 +306,8 @@ def main():
         "headless": headless,
         "video": video,
         "run_name": run_name,
-        "domain_id": domain_id
+        "domain_id": domain_id,
+        "use_estimator": use_estimator,
     })
 
     print("\n" + "=" * 50)
@@ -380,6 +388,8 @@ def main():
                 f"--internal_policy={abs_ckpt}",
                 f"--obs_dim={obs_dim}",
             ]
+            if use_estimator:
+                cmd.append("--use_estimator")
         elif action == "mujoco":
             bridge_script = os.path.abspath(os.path.join("Mujoco", "mujoco_driver.py"))
             cmd = [
@@ -392,6 +402,8 @@ def main():
             # Automatically enable headless in Docker or if headless flag is set
             if headless:
                 cmd.append("--headless")
+            if use_estimator:
+                cmd.append("--use_estimator")
         elif action == "mujoco_twin":
             bridge_script = os.path.abspath(os.path.join("DigitalTwin", "mujoco_twin.py"))
             cmd = [
@@ -415,6 +427,8 @@ def main():
                 f"--internal_policy={abs_ckpt}",
                 f"--obs_dim={obs_dim}",
             ]
+            if use_estimator:
+                cmd.append("--use_estimator")
         elif action == "real_deploy":
             bridge_script = os.path.abspath(os.path.join("Unitree", "real_driver.py"))
             cmd = [
