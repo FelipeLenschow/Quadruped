@@ -13,7 +13,7 @@ from std_msgs.msg import Float32
 # Ensure absolute path of the repository is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from configs.config_loader import load_config
+from Configs.config_loader import load_config
 from Telemetry.estimator import rot_from_quat
 
 class SupervisorNode(Node):

@@ -7,7 +7,7 @@ def load_config(config_path=None):
     Defaults to Controller/config/config.yaml.
     """
     if config_path is None:
-        # Default path relative to this file (now in configs/)
+        # Default path relative to this file (now in Configs/)
         base_path = os.path.dirname(os.path.abspath(__file__))
         config_path = os.path.join(base_path, "config.yaml")
 

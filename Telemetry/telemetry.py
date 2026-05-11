@@ -6,7 +6,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion, Vector3
 import numpy as np
 from .estimator import StateEstimator, rot_from_quat
-from configs.config_loader import load_config
+from Configs.config_loader import load_config
 
 
 # ---------------------------------------------------------------------------

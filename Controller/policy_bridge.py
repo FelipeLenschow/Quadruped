@@ -15,7 +15,7 @@ import time
 
 # Add parent directory to sys.path to import modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from configs.config_loader import load_config
+from Configs.config_loader import load_config
 import yaml
 from std_msgs.msg import Float32
 

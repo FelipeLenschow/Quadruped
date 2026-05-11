@@ -22,7 +22,7 @@ from pathlib import Path
 from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
 from Telemetry.telemetry import TelemetryManager
-from configs.config_loader import load_config
+from Configs.config_loader import load_config
 
 # ROS 2 Standard Imports
 import rclpy

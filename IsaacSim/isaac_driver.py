@@ -67,7 +67,7 @@ from isaaclab.utils import configclass
 from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
 from Telemetry.telemetry import TelemetryManager
-from configs.config_loader import load_config
+from Configs.config_loader import load_config
 
 from isaaclab_assets.robots.unitree import (
     UNITREE_A1_CFG,

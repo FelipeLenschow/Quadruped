@@ -227,7 +227,7 @@ def run_cli_menu():
     # Load default domain from config.yaml
     default_domain = "1"
     try:
-        with open("configs/config.yaml", 'r') as f:
+        with open("Configs/config.yaml", 'r') as f:
             cfg_data = yaml.safe_load(f)
             default_domain = str(cfg_data.get("network", {}).get("ros_domain_id", "1"))
     except Exception:
