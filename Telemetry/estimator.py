@@ -121,3 +121,22 @@ class StateEstimator:
     def velocity(self) -> np.ndarray:
         """Current velocity estimate (body frame)."""
         return self._v_body.copy()
+
+
+if __name__ == "__main__":
+    # Simple test
+    est = StateEstimator(dt=0.02)
+    # Upright and still
+    q = [1.0, 0.0, 0.0, 0.0]
+    a = [0.0, 0.0, 9.81]
+    c = [1.0, 1.0, 1.0, 1.0]
+    
+    v = est.update(q, a, c)
+    print(f"Stationary velocity (should be ~0): {v}")
+    
+    # Simple acceleration
+    a = [1.0, 0.0, 9.81] # accelerating at 1m/s^2 forward
+    c = [0.0, 0.0, 0.0, 0.0] # airborne
+    for _ in range(50): # 1 second
+        v = est.update(q, a, c)
+    print(f"Velocity after 1s at 1m/s^2 (should be ~1.0): {v[0]:.3f}")

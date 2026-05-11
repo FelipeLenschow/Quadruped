@@ -18,7 +18,7 @@ sys.path.append(
 
 # from Controller.policy_runner import PolicyRunner # Moved to local import
 from Controller.policy_bridge import CommandProcessor
-from Controller.Utils.telemetry import TelemetryManager
+from Telemetry.telemetry import TelemetryManager
 
 # SDK2 Imports
 from unitree_sdk2py.core.channel import (

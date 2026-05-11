@@ -24,7 +24,7 @@ import argparse
 import threading
 from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
-from Controller.Utils.telemetry import TelemetryManager
+from Telemetry.telemetry import TelemetryManager
 from configs.config_loader import load_config
 
 

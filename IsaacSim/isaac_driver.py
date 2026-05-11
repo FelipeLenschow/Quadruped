@@ -66,7 +66,7 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
-from Controller.Utils.telemetry import TelemetryManager
+from Telemetry.telemetry import TelemetryManager
 from configs.config_loader import load_config
 
 from isaaclab_assets.robots.unitree import (

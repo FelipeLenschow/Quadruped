@@ -16,7 +16,7 @@ import mujoco.viewer
 # Ensure absolute path of the repository is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from Controller.Utils.state_estimator import rot_from_quat
+from Telemetry.estimator import rot_from_quat
 
 class MujocoTwinNode(Node):
     """
