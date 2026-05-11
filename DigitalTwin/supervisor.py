@@ -13,6 +13,7 @@ from std_msgs.msg import Float32
 # Ensure absolute path of the repository is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from Controller.Utils.config_loader import load_config
 from Controller.Utils.state_estimator import rot_from_quat
 
 class SupervisorNode(Node):
@@ -24,6 +25,11 @@ class SupervisorNode(Node):
     def __init__(self, robot_type="go2"):
         super().__init__("supervisor_node")
         self.robot_type = robot_type
+        
+        # 1. Load Configuration
+        self.config = load_config()
+        self.safety_cfg = self.config.get("safety", {})
+        self.freq = self.safety_cfg.get("supervisor_frequency", 10.0)
 
         # State Variables
         self.base_pos = np.array([0.0, 0.0, 0.35], dtype=np.float64)
@@ -40,10 +46,11 @@ class SupervisorNode(Node):
         self.max_torque_pub = self.create_publisher(Float32, "/safety/max_torque", 10)
 
         # 4. Timer Loops
-        # Safety / NN Loop (~10 Hz)
-        self.create_timer(0.1, self.safety_loop)
+        # Safety / NN Loop
+        self.timer_period = 1.0 / self.freq
+        self.create_timer(self.timer_period, self.safety_loop)
 
-        self.get_logger().info("Supervisor Node initialized. Safety loop running.")
+        self.get_logger().info(f"Supervisor Node initialized at {self.freq}Hz. Safety loop running.")
 
     def joint_cb(self, msg: JointState):
         # We don't strictly need this for safety yet, but good for future NN checks

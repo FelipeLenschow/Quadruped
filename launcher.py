@@ -75,12 +75,23 @@ def run_cli_menu():
         print("  [X] Play Policy (IsaacLab) (DISABLED IN DOCKER)")
         print("  [X] Play Policy (IsaacSim Bridge) (DISABLED IN DOCKER)")
         
-    print("  [4] Play MuJoCo")
-    print("  [5] Play Gazebo")
-    print("  [6] Deploy to Robot")
-    print("  [7] Remote Teleop")
-    print("  [8] Play MuJoCo Digital Twin")
-    print("  [9] Play Safety Supervisor")
+    # Detect if we are in an environment that CANNOT run ROS 2 Humble natively
+    requires_docker = not IS_DOCKER and sys.version_info[:2] != (3, 10)
+    
+    if not requires_docker:
+        print("  [4] Play MuJoCo")
+        print("  [5] Play Gazebo")
+        print("  [6] Deploy to Robot")
+        print("  [7] Remote Teleop")
+        print("  [8] Play MuJoCo Digital Twin")
+        print("  [9] Play Safety Supervisor")
+    else:
+        print("  [X] Play MuJoCo (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Play Gazebo (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Deploy to Robot (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Remote Teleop (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Play MuJoCo Digital Twin (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Play Safety Supervisor (REQUIRES DOCKER OR PY3.10)")
 
     action_map = {
         "0": "repeat",
@@ -96,9 +107,13 @@ def run_cli_menu():
     }
     
     default_action = "0" if last_cmd else "4"
+    if requires_docker and default_action == "4":
+        default_action = "None" # No valid default if MuJoCo is blocked
+
     choice = input(f"Enter choice [0-9] (default {default_action}): ").strip() or default_action
-    action = action_map.get(choice, "mujoco")
+    action = action_map.get(choice, "None")
     
+    # 1.1 Handle Repeat
     if action == "repeat" and last_cmd:
         # Load with defaults to avoid KeyError on old config files
         action = last_cmd.get("action", "mujoco")
@@ -107,6 +122,11 @@ def run_cli_menu():
         if IS_DOCKER and action in ["train", "isaac_lab", "isaac_sim"]:
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
+        
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "mujoco_twin", "supervisor"]:
+            if sys.version_info[:2] != (3, 10):
+                print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
+                sys.exit(1)
 
         return (
             last_cmd.get("module_name", "None"),
@@ -123,9 +143,15 @@ def run_cli_menu():
             last_cmd.get("domain_id", "1")
         )
 
+    # 1.2 Validation
     if IS_DOCKER and choice in ["1", "2", "3"]:
-        print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Switching to MuJoCo.")
-        action = "mujoco"
+        print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Aborting.")
+        sys.exit(1)
+        
+    if requires_docker and choice in ["4", "5", "6", "7", "8", "9"]:
+        print(f"\n[ERROR] Action '{action}' requires ROS 2 Humble (Python 3.10).")
+        print("        Please run this task inside DOCKER or switch to a 3.10 environment.")
+        sys.exit(1)
 
     print(f"\n--- Selected Action: {action.upper()} ---\n")
 
@@ -343,18 +369,6 @@ def main():
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@env_isaacsim/bin/python"
         sys_python = sys.executable 
-        # ROS 2 Humble is strictly tied to Python 3.10. 
-        # If we are in an IsaacSim env (3.11), we must fallback to 3.10 for ROS drivers.
-        if action in ("mujoco", "gazebo", "real_deploy", "mujoco_twin", "supervisor"):
-            if sys.version_info[:2] != (3, 10):
-                if os.path.exists("/usr/bin/python3.10"):
-                    sys_python = "/usr/bin/python3.10"
-                    print(f"[INFO] ROS 2 Humble requires Python 3.10. Switching from {sys.version_info[0]}.{sys.version_info[1]} to {sys_python}.")
-                else:
-                    print(f"\n" + "!" * 50)
-                    print(f"[WARNING] ROS 2 Humble requires Python 3.10, but you are running {sys.version_info[0]}.{sys.version_info[1]}.")
-                    print(f"          /usr/bin/python3.10 was not found. This will likely cause 'rclpy' errors.")
-                    print("!" * 50 + "\n")
 
 
         if action == "isaac_sim":

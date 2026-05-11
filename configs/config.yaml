@@ -42,4 +42,5 @@ network:
 # --- Safety ---
 safety:
   watchdog_timeout: 1.0     # Seconds before torque is zeroed if no heartbeat
-  global_max_torque: 5.0    # Absolute limit (Nm) even if supervisor allows more
+  supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
+  global_max_torque: 10.0    # Absolute limit (Nm) even if supervisor allows more

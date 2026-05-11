@@ -18,8 +18,7 @@ Add a way to hold the robot in mid air
 - Add video output of the training
 Add noise for the world data/feedback
 Add penalty for hard impact on the ground when stepping
-
-MAKE THE POLICIES REALLY ONLY APPLY TORQUE WHEN SUPERVISOR ALLOWS
+- MAKE THE POLICIES REALLY ONLY APPLY TORQUE WHEN SUPERVISOR ALLOWS
 
 
 

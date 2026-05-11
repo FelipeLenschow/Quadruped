@@ -16,3 +16,5 @@ source venv_robot/bin/activate
 
 sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
 export ROS_DOMAIN_ID=1
+
+https://app.diagrams.net/#G1GvJtiRjVAKMMoCu5S3hGDXMBrdPyqgD7#%7B%22pageId%22%3A%22iOS9X8VqbEqsnCgDxonq%22%7D
