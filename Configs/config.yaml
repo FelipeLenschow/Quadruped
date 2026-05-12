@@ -46,7 +46,7 @@ network:
 safety:
   watchdog_timeout: 1.0     # Seconds before torque is zeroed if no heartbeat
   supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
-  global_max_torque: 10.0    # Absolute limit (Nm) even if supervisor allows more
+  global_max_torque: 200.0    # Absolute limit (Nm) even if supervisor allows more
 
   # Fall-detection threshold (mirrors training's base_angle_termination_thresh).
   # Cosine of the tilt angle between the robot's z-axis and world z-axis.

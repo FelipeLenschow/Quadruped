@@ -59,7 +59,7 @@
 
         <include>
             <pose>0 0 0.38 0 0 0</pose>
-            <uri>model://unitree_go2</uri>
+            <uri>model://go2_description</uri>
             <name>go2</name>
         </include>
     </world>

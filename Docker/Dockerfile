@@ -5,8 +5,10 @@ FROM ros:humble-ros-base
 # 2. Prevent interactive prompts during apt installations
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 3. Enable the Universe repository (required for minimal ARM64 base images) and install dependencies
-RUN sed -i 's/main/main universe/g' /etc/apt/sources.list && \
+# 3. Enable the Universe repository and Gazebo Harmonic Repository
+RUN apt-get update && apt-get install -y curl gnupg lsb-release && \
+    curl https://packages.osrfoundation.org/gazebo.gpg --output /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null && \
     apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false && apt-get install -y \
     build-essential \
     cmake \
@@ -14,10 +16,12 @@ RUN sed -i 's/main/main universe/g' /etc/apt/sources.list && \
     python3-pip \
     python3-venv \
     wget \
-    curl \
     libglfw3-dev \
     libgl1-mesa-glx \
     libosmesa6-dev \
+    gz-harmonic \
+    python3-gz-transport13 \
+    python3-gz-msgs10 \
     && rm -rf /var/lib/apt/lists/*
 
 # 3.5 Install PlotJuggler and Teleop tools
@@ -37,9 +41,9 @@ RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.
     cmake --build . --target install && \
     rm -rf /tmp/cyclonedds
 
-# 6. Setup Python Virtual Environment
+# 6. Setup Python Virtual Environment (Allow access to system site-packages for Gazebo bindings)
 ENV VIRTUAL_ENV=/opt/venv
-RUN python3 -m venv $VIRTUAL_ENV
+RUN python3 -m venv --system-site-packages $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # 6.5 Define paths for CycloneDDS (required for pip install cyclonedds)
@@ -50,6 +54,7 @@ ENV LD_LIBRARY_PATH="/usr/local/lib"
 # Upgrading pip and installing wheel first is good practice
 RUN pip install --no-cache-dir --upgrade pip wheel && \
     pip install --no-cache-dir \
+    protobuf==3.20.3 \
     cyclonedds==0.10.2 \
     numpy \
     pyyaml \
@@ -62,9 +67,10 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
     skrl \
     tensorboard
 
-# 8. Set environment variables for Domain Isolation
+# 8. Set environment variables for Domain Isolation and Protobuf compatibility
 ENV ROS_DOMAIN_ID=1
 ENV ROS_LOCALHOST_ONLY=0
+ENV PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 
 # 9. Source ROS 2 automatically when entering the container
 RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc

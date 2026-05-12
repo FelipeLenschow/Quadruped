@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Gazebo Sim2Sim: Clean, direct policy-to-ActuatorNet control.
+Gazebo Sim2Sim: Clean, direct PD torque control.
 MuJoCo parity implementation for Gazebo Harmonic.
+Uses the same DCMotor model (kp=25, kd=0.5) as IsaacLab training.
 """
 
 import argparse
@@ -33,24 +34,33 @@ except ImportError:
 # Add root to sys.path so we can import modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from Controller.policy_runner import PolicyRunner
-from Mujoco.unitree_sdk_mock import quat_to_rot_matrix
+from Controller.policy_runner import quat_to_rot_matrix
 
 # ── constants ──────────────────────────────────────────────────────────────────
 ACTION_SCALE = 0.25
+DECIMATION = 20
+SIM_DT = 0.001
+STEP_DT = SIM_DT * DECIMATION
+KP = 25.0
+KD = 0.5
+EFFORT_LIMIT = 23.5
+SATURATION_EFFORT = 23.5
+VEL_LIMIT = 30.0
 JOINT_NAMES = [
-    "lf_haa_joint",
-    "rf_haa_joint",
-    "lh_haa_joint",
-    "rh_haa_joint",
-    "lf_hfe_joint",
-    "rf_hfe_joint",
-    "lh_hfe_joint",
-    "rh_hfe_joint",
-    "lf_kfe_joint",
-    "rf_kfe_joint",
-    "lh_kfe_joint",
-    "rh_kfe_joint",
+    "FL_hip_joint",
+    "FR_hip_joint",
+    "RL_hip_joint",
+    "RR_hip_joint",
+    "FL_thigh_joint",
+    "FR_thigh_joint",
+    "RL_thigh_joint",
+    "RR_thigh_joint",
+    "FL_calf_joint",
+    "FR_calf_joint",
+    "RL_calf_joint",
+    "RR_calf_joint",
 ]
+HAA_SIGN = np.array([1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
 
 # ── Gazebo Sim2Sim Bridge ──────────────────────────────────────────────────────
 
@@ -70,7 +80,7 @@ class LowState:
 
 
 class GazeboSimBridge:
-    def __init__(self, robot_name="go1", world_name="quadruped_world"):
+    def __init__(self, robot_name="go2", world_name="quadruped_world"):
         self.node = GzTransportNode()
         self.robot_name = robot_name
         self.world_name = world_name
@@ -118,19 +128,17 @@ class GazeboSimBridge:
         for joint in msg.joint:
             if joint.name in JOINT_NAMES:
                 idx = JOINT_NAMES.index(joint.name)
-                self.state.motorState[idx].q = joint.axis1.position
-                self.state.motorState[idx].dq = joint.axis1.velocity
+                self.state.motorState[idx].q = joint.axis1.position * HAA_SIGN[idx]
+                self.state.motorState[idx].dq = joint.axis1.velocity * HAA_SIGN[idx]
 
     def _odom_cb(self, msg):
         self.state.base_pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
         self.state.imu.quaternion = np.array(
             [msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z]
         )
-        # World frame linear velocity
-        v_world = np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z])
-        # Rotate to body frame
-        R = quat_to_rot_matrix(self.state.imu.quaternion)
-        self.state.base_lin_vel[:] = R.T @ v_world
+        # Gazebo OdometryPublisher reports twist in BODY frame (child_frame)
+        self.state.base_lin_vel[:] = [msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z]
+        self.state.imu.gyroscope = [msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z]
 
     def reset_world(self):
         msg = world_control_pb2.WorldControl()
@@ -147,7 +155,7 @@ class GazeboSimBridge:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, help="Path to policy checkpoint")
-    parser.add_argument("--robot", default="go1")
+    parser.add_argument("--robot", default="go2")
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--vx", type=float, default=0.0)
     args = parser.parse_args()
@@ -155,11 +163,8 @@ def main():
     # Sanitization: Partitioning for Gazebo
     os.environ["GZ_PARTITION"] = "quadruped_sim"
 
-    # Load Models
+    # Load Policy (Go2 uses DCMotor PD control — no ActuatorNet needed)
     runner = PolicyRunner(args.checkpoint)
-    act_net_path = Path(__file__).parent.parent / "Mujoco" / "unitree_quadruped.pt"
-    print(f"[Gazebo] Loading ActuatorNet: {act_net_path}")
-    act_net = torch.jit.load(str(act_net_path), map_location="cpu").eval()
 
     # Launch Gazebo
     root = os.path.dirname(os.path.abspath(__file__))
@@ -170,6 +175,8 @@ def main():
         root
         + os.pathsep
         + os.path.join(root, "models")
+        + os.pathsep
+        + os.path.abspath(os.path.join(root, "..", "Unitree_Go2", "models"))
         + os.pathsep
         + os.environ.get("GZ_SIM_RESOURCE_PATH", "")
     )
@@ -237,21 +244,15 @@ def main():
     print("[Gazebo] Waiting for initial state...")
     while bridge.sim_time == 0 and not _stop.is_set():
         time.sleep(0.1)
-    
+
     last_actions = np.zeros(12, dtype=np.float32)
-    desired_qpos = np.array([0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5], dtype=np.float32)
-    
-    pos_err_hist = np.zeros((3, 12), dtype=np.float32)
-    vel_hist = np.zeros((3, 12), dtype=np.float32)
-    # Initialize history with current state to avoid impulsive start
-    pos_err_hist[:] = np.array([bridge.state.motorState[j].q for j in range(12)]) - desired_qpos
-    vel_hist[:] = np.array([bridge.state.motorState[j].dq for j in range(12)])
+    desired_qpos = np.array([0.1, 0.1, 0.1, 0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5], dtype=np.float32)
+    isaac_identity = np.arange(12)
 
-    print("[Gazebo] Sim2Sim Loop Start (50Hz Policy, 200Hz Actuator)")
+    print("[Gazebo] Sim2Sim Loop Start (50Hz Policy, PD Torque Control)")
 
-    _last_pose = np.zeros(3)
-    _last_pose_time = 0.0
     count = 0
+    step_count = 0
     start_wall = time.time()
 
     try:
@@ -259,55 +260,55 @@ def main():
             state = bridge.state
             loop_sim_start = bridge.sim_time
 
-            # 1. Velocity and IMU state are updated in callbacks
-            pass
-
-            # 2. Policy Step (50Hz)
+            # 1. Policy Step (50Hz = every DECIMATION physics steps)
             obs = runner.build_obs(
-                state, commands, last_actions, desired_qpos, np.arange(12)
+                state, commands, last_actions, desired_qpos, isaac_identity
             )
             actions = runner.get_action(obs)
             targets = actions * ACTION_SCALE + desired_qpos
 
-            # 3. Actuator Sub-loop (200Hz - 4 steps per policy step)
-            for sub_idx in range(4):
-                next_act_time = loop_sim_start + (sub_idx + 1) * 0.005
-                while bridge.sim_time < next_act_time and not _stop.is_set():
+            # 2. PD Torque Sub-loop (match MuJoCo DECIMATION=20 at 1kHz physics)
+            for sub_idx in range(DECIMATION):
+                next_step_time = loop_sim_start + (sub_idx + 1) * SIM_DT
+                while bridge.sim_time < next_step_time and not _stop.is_set():
                     time.sleep(0.0001)
 
-                cur_q = np.array([state.motorState[j].q for j in range(12)])
-                cur_dq = np.array([state.motorState[j].dq for j in range(12)])
+                # Reread joint state for sub-stepping accuracy
+                if sub_idx % 5 == 0:
+                    cur_q = np.array([state.motorState[j].q for j in range(12)])
+                    cur_dq = np.array([state.motorState[j].dq for j in range(12)])
 
-                pos_err_hist = np.roll(pos_err_hist, 1, 0)
-                pos_err_hist[0] = cur_q - targets
-                vel_hist = np.roll(vel_hist, 1, 0)
-                vel_hist[0] = cur_dq
+                    # PD control matching IsaacLab DCMotor (kp=25, kd=0.5)
+                    pos_err = cur_q - targets
+                    torques = -KP * pos_err - KD * cur_dq
 
-                net_in = torch.zeros((12, 6))
-                net_in[:, :3] = torch.from_numpy(pos_err_hist.T)
-                net_in[:, 3:] = torch.from_numpy(vel_hist.T)
+                    # DCMotor velocity-dependent saturation (four-quadrant model)
+                    vel_at_limit = VEL_LIMIT * (1 + EFFORT_LIMIT / SATURATION_EFFORT)
+                    vel_clamped = np.clip(cur_dq, -vel_at_limit, vel_at_limit)
+                    t_top = SATURATION_EFFORT * (1.0 - vel_clamped / VEL_LIMIT)
+                    t_bot = SATURATION_EFFORT * (-1.0 - vel_clamped / VEL_LIMIT)
+                    max_eff = np.minimum(t_top, EFFORT_LIMIT)
+                    min_eff = np.maximum(t_bot, -EFFORT_LIMIT)
+                    torques = np.clip(torques, min_eff, max_eff)
 
-                with torch.no_grad():
-                    torques = act_net(net_in).numpy().flatten()
-
-                torques = np.clip(torques, -23.7, 23.7)
-                for j_idx, torque in enumerate(torques):
-                    msg = double_pb2.Double()
-                    msg.data = float(torque)
-                    bridge.joint_pubs[j_idx].publish(msg)
+                    # Publish torques to Gazebo (flip signs back for right-side HAA)
+                    for j_idx, torque in enumerate(torques):
+                        msg = double_pb2.Double()
+                        msg.data = float(torque * HAA_SIGN[j_idx])
+                        bridge.joint_pubs[j_idx].publish(msg)
 
             last_actions[:] = actions
-            count += 1
-            if count % 50 == 0:
+            step_count += 1
+            if step_count % 50 == 0:
                 print(
-                    f"\r[Step {count:6d}] t={bridge.sim_time:.2f} pos=[{state.base_pos[0]:.2f}, {state.base_pos[1]:.2f}, {state.base_pos[2]:.2f}] vx={state.base_lin_vel[0]:+.2f}  ",
+                    f"\r[Step {step_count:6d}] t={bridge.sim_time:.2f} h={state.base_pos[2]:.3f} vx={state.base_lin_vel[0]:+.2f}  ",
                     end="",
                     flush=True,
                 )
 
             # Wall-time padding if sim is too fast
             elapsed = time.time() - start_wall
-            expected = count * 0.020
+            expected = step_count * STEP_DT
             if expected > elapsed:
                 time.sleep(expected - elapsed)
 

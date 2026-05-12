@@ -165,21 +165,20 @@ class SupervisorNode(Node):
                 f"║  cos(θ) = {tilt_cos:+.3f}  (threshold: {self.tilt_thresh:.2f})          ║\n"
                 f"║  Estimated tilt angle: {tilt_deg:5.1f}°                      ║\n"
                 f"║  ➜  Max torque set to 0 Nm — robot is limp.         ║\n"
-                f"║  ➜  Restart the supervisor to re-enable torque.     ║\n"
+                f"║  ➜  Press [ENTER] here to RESET and re-enable.      ║\n"
                 f"╚══════════════════════════════════════════════════════╝"
                 f"{_RESET}\n"
             )
             self.get_logger().error(
                 f"[SAFETY] DANGEROUS TILT — cos(θ)={tilt_cos:.3f} < {self.tilt_thresh:.2f} "
-                f"(≈{tilt_deg:.1f}°). Torque zeroed."
+                f"(≈{tilt_deg:.1f}°). Torque zeroed. Waiting for reset..."
             )
             self._robot_safe      = False
             self._shutdown_logged = True
-
-        elif not dangerous and not self._robot_safe:
-            # Recovery guard — only re-enable if safety was never latched permanently
-            # (For now we keep it latched; remove this branch if auto-recovery is desired.)
-            pass
+            
+            # Start background reset listener
+            import threading
+            threading.Thread(target=self._reset_worker, daemon=True).start()
 
         if self._robot_safe:
             msg.data = float(self.safety_cfg.get("global_max_torque", 23.5))
@@ -187,6 +186,13 @@ class SupervisorNode(Node):
             msg.data = 0.0
 
         self.max_torque_pub.publish(msg)
+
+    def _reset_worker(self):
+        """Background thread waiting for user to press Enter."""
+        input()  # Wait for Enter
+        print(f"{_YELLOW}{_BOLD}>>> Supervisor RESET. Re-enabling torque...{_RESET}")
+        self._robot_safe = True
+        self._shutdown_logged = False
 
 
 def main():

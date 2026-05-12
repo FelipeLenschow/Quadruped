@@ -49,18 +49,18 @@ except ImportError:
 
 # Isaac order: FL_haa, FR_haa, RL_haa, RR_haa, FL_hfe, FR_hfe, RL_hfe, RR_hfe, FL_kfe, FR_kfe, RL_kfe, RR_kfe
 JOINT_NAMES = [
-    "lf_haa_joint",
-    "rf_haa_joint",
-    "lh_haa_joint",
-    "rh_haa_joint",
-    "lf_hfe_joint",
-    "rf_hfe_joint",
-    "lh_hfe_joint",
-    "rh_hfe_joint",
-    "lf_kfe_joint",
-    "rf_kfe_joint",
-    "lh_kfe_joint",
-    "rh_kfe_joint",
+    "FL_hip_joint",
+    "FR_hip_joint",
+    "RL_hip_joint",
+    "RR_hip_joint",
+    "FL_thigh_joint",
+    "FR_thigh_joint",
+    "RL_thigh_joint",
+    "RR_thigh_joint",
+    "FL_calf_joint",
+    "FR_calf_joint",
+    "RL_calf_joint",
+    "RR_calf_joint",
 ]
 
 # HAA axis sign correction: In IsaacLab/URDF, right-side HAA joints (FR=idx1, RR=idx3)
@@ -69,7 +69,7 @@ JOINT_NAMES = [
 # Fix: negate measured q/dq for right HAA joints BEFORE policy/PD, and negate the
 # resulting torques BEFORE sending back to Gazebo.
 # Sign = +1 for joints matching IsaacLab, -1 for joints that need flipping.
-HAA_SIGN = np.array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
+HAA_SIGN = np.array([1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
 
 
 class Ros2GazeboDriver(Node):
@@ -111,9 +111,9 @@ class Ros2GazeboDriver(Node):
 
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
 
-        # 2. State & Control Buffers
+        # Nominal standing pose (Isaac Convention: all Hips outwards)
         self.desired_qpos = np.array(
-            [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
+            [0.1, 0.1, 0.1, 0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
             dtype=np.float32,
         )
         self.latest_torques = np.zeros(12, dtype=np.float32)
@@ -186,16 +186,22 @@ class Ros2GazeboDriver(Node):
         self.base_pos = np.array(
             [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
         )
+        
+        # Ground truth orientation and angular velocity from simulator
+        q = msg.pose.orientation
+        self.base_quat = np.array([q.w, q.x, q.y, q.z])
+        w_body = np.array([msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z])
 
         # gz::sim::systems::OdometryPublisher (dimensions=3) reports the twist
         # in the BODY frame (child frame), NOT the world frame.
-        # Do NOT apply R.T here — it is already in body frame.
         v_body = np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z])
 
         try:
             self.base_lin_vel_b[:] = v_body
+            self.base_ang_vel[:] = w_body
         except Exception:
             self.base_lin_vel_b[:] = v_body
+            self.base_ang_vel[:] = w_body
 
         # Log Suspected Drift
         if np.abs(self.base_lin_vel_b[1]) > 0.5 and self.sim_time > 5.0:
@@ -241,12 +247,13 @@ class Ros2GazeboDriver(Node):
         partition = f"quadruped_sim_{unique_id}"
         env["GZ_PARTITION"] = partition
 
-        # Resource paths for Gazebo to find models and meshes
-        model_path = os.path.join(root_dir, "models")
+        # Resource paths for model loading
         env["GZ_SIM_RESOURCE_PATH"] = (
             root_dir
             + os.pathsep
-            + model_path
+            + os.path.join(root_dir, "models")
+            + os.pathsep
+            + os.path.abspath(os.path.join(root_dir, "..", "Unitree_Go2", "models"))
             + os.pathsep
             + env.get("GZ_SIM_RESOURCE_PATH", "")
         )
