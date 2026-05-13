@@ -47,29 +47,15 @@ except ImportError:
     sys.exit(1)
 
 
-# Isaac order: FL_haa, FR_haa, RL_haa, RR_haa, FL_hfe, FR_hfe, RL_hfe, RR_hfe, FL_kfe, FR_kfe, RL_kfe, RR_kfe
+# MuJoCo/Isaac order (Grouped by Joint Type): FL, FR, RL, RR
 JOINT_NAMES = [
-    "FL_hip_joint",
-    "FR_hip_joint",
-    "RL_hip_joint",
-    "RR_hip_joint",
-    "FL_thigh_joint",
-    "FR_thigh_joint",
-    "RL_thigh_joint",
-    "RR_thigh_joint",
-    "FL_calf_joint",
-    "FR_calf_joint",
-    "RL_calf_joint",
-    "RR_calf_joint",
+    "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
+    "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
+    "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
 
-# HAA axis sign correction: In IsaacLab/URDF, right-side HAA joints (FR=idx1, RR=idx3)
-# use axis=-1 0 0. The Gazebo SDF uses +1 0 0 for ALL joints. This mismatch causes
-# the right hip to be commanded in the wrong direction, producing rightward drift.
-# Fix: negate measured q/dq for right HAA joints BEFORE policy/PD, and negate the
-# resulting torques BEFORE sending back to Gazebo.
-# Sign = +1 for joints matching IsaacLab, -1 for joints that need flipping.
-HAA_SIGN = np.array([1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
+# Sign corrections (Removed to match MuJoCo raw feedback)
+HAA_SIGN = np.ones(12, dtype=np.float32)
 
 
 class Ros2GazeboDriver(Node):
@@ -79,11 +65,12 @@ class Ros2GazeboDriver(Node):
     ):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
-        self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
+        self.cmd_vel = [0.0, 0.0, 0.0, 0.28]  # [vx, vy, wz, height_cmd]
 
         # 0. Load Central Config
         self.config = load_config()
         self.ctrl_cfg = self.config.get("control", {})
+        self.motor_cfg = self.config.get("motor", {})
         est_cfg = self.config.get("state_estimator", {})
         
         # Priority: CLI arg (if explicitly True) > YAML config
@@ -111,9 +98,13 @@ class Ros2GazeboDriver(Node):
 
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
 
-        # Nominal standing pose (Isaac Convention: all Hips outwards)
+        # Nominal standing pose (Matches MuJoCo Driver exactly)
         self.desired_qpos = np.array(
-            [0.1, 0.1, 0.1, 0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
+            [
+                0.1, -0.1, 0.1, -0.1,  # hips
+                0.8, 0.8, 1.0, 1.0,    # thighs
+                -1.5, -1.5, -1.5, -1.5  # calves
+            ],
             dtype=np.float32,
         )
         self.latest_torques = np.zeros(12, dtype=np.float32)
@@ -148,7 +139,10 @@ class Ros2GazeboDriver(Node):
         )
 
     def _teleop_cb(self, msg):
-        self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
+        # Update velocities, but preserve the 4th command (height)
+        self.cmd_vel[0] = msg.linear.x
+        self.cmd_vel[1] = msg.linear.y
+        self.cmd_vel[2] = msg.angular.z
 
     # --- Gazebo Callbacks ---
     def _stats_cb(self, msg):
@@ -375,7 +369,8 @@ class Ros2GazeboDriver(Node):
             
             # Override with safety watchdog torque
             effort_limit = self.command_processor.active_max_torque
-            sat_effort, vel_lim = 23.5, 30.0
+            sat_effort = self.motor_cfg.get("max_torque", 45.0)
+            vel_lim = self.motor_cfg.get("max_velocity", 30.0)
             
             if effort_limit <= 0.1:
                 kp = 0.0
@@ -398,10 +393,8 @@ class Ros2GazeboDriver(Node):
             self.latest_torques[:] = pd_torques * HAA_SIGN
 
             # LOGGING FOR DIAGNOSIS (every 100 physics steps ~ 0.2s)
-            if actuator_count % 100 == 0:
-                print(
-                    f"[GazeboBridge] t: {self.sim_time:.2f} | q[0]: {self.q[0]:.2f} | T_pd[0]: {pd_torques[0]:.2f}"
-                )
+            # Silenced debug print to keep terminal clean
+            pass
 
             if count % 4 == 0:
                 state = self.telemetry.process_state(
@@ -416,8 +409,12 @@ class Ros2GazeboDriver(Node):
                 self.telemetry.publish(sim_time=self.sim_time, state=state)
             count += 1
             if count % 200 == 0:
+                # Access latest inference time if available from runner
+                inf_ms = 0.0
+                if self.runner and hasattr(self.runner, "inf_times") and self.runner.inf_times:
+                    inf_ms = self.runner.inf_times[-1] * 1000
                 print(
-                    f"\r[Bridge] t={self.sim_time:.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+.2f}   ",
+                    f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+5.2f} | inf={inf_ms:4.1f}ms   ",
                     end="",
                     flush=True,
                 )

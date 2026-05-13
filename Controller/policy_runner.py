@@ -290,9 +290,9 @@ class PolicyRunner:
         self.last_actions[:] = actions
 
         if show_stats and len(self.inf_times) >= 100:
-            avg_inf = sum(self.inf_times) / len(self.inf_times)
-            print(f"[PolicyRunner] Inference Time: {avg_inf*1000:.2f}ms")
-            self.inf_times = []
+            # Stats are now handled by the caller to avoid terminal spam
+            # self.inf_times = []
+            pass
 
         return actions, inf_time
 

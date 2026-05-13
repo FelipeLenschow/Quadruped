@@ -37,30 +37,28 @@ from Controller.policy_runner import PolicyRunner
 from Controller.policy_runner import quat_to_rot_matrix
 
 # ── constants ──────────────────────────────────────────────────────────────────
-ACTION_SCALE = 0.25
-DECIMATION = 20
+_config = load_config()
+_ctrl_cfg = _config.get("control", {})
+_motor_cfg = _config.get("motor", {})
+
+ACTION_SCALE = _ctrl_cfg.get("action_scale", 0.25)
+DECIMATION = 20  # Keep 20 for 1kHz -> 50Hz sync
 SIM_DT = 0.001
 STEP_DT = SIM_DT * DECIMATION
-KP = 25.0
-KD = 0.5
-EFFORT_LIMIT = 23.5
-SATURATION_EFFORT = 23.5
-VEL_LIMIT = 30.0
+KP = _ctrl_cfg.get("kp", 25.0)
+KD = _ctrl_cfg.get("kd", 0.5)
+EFFORT_LIMIT = _motor_cfg.get("max_torque", 45.0)
+SATURATION_EFFORT = EFFORT_LIMIT
+VEL_LIMIT = _motor_cfg.get("max_velocity", 30.0)
+# MuJoCo/Isaac order (Grouped by Joint Type): FL, FR, RL, RR
 JOINT_NAMES = [
-    "FL_hip_joint",
-    "FR_hip_joint",
-    "RL_hip_joint",
-    "RR_hip_joint",
-    "FL_thigh_joint",
-    "FR_thigh_joint",
-    "RL_thigh_joint",
-    "RR_thigh_joint",
-    "FL_calf_joint",
-    "FR_calf_joint",
-    "RL_calf_joint",
-    "RR_calf_joint",
+    "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
+    "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
+    "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
-HAA_SIGN = np.array([1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
+
+# Sign corrections (Removed to match MuJoCo raw feedback)
+HAA_SIGN = np.ones(12, dtype=np.float32)
 
 # ── Gazebo Sim2Sim Bridge ──────────────────────────────────────────────────────
 
@@ -197,7 +195,7 @@ def main():
 
     # Teleop state
     cmd_vx, cmd_vy, cmd_wz = args.vx, 0.0, 0.0
-    commands = np.array([cmd_vx, 0.0, 0.0, 0.0], dtype=np.float32)
+    commands = np.array([cmd_vx, 0.0, 0.0, 0.28], dtype=np.float32)  # [vx, vy, wz, height_cmd]
 
     def _keyboard_thread():
         if not sys.stdin.isatty():
@@ -246,7 +244,15 @@ def main():
         time.sleep(0.1)
 
     last_actions = np.zeros(12, dtype=np.float32)
-    desired_qpos = np.array([0.1, 0.1, 0.1, 0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5], dtype=np.float32)
+    # Nominal stance: Matches MuJoCo Driver exactly
+    desired_qpos = np.array(
+        [
+            0.1, -0.1, 0.1, -0.1,  # hips
+            0.8, 0.8, 1.0, 1.0,    # thighs
+            -1.5, -1.5, -1.5, -1.5  # calves
+        ],
+        dtype=np.float32,
+    )
     isaac_identity = np.arange(12)
 
     print("[Gazebo] Sim2Sim Loop Start (50Hz Policy, PD Torque Control)")
@@ -261,10 +267,10 @@ def main():
             loop_sim_start = bridge.sim_time
 
             # 1. Policy Step (50Hz = every DECIMATION physics steps)
-            obs = runner.build_obs(
-                state, commands, last_actions, desired_qpos, isaac_identity
+            actions, inf_time = runner.infer(
+                state, commands, last_actions, desired_qpos, isaac_identity, verbose=False
             )
-            actions = runner.get_action(obs)
+            latest_inf_time = inf_time
             targets = actions * ACTION_SCALE + desired_qpos
 
             # 2. PD Torque Sub-loop (match MuJoCo DECIMATION=20 at 1kHz physics)
@@ -300,8 +306,9 @@ def main():
             last_actions[:] = actions
             step_count += 1
             if step_count % 50 == 0:
+                inf_ms = latest_inf_time * 1000
                 print(
-                    f"\r[Step {step_count:6d}] t={bridge.sim_time:.2f} h={state.base_pos[2]:.3f} vx={state.base_lin_vel[0]:+.2f}  ",
+                    f"\r[Step {step_count:6d}] t={bridge.sim_time:7.2f} h={state.base_pos[2]:.3f} vx={state.base_lin_vel[0]:+5.2f} | inf={inf_ms:4.1f}ms   ",
                     end="",
                     flush=True,
                 )

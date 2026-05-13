@@ -9,6 +9,11 @@ control:
   action_scale: 0.25
   saturation_limit: 0.90  # 90% of physical capacity
 
+# --- Motor Physical Parameters ---
+motor:
+  max_torque: 45.0        # Nm (Saturation torque for Go2)
+  max_velocity: 30.0      # rad/s (Limit at zero torque)
+
 # --- State Estimation ---
 state_estimator:
   use_estimator: false    # Switch between perfect and estimated odom
@@ -24,16 +29,21 @@ state_estimator:
     measurement_noise:  0.05   # R diagonal — leg odometry measurement (m/s)²
 
 # --- Safety Limits (Radians) ---
+# --- Safety Limits (Radians) ---
+# Official Unitree Go2 Hardware Limits
 joint_limits:
   abduction:
-    min: -1.04
-    max: 1.04
-  hip:
-    min: -1.57 
-    max: 3.49
+    min: -1.047
+    max: 1.047
+  hip_front:
+    min: -1.571
+    max: 3.491
+  hip_rear:
+    min: -0.524
+    max: 4.538
   knee:
-    min: -2.72
-    max: -0.83
+    min: -2.723
+    max: -0.5    # Official is -0.838, set to -0.5 to allow straighter stance if desired
 
 # --- Networking ---
 network:
@@ -46,13 +56,5 @@ network:
 safety:
   watchdog_timeout: 1.0     # Seconds before torque is zeroed if no heartbeat
   supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
-  global_max_torque: 200.0    # Absolute limit (Nm) even if supervisor allows more
-
-  # Fall-detection threshold (mirrors training's base_angle_termination_thresh).
-  # Cosine of the tilt angle between the robot's z-axis and world z-axis.
-  #   1.0 = perfectly upright
-  #   0.7 = ~45° tilt  (training default — aggressive, use for sim)
-  #   0.5 = ~60° tilt  (supervisor default — safer for real hardware)
-  #   0.0 = robot on its side
-  # Robot is shut down (torque → 0) when cos(θ) falls below this value.
-  base_angle_termination_thresh: 0.5
+  global_max_torque: 45.0    # Capped to physical peak torque of Go2 motors
+  base_angle_termination_thresh: 0.3   # cos of the tilt angle between the robot's z-axis and world z-axis
