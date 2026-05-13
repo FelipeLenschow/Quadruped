@@ -46,7 +46,7 @@ ISAAC_NAMES = [
     "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
 
-HAA_SIGN = np.array([1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
+HAA_SIGN = np.array([-1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
 
 class GazeboTwinNode(Node):
     """
@@ -101,6 +101,8 @@ class GazeboTwinNode(Node):
 
     def odom_cb(self, msg: Odometry):
         with self.lock:
+            p = msg.pose.pose.position
+            self.base_pos = np.array([p.x, p.y, p.z])
             v = msg.twist.twist.linear
             self.base_lin_vel_body = np.array([v.x, v.y, v.z])
 
@@ -167,11 +169,6 @@ class GazeboTwinNode(Node):
             self.last_time = current_time
 
             with self.lock:
-                R = rot_from_quat(self.base_quat)
-                v_world = R @ self.base_lin_vel_body
-                self.base_pos[0] += v_world[0] * dt
-                self.base_pos[1] += v_world[1] * dt
-
                 # Update Base Pose
                 pose_msg = pose_pb2.Pose()
                 pose_msg.name = self.robot_type

@@ -56,8 +56,8 @@ JOINT_NAMES = [
 ]
 
 # Sign corrections to match MuJoCo's outward-positive behavior in Gazebo.
-# FL=1, FR=-1, RL=1, RR=-1 for hips (indices 0, 1, 2, 3)
-HAA_SIGN = np.array([1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
+# FL=-1, RL=-1 for hips (indices 0, 6)
+HAA_SIGN = np.array([-1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
 
 
 class Ros2GazeboDriver(Node):

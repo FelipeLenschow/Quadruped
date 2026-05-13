@@ -91,6 +91,8 @@ class MujocoTwinNode(Node):
 
     def odom_cb(self, msg: Odometry):
         with self.lock:
+            p = msg.pose.pose.position
+            self.base_pos = np.array([p.x, p.y, p.z])
             v = msg.twist.twist.linear
             self.base_lin_vel_body = np.array([v.x, v.y, v.z])
 
@@ -109,12 +111,6 @@ class MujocoTwinNode(Node):
                 self.last_time = current_time
 
                 with self.lock:
-                    # Integrate position
-                    R = rot_from_quat(self.base_quat)
-                    v_world = R @ self.base_lin_vel_body
-                    self.base_pos[0] += v_world[0] * dt
-                    self.base_pos[1] += v_world[1] * dt
-
                     # Update MuJoCo Data
                     self.data.qpos[0:3] = self.base_pos
                     self.data.qpos[3:7] = self.base_quat
