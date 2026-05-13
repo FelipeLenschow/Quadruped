@@ -46,8 +46,6 @@ ISAAC_NAMES = [
     "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
 
-HAA_SIGN = np.array([-1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
-
 class GazeboTwinNode(Node):
     """
     Passive Gazebo Digital Twin Node.
@@ -112,8 +110,8 @@ class GazeboTwinNode(Node):
             if joint.name in JOINT_NAMES:
                 idx = JOINT_NAMES.index(joint.name)
                 try:
-                    self.gz_q[idx] = joint.axis1.position * HAA_SIGN[idx]
-                    self.gz_dq[idx] = joint.axis1.velocity * HAA_SIGN[idx]
+                    self.gz_q[idx] = joint.axis1.position
+                    self.gz_dq[idx] = joint.axis1.velocity
                 except AttributeError:
                     pass
 
@@ -188,7 +186,7 @@ class GazeboTwinNode(Node):
                 
                 for i, pub in enumerate(self.joint_pubs):
                     msg = double_pb2.Double()
-                    msg.data = float(torques[i] * HAA_SIGN[i])
+                    msg.data = float(torques[i])
                     pub.publish(msg)
 
             time.sleep(0.005) # 200 Hz PD sync

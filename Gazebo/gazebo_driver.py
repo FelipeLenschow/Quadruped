@@ -54,10 +54,6 @@ JOINT_NAMES = [
     "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
 
-# Sign corrections to match MuJoCo's outward-positive behavior in Gazebo.
-# FL=-1, RL=-1 for hips (indices 0 and 2 in Isaac order)
-HAA_SIGN = np.array([-1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
-
 
 class Ros2GazeboDriver(Node):
     def __init__(
@@ -170,10 +166,8 @@ class Ros2GazeboDriver(Node):
             if joint.name in JOINT_NAMES:
                 idx = JOINT_NAMES.index(joint.name)
                 try:
-                    # Apply HAA axis sign correction so that Gazebo joint readings
-                    # match the IsaacLab convention (right-side HAA joints are negated).
-                    self.q[idx] = joint.axis1.position * HAA_SIGN[idx]
-                    self.dq[idx] = joint.axis1.velocity * HAA_SIGN[idx]
+                    self.q[idx] = joint.axis1.position
+                    self.dq[idx] = joint.axis1.velocity
                 except AttributeError:
                     pass
         # Signal the physics loop to step
@@ -362,10 +356,6 @@ class Ros2GazeboDriver(Node):
             actuator_count += 1
 
             # Motor model matching MuJoCo.
-            # NOTE: self.q and self.dq are already in Isaac convention (HAA signs corrected).
-            # Targets from the policy are also in Isaac convention.
-            # After computing torques in Isaac space, apply HAA_SIGN again to convert
-            # back to Gazebo convention before publishing.
             targets = self.latest_targets
             kp = self.ctrl_cfg.get("kp", 25.0)
             kd = self.ctrl_cfg.get("kd", 0.5)
@@ -392,8 +382,7 @@ class Ros2GazeboDriver(Node):
             )
 
             # Convert torques from Isaac convention back to Gazebo convention
-            # (negate right-side HAA torques to match Gazebo's +1 0 0 axis).
-            self.latest_torques[:] = pd_torques * HAA_SIGN
+            self.latest_torques[:] = pd_torques
 
             # LOGGING FOR DIAGNOSIS (every 100 physics steps ~ 0.2s)
             # Silenced debug print to keep terminal clean
