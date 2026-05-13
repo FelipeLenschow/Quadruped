@@ -226,7 +226,8 @@ def main():
                 elif ch == "\x03":
                     _stop.set()
                     break
-                commands[:] = [cmd_vx, cmd_vy, cmd_wz, 0.0]
+                h_cmd = _ctrl_cfg.get("default_height", 0.33)
+                commands[:] = [cmd_vx, cmd_vy, cmd_wz, h_cmd]
                 print(
                     f"\r[Cmd] vx={commands[0]:+.2f} vy={commands[1]:+.2f} wz={commands[2]:+.2f}  ",
                     end="",

@@ -8,6 +8,7 @@ control:
   decimation: 4           # Run policy at 50Hz (200Hz / 4)
   action_scale: 0.25
   saturation_limit: 0.90  # 90% of physical capacity
+  default_height: 0.33    # Target height for standing pose (m)
 
 # --- Motor Physical Parameters ---
 motor:

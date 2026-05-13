@@ -62,16 +62,17 @@ class Ros2GazeboDriver(Node):
     def __init__(
         self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49,
         use_estimator=False
-    ):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
-        self.cmd_vel = [0.0, 0.0, 0.0, 0.28]  # [vx, vy, wz, height_cmd]
-
+        
         # 0. Load Central Config
         self.config = load_config()
         self.ctrl_cfg = self.config.get("control", {})
         self.motor_cfg = self.config.get("motor", {})
         est_cfg = self.config.get("state_estimator", {})
+        
+        h_cmd = self.ctrl_cfg.get("default_height", 0.33)
+        self.cmd_vel = [0.0, 0.0, 0.0, h_cmd]  # [vx, vy, wz, height_cmd]
         
         # Priority: CLI arg (if explicitly True) > YAML config
         effective_use_estimator = use_estimator

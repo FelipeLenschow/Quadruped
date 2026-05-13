@@ -188,7 +188,8 @@ class Ros2MujocoDriver(Node):
 
     def teleop_cb(self, msg):
         """Teleop passed through to sensors for the policy runner to see."""
-        self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
+        h_cmd = self.ctrl_cfg.get("default_height", 0.33)
+        self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, h_cmd]
 
     def _reset_robot(self):
         mujoco.mj_resetData(self.model, self.data)
