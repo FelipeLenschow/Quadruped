@@ -49,15 +49,14 @@ except ImportError:
 
 # MuJoCo/Isaac order (Grouped by Joint Type): FL, FR, RL, RR
 JOINT_NAMES = [
-    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
-    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
-    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
-    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
+    "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
+    "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
+    "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
 
 # Sign corrections to match MuJoCo's outward-positive behavior in Gazebo.
-# FL=-1, RL=-1 for hips (indices 0, 6)
-HAA_SIGN = np.array([-1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+# FL=-1, RL=-1 for hips (indices 0 and 2 in Isaac order)
+HAA_SIGN = np.array([-1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
 
 
 class Ros2GazeboDriver(Node):
@@ -101,9 +100,13 @@ class Ros2GazeboDriver(Node):
 
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
 
-        # Nominal standing pose (Matches MuJoCo Driver exactly)
+        # Nominal standing pose (Matches MuJoCo Driver exactly in Isaac order)
         self.desired_qpos = np.array(
-            [0.1, 0.8, -1.5, -0.1, 0.8, -1.5, 0.1, 1.0, -1.5, -0.1, 1.0, -1.5],
+            [
+                0.1, -0.1, 0.1, -0.1,  # hips
+                0.8, 0.8, 1.0, 1.0,    # thighs
+                -1.5, -1.5, -1.5, -1.5  # calves
+            ],
             dtype=np.float32,
         )
         self.latest_torques = np.zeros(12, dtype=np.float32)
