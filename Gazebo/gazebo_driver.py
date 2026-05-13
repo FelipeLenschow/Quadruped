@@ -49,19 +49,22 @@ except ImportError:
 
 # MuJoCo/Isaac order (Grouped by Joint Type): FL, FR, RL, RR
 JOINT_NAMES = [
-    "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
-    "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
-    "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
+    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
 ]
 
-# Sign corrections (Removed to match MuJoCo raw feedback)
-HAA_SIGN = np.ones(12, dtype=np.float32)
+# Sign corrections to match MuJoCo's outward-positive behavior in Gazebo.
+# FL=1, FR=-1, RL=1, RR=-1 for hips (indices 0, 1, 2, 3)
+HAA_SIGN = np.array([1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
 
 
 class Ros2GazeboDriver(Node):
     def __init__(
         self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49,
         use_estimator=False
+    ):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
         
@@ -71,8 +74,7 @@ class Ros2GazeboDriver(Node):
         self.motor_cfg = self.config.get("motor", {})
         est_cfg = self.config.get("state_estimator", {})
         
-        h_cmd = self.ctrl_cfg.get("default_height", 0.33)
-        self.cmd_vel = [0.0, 0.0, 0.0, h_cmd]  # [vx, vy, wz, height_cmd]
+        self.cmd_vel = [0.0, 0.0, 0.0, 0.0]  # [vx, vy, wz, unused_height_cmd]
         
         # Priority: CLI arg (if explicitly True) > YAML config
         effective_use_estimator = use_estimator
@@ -101,11 +103,7 @@ class Ros2GazeboDriver(Node):
 
         # Nominal standing pose (Matches MuJoCo Driver exactly)
         self.desired_qpos = np.array(
-            [
-                0.1, -0.1, 0.1, -0.1,  # hips
-                0.8, 0.8, 1.0, 1.0,    # thighs
-                -1.5, -1.5, -1.5, -1.5  # calves
-            ],
+            [0.1, 0.8, -1.5, -0.1, 0.8, -1.5, 0.1, 1.0, -1.5, -0.1, 1.0, -1.5],
             dtype=np.float32,
         )
         self.latest_torques = np.zeros(12, dtype=np.float32)
@@ -140,12 +138,13 @@ class Ros2GazeboDriver(Node):
         )
 
     def _teleop_cb(self, msg):
-        # Update velocities, but preserve the 4th command (height)
+        # Update velocities, keeping 4th command 0.0 to match training distribution
         self.cmd_vel[0] = msg.linear.x
         self.cmd_vel[1] = msg.linear.y
         self.cmd_vel[2] = msg.angular.z
+        self.cmd_vel[3] = 0.0
 
-    # --- Gazebo Callbacks ---
+    # --- Control & Gains ---
     def _stats_cb(self, msg):
         self.sim_time = msg.sim_time.sec + msg.sim_time.nsec * 1e-9
 

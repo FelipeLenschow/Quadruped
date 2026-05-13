@@ -3,8 +3,8 @@ robot_type: "go2"
 
 # --- Control & Gains ---
 control:
-  kp: 25.0
-  kd: 0.5
+  kp: 80.0                # Increased from 50.0 to reduce steady-state gravity sag
+  kd: 2.0                 # Increased from 1.0 for better damping
   decimation: 4           # Run policy at 50Hz (200Hz / 4)
   action_scale: 0.25
   saturation_limit: 0.90  # 90% of physical capacity
@@ -57,5 +57,5 @@ network:
 safety:
   watchdog_timeout: 1.0     # Seconds before torque is zeroed if no heartbeat
   supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
-  global_max_torque: 45.0    # Capped to physical peak torque of Go2 motors
+  global_max_torque: 45.0   # Reverted from 4500.0. Gazebo SDF caps at 45.43 Nm anyway.
   base_angle_termination_thresh: 0.3   # cos of the tilt angle between the robot's z-axis and world z-axis

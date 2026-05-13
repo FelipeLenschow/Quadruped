@@ -57,8 +57,9 @@ JOINT_NAMES = [
     "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
 
-# Sign corrections (Removed to match MuJoCo raw feedback)
-HAA_SIGN = np.ones(12, dtype=np.float32)
+# Sign corrections to match MuJoCo's outward-positive behavior in Gazebo.
+# FL=1, FR=-1, RL=1, RR=-1 for hips (indices 0, 1, 2, 3)
+HAA_SIGN = np.array([1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.float32)
 
 # ── Gazebo Sim2Sim Bridge ──────────────────────────────────────────────────────
 
