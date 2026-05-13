@@ -63,6 +63,10 @@ class GazeboTwinNode(Node):
         self.joint_pos = np.zeros(12, dtype=np.float64)
         self.base_lin_vel_body = np.zeros(3, dtype=np.float64)
 
+        # Internal Gazebo state for PD tracking
+        self.gz_q = np.zeros(12, dtype=np.float64)
+        self.gz_dq = np.zeros(12, dtype=np.float64)
+
         self.last_time = time.time()
         self.lock = threading.Lock()
         self.running = True
@@ -100,9 +104,28 @@ class GazeboTwinNode(Node):
             v = msg.twist.twist.linear
             self.base_lin_vel_body = np.array([v.x, v.y, v.z])
 
+    def _gz_joint_cb(self, msg):
+        # High frequency internal Gazebo state
+        for joint in msg.joint:
+            if joint.name in JOINT_NAMES:
+                idx = JOINT_NAMES.index(joint.name)
+                try:
+                    self.gz_q[idx] = joint.axis1.position * HAA_SIGN[idx]
+                    self.gz_dq[idx] = joint.axis1.velocity * HAA_SIGN[idx]
+                except AttributeError:
+                    pass
+
     def _gazebo_loop(self):
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Gazebo"))
         world_path = os.path.join(root_dir, "scene.sdf")
+
+        # Create a zero-gravity twin world to prevent falling
+        with open(world_path, "r") as f:
+            sdf_content = f.read()
+        sdf_content = sdf_content.replace("<world name=\"quadruped_world\">", "<world name=\"quadruped_world\">\n        <gravity>0 0 0</gravity>")
+        twin_world_path = "/tmp/scene_twin.sdf"
+        with open(twin_world_path, "w") as f:
+            f.write(sdf_content)
 
         subprocess.run(["pkill", "-9", "-f", "gz-sim-server"], stderr=subprocess.DEVNULL)
         time.sleep(1.0)
@@ -117,20 +140,23 @@ class GazeboTwinNode(Node):
             os.pathsep + env.get("GZ_SIM_RESOURCE_PATH", "")
         )
 
-        gz_args = ["gz", "sim", world_path]
-        print(f"[GazeboTwin] Launching Gazebo Twin on partition: {partition}")
+        gz_args = ["gz", "sim", twin_world_path]
+        print(f"[GazeboTwin] Launching Gazebo Twin on partition: {partition} (Zero Gravity)")
         self.gz_proc = subprocess.Popen(gz_args, env=env, preexec_fn=os.setsid)
 
         os.environ["GZ_PARTITION"] = partition
         self.gz_node = GzTransportNode()
         time.sleep(5.0)
 
+        # Subscribe to internal gazebo state for PD control
+        from gz.msgs10 import model_pb2
+        self.gz_node.subscribe(model_pb2.Model, f"/model/{self.robot_type}/joint_state", self._gz_joint_cb)
+
         # Publishers
         self.pose_pub = self.gz_node.advertise(f"/world/{self.world_name}/set_pose", pose_pb2.Pose)
         self.joint_pubs = []
         for jname in JOINT_NAMES:
-            # For twin, we can use a high PD controller.
-            topic = f"/model/{self.robot_type}/joint/{jname}/cmd_pos"
+            topic = f"/model/{self.robot_type}/joint/{jname}/cmd_force"
             self.joint_pubs.append(self.gz_node.advertise(topic, double_pb2.Double))
             
         print("[GazeboTwin] Syncing Telemetry with Gazebo...")
@@ -158,13 +184,17 @@ class GazeboTwinNode(Node):
                 pose_msg.orientation.z = self.base_quat[3]
                 self.pose_pub.publish(pose_msg)
 
-                # Update Joints (using position control)
+                # Update Joints (using PD torque control)
+                kp = 80.0
+                kd = 2.0
+                torques = kp * (self.joint_pos - self.gz_q) - kd * self.gz_dq
+                
                 for i, pub in enumerate(self.joint_pubs):
                     msg = double_pb2.Double()
-                    msg.data = float(self.joint_pos[i] * HAA_SIGN[i])
+                    msg.data = float(torques[i] * HAA_SIGN[i])
                     pub.publish(msg)
 
-            time.sleep(0.02) # 50 Hz sync
+            time.sleep(0.005) # 200 Hz PD sync
 
     def _cleanup(self):
         self._stop.set()
