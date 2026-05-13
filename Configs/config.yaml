@@ -57,5 +57,5 @@ network:
 safety:
   watchdog_timeout: 1.0     # Seconds before torque is zeroed if no heartbeat
   supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
-  global_max_torque: 45.0   # Reverted from 4500.0. Gazebo SDF caps at 45.43 Nm anyway.
+  global_max_torque: 25.0   # Nm
   base_angle_termination_thresh: 0.3   # cos of the tilt angle between the robot's z-axis and world z-axis
