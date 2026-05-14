@@ -189,7 +189,7 @@ class GazeboTwinNode(Node):
                     msg.data = float(torques[i])
                     pub.publish(msg)
 
-            time.sleep(0.005) # 200 Hz PD sync
+            time.sleep(0.001) # 1000 Hz PD sync
 
     def _cleanup(self):
         self._stop.set()

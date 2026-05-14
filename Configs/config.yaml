@@ -5,7 +5,7 @@ robot_type: "go2"
 control:
   kp: 25.0                # Reverted from 80.0; high Kp over async IPC causes violent oscillations
   kd: 0.5                 # Reverted from 2.0 to match training physics
-  decimation: 4           # Run policy at 50Hz (200Hz / 4)
+  decimation: 20          # Run policy at 50Hz (1000Hz PD / 20)
   action_scale: 0.25
   saturation_limit: 0.90  # 90% of physical capacity
   default_height: 0.33    # Target height for standing pose (m)

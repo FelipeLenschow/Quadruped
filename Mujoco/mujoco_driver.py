@@ -86,8 +86,8 @@ class Ros2MujocoDriver(Node):
 
     def _init_physics(self):
         """Initialize MuJoCo physics and resolve joint addresses."""
-        # PD Decimation: 200 Hz PD loop from 1000 Hz physics
-        self.PD_DECIMATION = 5
+        # PD Decimation: 1000 Hz PD loop from 1000 Hz physics
+        self.PD_DECIMATION = 1
 
         # Resolve joint addresses once
         self.isaac_names = [
@@ -298,7 +298,7 @@ class Ros2MujocoDriver(Node):
                 self.step_counter += 1
 
                 # Sync with real time
-                next_time += 0.005  # 200 Hz
+                next_time += 0.001  # 1000 Hz
                 sleep_dur = next_time - time.time()
                 if sleep_dur > 0:
                     time.sleep(sleep_dur)
