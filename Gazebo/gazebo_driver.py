@@ -22,6 +22,8 @@ from pathlib import Path
 from Controller.policy_runner import PolicyRunner
 from Controller.policy_bridge import CommandProcessor
 from Telemetry.telemetry import TelemetryManager
+from Telemetry.estimator import rot_from_quat
+from Telemetry.kinematics import Go2Kinematics
 from Configs.config_loader import load_config
 
 # ROS 2 Standard Imports
@@ -115,6 +117,7 @@ class Ros2GazeboDriver(Node):
         self.base_ang_vel = np.zeros(3)
         self.base_lin_vel_b = np.zeros(3)
         self.base_accel = np.array([0., 0., 9.81])  # body-frame specific force (m/s^2)
+        self.kinematics = Go2Kinematics()
 
         # 3. Gazebo Transport (Deferred until physics loop for partitioning)
         self.gz_node = None
@@ -330,6 +333,17 @@ class Ros2GazeboDriver(Node):
             # --- Internal Inference (50 Hz) ---
             if self.runner:
                 if self.runner.should_step():
+                    # Calculate heuristic contacts using kinematics
+                    contact = [0.0, 0.0, 0.0, 0.0]
+                    R = rot_from_quat(self.base_quat)
+                    for leg_idx in range(4):
+                        sl = slice(leg_idx * 3, leg_idx * 3 + 3)
+                        q_leg = self.q[sl]
+                        r_foot_b = self.kinematics.foot_position_body(leg_idx, q_leg)
+                        r_foot_w = self.base_pos + R @ r_foot_b
+                        if r_foot_w[2] < 0.03:  # 3cm threshold
+                            contact[leg_idx] = 1.0
+
                     # 1. Use centralized parser for Standardization
                     state = self.telemetry.process_state(
                         q=self.q,
@@ -339,6 +353,7 @@ class Ros2GazeboDriver(Node):
                         vel=self.base_lin_vel_b,
                         pos=self.base_pos,
                         accel=self.base_accel,
+                        contact=contact,
                     )
 
                     # 2. Feed Policy (Unified Inference with Timing)
@@ -389,6 +404,16 @@ class Ros2GazeboDriver(Node):
             pass
 
             if count % 4 == 0:
+                contact = [0.0, 0.0, 0.0, 0.0]
+                R = rot_from_quat(self.base_quat)
+                for leg_idx in range(4):
+                    sl = slice(leg_idx * 3, leg_idx * 3 + 3)
+                    q_leg = self.q[sl]
+                    r_foot_b = self.kinematics.foot_position_body(leg_idx, q_leg)
+                    r_foot_w = self.base_pos + R @ r_foot_b
+                    if r_foot_w[2] < 0.03:  # 3cm threshold
+                        contact[leg_idx] = 1.0
+
                 state = self.telemetry.process_state(
                     q=self.q,
                     dq=self.dq,
@@ -397,6 +422,8 @@ class Ros2GazeboDriver(Node):
                     vel=self.base_lin_vel_b,
                     pos=self.base_pos,
                     accel=self.base_accel,
+                    contact=contact,
+                    update_estimator=False,
                 )
                 self.telemetry.publish(sim_time=self.sim_time, state=state)
             count += 1

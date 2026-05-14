@@ -227,14 +227,15 @@ class StateEstimator:
                      if gyro_body is not None
                      else np.zeros(3))
 
-            # joint_pos / joint_vel layout: [FL_hip, FL_thigh, FL_calf, FR_…, RL_…, RR_…]
+            # joint_pos / joint_vel layout (ISAAC order): 
+            # [FL_hip, FR_hip, RL_hip, RR_hip, FL_thigh, FR_thigh, RL_thigh, RR_thigh, FL_calf, FR_calf, RL_calf, RR_calf]
             for leg_idx in range(4):
                 if feet_contact[leg_idx] <= 0.5:
                     continue
 
-                sl = slice(leg_idx * 3, leg_idx * 3 + 3)
-                q_leg  = np.asarray(joint_pos[sl], dtype=np.float64)
-                dq_leg = np.asarray(joint_vel[sl], dtype=np.float64)
+                idx = [leg_idx, leg_idx + 4, leg_idx + 8]
+                q_leg  = np.asarray([joint_pos[i] for i in idx], dtype=np.float64)
+                dq_leg = np.asarray([joint_vel[i] for i in idx], dtype=np.float64)
 
                 # FK: foot position and Jacobian in body frame
                 r_foot = kin.foot_position_body(leg_idx, q_leg)

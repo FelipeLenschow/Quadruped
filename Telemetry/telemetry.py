@@ -100,7 +100,7 @@ class TelemetryManager:
         )
 
     # ------------------------------------------------------------------
-    def process_state(self, q, dq, quat, gyro, accel=None, pos=None, vel=None, contact=None):
+    def process_state(self, q, dq, quat, gyro, accel=None, pos=None, vel=None, contact=None, update_estimator=True):
         """
         Creates a StandardState from raw vectors and applies LKF estimation if enabled.
 
@@ -112,6 +112,8 @@ class TelemetryManager:
             pos     : [x, y, z] global position (optional).
             vel     : [vx, vy, vz] body-frame linear velocity (ground truth).
             contact : [FL, FR, RL, RR] binary contacts (optional).
+            update_estimator : Whether to step the Kalman Filter forward in time.
+
 
         Note
         ----
@@ -144,14 +146,17 @@ class TelemetryManager:
 
         # 3. LKF override — runs when use_estimator=True
         if self.use_estimator:
-            v_est = self.estimator.update(
-                quat_wxyz   = state.imu.quaternion,
-                accel_body  = state.imu.accelerometer,
-                feet_contact= state.feet_contact,
-                joint_pos   = [m.q  for m in state.motorState],
-                joint_vel   = [m.dq for m in state.motorState],
-                gyro_body   = state.imu.gyroscope,
-            )
+            if update_estimator:
+                v_est = self.estimator.update(
+                    quat_wxyz   = state.imu.quaternion,
+                    accel_body  = state.imu.accelerometer,
+                    feet_contact= state.feet_contact,
+                    joint_pos   = [m.q  for m in state.motorState],
+                    joint_vel   = [m.dq for m in state.motorState],
+                    gyro_body   = state.imu.gyroscope,
+                )
+            else:
+                v_est = self.estimator.velocity
             state.base_lin_vel = v_est.tolist()
 
         return state
@@ -229,9 +234,9 @@ class TelemetryManager:
             omega = np.asarray(state.imu.gyroscope, dtype=np.float64)
             norms = []
             for leg_idx in range(4):
-                sl      = slice(leg_idx * 3, leg_idx * 3 + 3)
-                q_leg   = np.array([state.motorState[i].q  for i in range(*sl.indices(12))])
-                dq_leg  = np.array([state.motorState[i].dq for i in range(*sl.indices(12))])
+                idx     = [leg_idx, leg_idx + 4, leg_idx + 8]
+                q_leg   = np.array([state.motorState[i].q  for i in idx])
+                dq_leg  = np.array([state.motorState[i].dq for i in idx])
                 r_foot  = _kin.foot_position_body(leg_idx, q_leg)
                 J       = _kin.foot_jacobian_body(leg_idx, q_leg)
                 v_leg   = -J @ dq_leg - np.cross(omega, r_foot)

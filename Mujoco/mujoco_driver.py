@@ -149,7 +149,7 @@ class Ros2MujocoDriver(Node):
         self.pos_err_hist = np.zeros((1, 12), dtype=np.float32)
         self.vel_hist = np.zeros((1, 12), dtype=np.float32)
 
-    def _get_standard_state(self):
+    def _get_standard_state(self, update_estimator=False):
         """Extracts raw state vectors from MuJoCo data."""
         q = self.data.qpos[self.isaac_qpos_addr]
         dq = self.data.qvel[self.isaac_qvel_addr]
@@ -169,6 +169,12 @@ class Ros2MujocoDriver(Node):
         gyro = R.T @ global_ang_vel
         vel_b = R.T @ self.data.qvel[:3]
 
+        # Accelerometer specific force
+        try:
+            accel = self.data.sensor('accelerometer').data.copy()
+        except KeyError:
+            accel = np.array([0.0, 0.0, 9.81])
+
         # Contacts
         contact = [0.0, 0.0, 0.0, 0.0]
         for i in range(self.data.ncon):
@@ -183,7 +189,7 @@ class Ros2MujocoDriver(Node):
                         contact[foot_idx] = 1.0
 
         return self.telemetry.process_state(
-            q=q, dq=dq, quat=quat, gyro=gyro, pos=pos, vel=vel_b, contact=contact
+            q=q, dq=dq, quat=quat, gyro=gyro, accel=accel, pos=pos, vel=vel_b, contact=contact, update_estimator=update_estimator
         )
 
     def teleop_cb(self, msg):
@@ -267,7 +273,7 @@ class Ros2MujocoDriver(Node):
                 if self.runner:
                     if self.runner.should_step():
                         # 1. Use standardized parser
-                        state = self._get_standard_state()
+                        state = self._get_standard_state(update_estimator=True)
 
                         # 2. Feed Policy (Unified Inference with Timing)
                         actions, _ = self.runner.infer(
@@ -289,7 +295,7 @@ class Ros2MujocoDriver(Node):
                     mujoco.mj_step(self.model, self.data)
 
                 # --- Publish sensors (Standardized & Synchronized) ---
-                state = self._get_standard_state()
+                state = self._get_standard_state(update_estimator=False)
                 self.telemetry.publish(sim_time=self.data.time, state=state)
                 
                 if not headless:
