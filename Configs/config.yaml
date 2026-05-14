@@ -3,8 +3,8 @@ robot_type: "go2"
 
 # --- Control & Gains ---
 control:
-  kp: 80.0                # Increased from 50.0 to reduce steady-state gravity sag
-  kd: 2.0                 # Increased from 1.0 for better damping
+  kp: 25.0                # Reverted from 80.0; high Kp over async IPC causes violent oscillations
+  kd: 0.5                 # Reverted from 2.0 to match training physics
   decimation: 4           # Run policy at 50Hz (200Hz / 4)
   action_scale: 0.25
   saturation_limit: 0.90  # 90% of physical capacity
