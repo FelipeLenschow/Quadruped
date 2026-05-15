@@ -79,7 +79,7 @@ class GazeboTwinNode(Node):
         # 3. ROS Subscriptions
         self.create_subscription(JointState, "/sensors/joint_states", self.joint_cb, 10)
         self.create_subscription(Imu, "/sensors/imu", self.imu_cb, 10)
-        self.create_subscription(Odometry, "/odom", self.odom_cb, 10)
+        self.create_subscription(Odometry, "/odom/simulator", self.odom_cb, 10)
 
     def joint_cb(self, msg: JointState):
         with self.lock:

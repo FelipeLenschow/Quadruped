@@ -80,7 +80,7 @@ class SupervisorNode(Node):
                                  self.proj_gravity_cb, 10)
         # Raw sensors (kept for future safety extensions)
         self.create_subscription(JointState, "/sensors/joint_states", self.joint_cb,  10)
-        self.create_subscription(Odometry,   "/odom",                 self.odom_cb,   10)
+        self.create_subscription(Odometry,   "/odom/simulator",       self.odom_cb,   10)
 
         # ------------------------------------------------------------------
         # 4. ROS Publishers
