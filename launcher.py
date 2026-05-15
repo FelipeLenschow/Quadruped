@@ -415,6 +415,8 @@ def main():
                 bridge_script,
                 f"--robot={robot_key}",
             ]
+            if use_estimator:
+                cmd.append("--use_estimator")
         elif action == "gazebo_twin":
             bridge_script = os.path.abspath(os.path.join("DigitalTwin", "gazebo_twin.py"))
             cmd = [
@@ -422,6 +424,8 @@ def main():
                 bridge_script,
                 f"--robot={robot_key}",
             ]
+            if use_estimator:
+                cmd.append("--use_estimator")
         elif action == "supervisor":
             bridge_script = os.path.abspath(os.path.join("DigitalTwin", "supervisor.py"))
             cmd = [
@@ -429,6 +433,8 @@ def main():
                 bridge_script,
                 f"--robot={robot_key}",
             ]
+            if use_estimator:
+                cmd.append("--use_estimator")
         elif action == "gazebo":
             bridge_script = os.path.abspath(os.path.join("Gazebo", "gazebo_driver.py"))
             cmd = [

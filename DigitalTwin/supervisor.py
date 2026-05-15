@@ -38,7 +38,7 @@ class SupervisorNode(Node):
       DANGER when base_tilt_cos < base_angle_termination_thresh (≈ 45°)
     """
 
-    def __init__(self, robot_type: str = "go2"):
+    def __init__(self, robot_type: str = "go2", use_estimator: bool = False):
         super().__init__("supervisor_node")
         self.robot_type = robot_type
 
@@ -80,7 +80,10 @@ class SupervisorNode(Node):
                                  self.proj_gravity_cb, 10)
         # Raw sensors (kept for future safety extensions)
         self.create_subscription(JointState, "/sensors/joint_states", self.joint_cb,  10)
-        self.create_subscription(Odometry,   "/odom/simulator",       self.odom_cb,   10)
+        
+        odom_topic = "/odom/state_estimator" if use_estimator else "/odom/state_simulator"
+        self.get_logger().info(f"Supervisor subscribing to: {odom_topic}")
+        self.create_subscription(Odometry, odom_topic, self.odom_cb, 10)
 
         # ------------------------------------------------------------------
         # 4. ROS Publishers
@@ -198,10 +201,11 @@ class SupervisorNode(Node):
 def main():
     parser = argparse.ArgumentParser(description="Safety Supervisor for the Unitree Go2")
     parser.add_argument("--robot", type=str, default="go2", help="Robot model identifier")
+    parser.add_argument("--use_estimator", action="store_true", help="Use estimated odometry instead of ground truth")
     args = parser.parse_args()
 
     rclpy.init()
-    node = SupervisorNode(robot_type=args.robot)
+    node = SupervisorNode(robot_type=args.robot, use_estimator=args.use_estimator)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

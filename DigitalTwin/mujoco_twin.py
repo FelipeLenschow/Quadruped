@@ -23,7 +23,7 @@ class MujocoTwinNode(Node):
     Passive MuJoCo Digital Twin Node.
     Listens to ROS 2 topics and updates the MuJoCo visualization.
     """
-    def __init__(self, robot_type="go2"):
+    def __init__(self, robot_type="go2", use_estimator=False):
         super().__init__("mujoco_twin_node")
         self.robot_type = robot_type
 
@@ -69,7 +69,10 @@ class MujocoTwinNode(Node):
         # 3. ROS Subscriptions
         self.create_subscription(JointState, "/sensors/joint_states", self.joint_cb, 10)
         self.create_subscription(Imu, "/sensors/imu", self.imu_cb, 10)
-        self.create_subscription(Odometry, "/odom/simulator", self.odom_cb, 10)
+        
+        odom_topic = "/odom/state_estimator" if use_estimator else "/odom/state_simulator"
+        self.get_logger().info(f"MuJoCo Twin subscribing to: {odom_topic}")
+        self.create_subscription(Odometry, odom_topic, self.odom_cb, 10)
 
         # 4. Start Viewer Thread
         self.viewer_thread = threading.Thread(target=self._viewer_loop, daemon=True)
@@ -125,10 +128,11 @@ class MujocoTwinNode(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
+    parser.add_argument("--use_estimator", action="store_true", help="Use estimated odometry instead of ground truth")
     args = parser.parse_args()
 
     rclpy.init()
-    node = MujocoTwinNode(robot_type=args.robot)
+    node = MujocoTwinNode(robot_type=args.robot, use_estimator=args.use_estimator)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

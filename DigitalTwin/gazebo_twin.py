@@ -51,7 +51,7 @@ class GazeboTwinNode(Node):
     Passive Gazebo Digital Twin Node.
     Listens to ROS 2 topics and updates the Gazebo visualization.
     """
-    def __init__(self, robot_type="go2"):
+    def __init__(self, robot_type="go2", use_estimator=False):
         super().__init__("gazebo_twin_node")
         self.robot_type = robot_type
 
@@ -79,7 +79,10 @@ class GazeboTwinNode(Node):
         # 3. ROS Subscriptions
         self.create_subscription(JointState, "/sensors/joint_states", self.joint_cb, 10)
         self.create_subscription(Imu, "/sensors/imu", self.imu_cb, 10)
-        self.create_subscription(Odometry, "/odom/simulator", self.odom_cb, 10)
+        
+        odom_topic = "/odom/state_estimator" if use_estimator else "/odom/state_simulator"
+        self.get_logger().info(f"Gazebo Twin subscribing to: {odom_topic}")
+        self.create_subscription(Odometry, odom_topic, self.odom_cb, 10)
 
     def joint_cb(self, msg: JointState):
         with self.lock:
@@ -203,10 +206,11 @@ class GazeboTwinNode(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
+    parser.add_argument("--use_estimator", action="store_true", help="Use estimated odometry instead of ground truth")
     args = parser.parse_args()
 
     rclpy.init()
-    node = GazeboTwinNode(robot_type=args.robot)
+    node = GazeboTwinNode(robot_type=args.robot, use_estimator=args.use_estimator)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
