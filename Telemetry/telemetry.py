@@ -23,6 +23,8 @@ class StandardState:
             'accelerometer': [0.0, 0.0, 9.81],   # body-frame specific force
         })
         self.base_lin_vel  = [0.0, 0.0, 0.0]
+        self.base_lin_vel_sim = [0.0, 0.0, 0.0]
+        self.base_lin_vel_est = [0.0, 0.0, 0.0]
         self.base_pos      = [0.0, 0.0, 0.5]
         self.feet_contact  = [0.0, 0.0, 0.0, 0.0]  # FL, FR, RL, RR binary
         self.motorState    = [
@@ -83,7 +85,8 @@ class TelemetryManager:
         # ── ROS 2 Publishers — raw sensors ────────────────────────────────
         self.joint_pub = self.node.create_publisher(JointState, '/sensors/joint_states', 10)
         self.imu_pub   = self.node.create_publisher(Imu,        '/sensors/imu',          10)
-        self.odom_pub  = self.node.create_publisher(Odometry,   '/odom',                 10)
+        self.odom_sim_pub = self.node.create_publisher(Odometry,   '/odom/state_simulator', 10)
+        self.odom_est_pub = self.node.create_publisher(Odometry,   '/odom/state_estimator', 10)
 
         # ── ROS 2 Publishers — derived / estimated state ──────────────────
         # Computed once here so all downstream nodes (Supervisor, Controller,
@@ -140,24 +143,31 @@ class TelemetryManager:
         if contact is not None:
             state.feet_contact = contact.tolist() if hasattr(contact, 'tolist') else list(contact)
 
-        # 2. Default to ground-truth velocity when provided (sim / debug mode)
+        # 2. Simulator velocity
         if vel is not None:
-            state.base_lin_vel = vel.tolist() if hasattr(vel, 'tolist') else list(vel)
+            state.base_lin_vel_sim = vel.tolist() if hasattr(vel, 'tolist') else list(vel)
+        else:
+            state.base_lin_vel_sim = [0.0, 0.0, 0.0]
 
-        # 3. LKF override — runs when use_estimator=True
+        # 3. LKF velocity
+        if update_estimator:
+            v_est = self.estimator.update(
+                quat_wxyz   = state.imu.quaternion,
+                accel_body  = state.imu.accelerometer,
+                feet_contact= state.feet_contact,
+                joint_pos   = [m.q  for m in state.motorState],
+                joint_vel   = [m.dq for m in state.motorState],
+                gyro_body   = state.imu.gyroscope,
+            )
+        else:
+            v_est = self.estimator.velocity
+        state.base_lin_vel_est = v_est.tolist()
+
+        # Set the one used by policy
         if self.use_estimator:
-            if update_estimator:
-                v_est = self.estimator.update(
-                    quat_wxyz   = state.imu.quaternion,
-                    accel_body  = state.imu.accelerometer,
-                    feet_contact= state.feet_contact,
-                    joint_pos   = [m.q  for m in state.motorState],
-                    joint_vel   = [m.dq for m in state.motorState],
-                    gyro_body   = state.imu.gyroscope,
-                )
-            else:
-                v_est = self.estimator.velocity
-            state.base_lin_vel = v_est.tolist()
+            state.base_lin_vel = state.base_lin_vel_est
+        else:
+            state.base_lin_vel = state.base_lin_vel_sim
 
         return state
 
@@ -190,14 +200,25 @@ class TelemetryManager:
             imu.linear_acceleration = Vector3(x=float(ac[0]), y=float(ac[1]), z=float(ac[2]))
         self.imu_pub.publish(imu)
 
-        # 1c. Odometry (estimated or measured velocity)
-        odom = Odometry()
-        odom.header.stamp       = msg_time
-        odom.header.frame_id    = 'odom'
-        odom.child_frame_id     = 'base'
         lv = state.base_lin_vel
-        odom.twist.twist.linear = Vector3(x=float(lv[0]), y=float(lv[1]), z=float(lv[2]))
-        self.odom_pub.publish(odom)
+
+        # 1c. Odometry (simulator)
+        odom_sim = Odometry()
+        odom_sim.header.stamp       = msg_time
+        odom_sim.header.frame_id    = 'odom'
+        odom_sim.child_frame_id     = 'base'
+        lv_sim = getattr(state, 'base_lin_vel_sim', lv)
+        odom_sim.twist.twist.linear = Vector3(x=float(lv_sim[0]), y=float(lv_sim[1]), z=float(lv_sim[2]))
+        self.odom_sim_pub.publish(odom_sim)
+
+        # 1d. Odometry (estimator)
+        odom_est = Odometry()
+        odom_est.header.stamp       = msg_time
+        odom_est.header.frame_id    = 'odom'
+        odom_est.child_frame_id     = 'base'
+        lv_est = getattr(state, 'base_lin_vel_est', lv)
+        odom_est.twist.twist.linear = Vector3(x=float(lv_est[0]), y=float(lv_est[1]), z=float(lv_est[2]))
+        self.odom_est_pub.publish(odom_est)
 
         # ── 2. Derived / Estimated state (/estimator/*) ───────────────────
 
@@ -227,24 +248,19 @@ class TelemetryManager:
         fc_msg.data = [float(c) for c in state.feet_contact]
         self.feet_contact_pub.publish(fc_msg)
 
-        # 2f. Leg odometry debug — velocity norm per leg from FK (if estimator active)
-        if self.use_estimator:
-            from .kinematics import Go2Kinematics
-            _kin = Go2Kinematics()
-            omega = np.asarray(state.imu.gyroscope, dtype=np.float64)
-            norms = []
-            for leg_idx in range(4):
-                idx     = [leg_idx, leg_idx + 4, leg_idx + 8]
-                q_leg   = np.array([state.motorState[i].q  for i in idx])
-                dq_leg  = np.array([state.motorState[i].dq for i in idx])
-                r_foot  = _kin.foot_position_body(leg_idx, q_leg)
-                J       = _kin.foot_jacobian_body(leg_idx, q_leg)
-                v_leg   = -J @ dq_leg - np.cross(omega, r_foot)
-                norms.append(float(np.linalg.norm(v_leg)))
-            lo_msg      = Float32MultiArray()
-            lo_msg.data = norms
-            self.leg_odom_pub.publish(lo_msg)
-        else:
-            lo_msg      = Float32MultiArray()
-            lo_msg.data = [0.0, 0.0, 0.0, 0.0]
-            self.leg_odom_pub.publish(lo_msg)
+        # 2f. Leg odometry debug — velocity norm per leg from FK
+        from .kinematics import Go2Kinematics
+        _kin = Go2Kinematics()
+        omega = np.asarray(state.imu.gyroscope, dtype=np.float64)
+        norms = []
+        for leg_idx in range(4):
+            idx     = [leg_idx, leg_idx + 4, leg_idx + 8]
+            q_leg   = np.array([state.motorState[i].q  for i in idx])
+            dq_leg  = np.array([state.motorState[i].dq for i in idx])
+            r_foot  = _kin.foot_position_body(leg_idx, q_leg)
+            J       = _kin.foot_jacobian_body(leg_idx, q_leg)
+            v_leg   = -J @ dq_leg - np.cross(omega, r_foot)
+            norms.append(float(np.linalg.norm(v_leg)))
+        lo_msg      = Float32MultiArray()
+        lo_msg.data = norms
+        self.leg_odom_pub.publish(lo_msg)
