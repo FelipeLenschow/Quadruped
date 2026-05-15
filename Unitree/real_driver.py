@@ -16,9 +16,7 @@ sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "unitree_sdk2_python"))
 )
 
-# from Controller.policy_runner import PolicyRunner # Moved to local import
-from Controller.policy_bridge import CommandProcessor
-from Telemetry.telemetry import TelemetryManager
+from pipeline import LocomotionPipeline
 
 # SDK2 Imports
 from unitree_sdk2py.core.channel import (
@@ -46,31 +44,24 @@ class RealDriver(Node):
         self.low_cmd = unitree_go_msg_dds__LowCmd_()
         self.crc = CRC()
 
-        # 2. Controller Utilities
-        self.telemetry = TelemetryManager(self)
-        self.command_processor = CommandProcessor(self, robot_type=robot)
-
-        # 3. Internal Inference
-        self.policy = None
-        self.desired_qpos = np.array(
-            [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
-            dtype=np.float32,
-        )
-        if internal_policy:
-            try:
-                from Controller.policy_runner import PolicyRunner
-                self.policy = PolicyRunner(
-                    internal_policy, obs_dim=obs_dim, robot_type=robot
-                )
-                self.policy.decimation = 4  # Typical for hardware at 200Hz
-                self.desired_qpos = np.array(
-                    [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5],
-                    dtype=np.float32,
-                )
-                self.sdk_to_isaac = list(range(12))  # Verified mapping should go here
-            except ImportError:
-                self.get_logger().error("[RealDriver] PyTorch not found. Internal policy disabled. Running in TELEMETRY ONLY mode.")
-                self.policy = None
+        # 2. Locomotion Pipeline
+        try:
+            self.pipeline = LocomotionPipeline(
+                node=self,
+                robot_type=robot,
+                checkpoint=internal_policy,
+                obs_dim=obs_dim,
+                use_estimator=True  # Usually True on physical hardware
+            )
+        except ImportError:
+            self.get_logger().error("[RealDriver] PyTorch not found. Internal policy disabled. Running in TELEMETRY ONLY mode.")
+            self.pipeline = LocomotionPipeline(
+                node=self,
+                robot_type=robot,
+                checkpoint=None,
+                obs_dim=obs_dim,
+                use_estimator=True
+            )
 
         # 4. Teleop Subscription
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
@@ -79,8 +70,8 @@ class RealDriver(Node):
         # 5. Initialization logic for SDK
         self._init_low_cmd()
 
-        # 6. Control Loop (50Hz to match policy, SDK internal runs faster)
-        self.create_timer(0.02, self.control_loop)
+        # 6. Control Loop (200Hz to match simulation)
+        self.create_timer(0.005, self.control_loop)
         self.get_logger().info(
             f"[RealDriver] Initialized for {robot}. Ready for deployment."
         )
@@ -103,7 +94,7 @@ class RealDriver(Node):
     def teleop_cb(self, msg):
         self.cmds_vel = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
 
-    def _get_standard_state(self):
+    def _get_raw_sensor_data(self):
         """Standardizes LowState into raw vectors for the TelemetryManager."""
         raw = self.low_state
         q = [float(raw.motor_state[i].q) for i in range(12)]
@@ -125,29 +116,25 @@ class RealDriver(Node):
                 float(ff[2] > thr),  # RR
             ]
 
-        return self.telemetry.process_state(
-            q=q, dq=dq, quat=quat, gyro=gyro, accel=accel, contact=contact
-        )
+        return {
+            'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro, 'accel': accel, 'contact': contact
+        }
 
     def control_loop(self):
         """Internal inference logic."""
         if self.low_state is None:
             return
 
-        state = self._get_standard_state()
+        raw_data = self._get_raw_sensor_data()
 
-        # Republish robot state to ROS2 for monitoring (rviz2, rqt, ros2 topic echo)
-        self.telemetry.publish(sim_time=time.time(), state=state)
-
-        if self.policy:
-            if self.policy.should_step():
-                actions, _ = self.policy.infer(
-                    state, self.cmds_vel, self.desired_qpos, self.sdk_to_isaac
-                )
-
-                # Apply commands
-                cmds = self.command_processor.process(actions, self.desired_qpos)
-                self.send_to_sdk(cmds)
+        cmds = self.pipeline.step(
+            raw_state_kwargs=raw_data,
+            cmd_vel=self.cmds_vel,
+            sim_time=time.time()
+        )
+        
+        if self.pipeline.runner:
+            self.send_to_sdk(cmds)
 
     def send_to_sdk(self, joint_targets):
         """Map ROS Type-Grouped targets to SDK2 motor commands."""
@@ -170,7 +157,7 @@ class RealDriver(Node):
 
         # Re-using the logic from legacy bridge for now, but targeting motor_cmd
         sdk_indices = [3, 0, 9, 6, 4, 1, 10, 7, 5, 2, 11, 8]
-        max_torque = self.command_processor.active_max_torque
+        max_torque = self.pipeline.command_processor.active_max_torque
         
         for i, ros_idx in enumerate(sdk_indices):
             self.low_cmd.motor_cmd[i].q = float(joint_targets[ros_idx])

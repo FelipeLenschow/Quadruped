@@ -64,9 +64,7 @@ from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
-from Controller.policy_runner import PolicyRunner
-from Controller.policy_bridge import CommandProcessor
-from Telemetry.telemetry import TelemetryManager
+from pipeline import LocomotionPipeline
 from Configs.config_loader import load_config
 
 from isaaclab_assets.robots.unitree import (
@@ -105,35 +103,6 @@ class Ros2IsaacDriver(Node):
         # 0. Load Central Config
         self.config = load_config()
         self.ctrl_cfg = self.config.get("control", {})
-
-        # Handles internal policy inference, physics stepping,
-        # and standardizes telemetry for ROS 2 monitoring.
-        self.runner = None
-        if checkpoint:
-            print(f"[IsaacDriver] Loading internal policy runner: {checkpoint}")
-            self.runner = PolicyRunner(
-                checkpoint, obs_dim=obs_dim, robot_type=robot_type
-            )
-            self.runner.decimation = self.ctrl_cfg.get("decimation", 4)
-            self.desired_qpos = np.array(
-                [
-                    0.1,
-                    -0.1,
-                    0.1,
-                    -0.1,  # hips
-                    0.8,
-                    0.8,
-                    1.0,
-                    1.0,  # thighs
-                    -1.5,
-                    -1.5,
-                    -1.5,
-                    -1.5,  # calves
-                ],
-                dtype=np.float32,
-            )
-            # Joint index mapping: ISAAC to Type-Grouped (identity in our bridge)
-            self.mj_to_isaac = list(range(12))
 
         # Joint Configuration
         # (Internal names are what Isaac Sim uses, joint_names are what we group into ROS)
@@ -178,11 +147,17 @@ class Ros2IsaacDriver(Node):
                 f"[IsaacBridge] WARNING: Found only {len(self.mapped_dof_idx)}/12 joints!"
             )
 
-        # ROS 2 Managers
-        self.telemetry = TelemetryManager(self, self.joint_names, use_estimator=use_estimator)
-        self.command_processor = CommandProcessor(
-            self, robot_type=robot_type, joint_names=self.joint_names
+        # Handles internal policy inference, physics stepping,
+        # and standardizes telemetry for ROS 2 monitoring.
+        self.pipeline = LocomotionPipeline(
+            node=self,
+            robot_type=robot_type,
+            checkpoint=checkpoint,
+            obs_dim=obs_dim,
+            use_estimator=use_estimator,
+            joint_names=self.joint_names
         )
+
         self.cmd_echo_pub = self.create_publisher(
             JointState, "/commands/joint_commands", 10
         )
@@ -215,7 +190,7 @@ class Ros2IsaacDriver(Node):
                 f"  - Joint [{i}] (Idx {self.mapped_dof_idx[i]}): {name} | Default: {defaults[i]:.3f}"
             )
 
-    def _get_standard_state(self):
+    def _get_raw_sensor_data(self):
         """Extracts raw state vectors from Isaac Sim data."""
         robot_data = self.robot.data
         q = robot_data.joint_pos[0, self.mapped_dof_idx].cpu().numpy()
@@ -225,9 +200,9 @@ class Ros2IsaacDriver(Node):
         vel_b = robot_data.root_lin_vel_b[0].cpu().numpy()
         pos = robot_data.root_pos_w[0].cpu().numpy()
 
-        return self.telemetry.process_state(
-            q=q, dq=dq, quat=quat, gyro=gyro, pos=pos, vel=vel_b
-        )
+        return {
+            'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro, 'pos': pos, 'vel': vel_b
+        }
 
     def teleop_cb(self, msg):
         # We just store it; if using policy_bridge, this is mostly for completeness
@@ -235,22 +210,16 @@ class Ros2IsaacDriver(Node):
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
 
     def step(self):
-        # --- Internal Inference (50 Hz) ---
-        if self.runner:
-            if self.runner.should_step():
-                # 1. Use standardized parser
-                state = self._get_standard_state()
-
-                # 2. Feed Policy (Unified Inference with Timing)
-                actions, _ = self.runner.infer(
-                    state, self.cmd_vel, self.desired_qpos, self.mj_to_isaac
-                )
-
-                # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-                targets = self.command_processor.process(actions, self.desired_qpos)
-                self.latest_targets[:] = torch.from_numpy(targets).to(
-                    device=self.robot.data.joint_pos.device, dtype=torch.float32
-                )
+        raw_data = self._get_raw_sensor_data()
+        
+        targets = self.pipeline.step(
+            raw_state_kwargs=raw_data,
+            cmd_vel=self.cmd_vel,
+            sim_time=float(self.step_counter * 0.005)
+        )
+        self.latest_targets[:] = torch.from_numpy(targets).to(
+            device=self.robot.data.joint_pos.device, dtype=torch.float32
+        )
 
         # 1. PD Effort Calculation (Matching training: Kp=25.0, Kd=0.5)
         curr_jpos = self.robot.data.joint_pos[0, self.mapped_dof_idx]
@@ -262,7 +231,7 @@ class Ros2IsaacDriver(Node):
         kd = self.ctrl_cfg.get("kd", 0.5)
         
         # Override with safety watchdog torque
-        effort_limit = self.command_processor.active_max_torque
+        effort_limit = self.pipeline.command_processor.active_max_torque
 
         if effort_limit <= 0.1:
             kp = 0.0
@@ -274,7 +243,7 @@ class Ros2IsaacDriver(Node):
         # Apply Actions via Effort
         self.robot.set_joint_effort_target(torques, joint_ids=self.mapped_dof_idx)
 
-        if self.runner and self.runner.counter % 10 == 0:
+        if self.pipeline.runner and self.pipeline.runner.counter % 10 == 0:
             # Publish echo of internal commands for PlotJuggler
             js_echo = JointState()
             js_echo.header.stamp = self.get_clock().now().to_msg()
@@ -299,13 +268,6 @@ class Ros2IsaacDriver(Node):
                 f"[IsaacDriver] V_body: {[round(x,3) for x in root_v_b]} | Max Error: {j_errs[max_err_idx]:.3f} on {self.joint_names[max_err_idx]}"
             )
             self._last_telemetry = now
-
-        # 2. Publish Standardized Telemetry (Downsampled to 20Hz for network efficiency)
-        if self.step_counter % 5 == 0:
-            state = self._get_standard_state()
-            self.telemetry.publish(
-                sim_time=float(self.step_counter * 0.005), state=state
-            )
 
         self.step_counter += 1
 

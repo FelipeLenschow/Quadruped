@@ -19,9 +19,7 @@ import threading
 import subprocess
 from pathlib import Path
 
-from Controller.policy_runner import PolicyRunner
-from Controller.policy_bridge import CommandProcessor
-from Telemetry.telemetry import TelemetryManager
+from pipeline import LocomotionPipeline
 from Telemetry.estimator import rot_from_quat
 from Telemetry.kinematics import Go2Kinematics
 from Configs.config_loader import load_config
@@ -78,22 +76,17 @@ class Ros2GazeboDriver(Node):
         if not effective_use_estimator:
             effective_use_estimator = est_cfg.get("use_estimator", False)
 
-        # Handles internal policy inference, physics stepping,
-        # and standardizes telemetry for ROS 2 monitoring.
-        self.runner = None
-        if checkpoint:
-            print(f"[GazeboDriver] Loading internal policy runner: {checkpoint}")
-            self.runner = PolicyRunner(
-                checkpoint, obs_dim=obs_dim, robot_type=robot_type
-            )
-            self.runner.decimation = self.ctrl_cfg.get("decimation", 4)
-            self.mj_to_isaac = list(range(12))  # Identity
         self.world_name = world_name
 
-        # 4. ROS 2 Telemetry Manager
-        self.telemetry = TelemetryManager(self, JOINT_NAMES, use_estimator=effective_use_estimator)
-        self.command_processor = CommandProcessor(
-            self, robot_type=robot_type, joint_names=JOINT_NAMES
+        # Handles internal policy inference, physics stepping,
+        # and standardizes telemetry for ROS 2 monitoring.
+        self.pipeline = LocomotionPipeline(
+            node=self,
+            robot_type=robot_type,
+            checkpoint=checkpoint,
+            obs_dim=obs_dim,
+            use_estimator=effective_use_estimator,
+            joint_names=JOINT_NAMES
         )
 
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
@@ -330,43 +323,33 @@ class Ros2GazeboDriver(Node):
             # Do NOT skip steps based on sim_time, as it can cause massive latency
             # if timestamps are coarse or not updated fast enough.
             
-            # --- Internal Inference (50 Hz) ---
-            if self.runner:
-                if self.runner.should_step():
-                    # Calculate heuristic contacts using kinematics
-                    contact = [0.0, 0.0, 0.0, 0.0]
-                    R = rot_from_quat(self.base_quat)
-                    for leg_idx in range(4):
-                        sl = slice(leg_idx * 3, leg_idx * 3 + 3)
-                        q_leg = self.q[sl]
-                        r_foot_b = self.kinematics.foot_position_body(leg_idx, q_leg)
-                        r_foot_w = self.base_pos + R @ r_foot_b
-                        if r_foot_w[2] < 0.03:  # 3cm threshold
-                            contact[leg_idx] = 1.0
+            # Calculate heuristic contacts using kinematics
+            contact = [0.0, 0.0, 0.0, 0.0]
+            R = rot_from_quat(self.base_quat)
+            for leg_idx in range(4):
+                sl = slice(leg_idx * 3, leg_idx * 3 + 3)
+                q_leg = self.q[sl]
+                r_foot_b = self.kinematics.foot_position_body(leg_idx, q_leg)
+                r_foot_w = self.base_pos + R @ r_foot_b
+                if r_foot_w[2] < 0.03:  # 3cm threshold
+                    contact[leg_idx] = 1.0
 
-                    # 1. Use centralized parser for Standardization
-                    state = self.telemetry.process_state(
-                        q=self.q,
-                        dq=self.dq,
-                        quat=self.base_quat,
-                        gyro=self.base_ang_vel,
-                        vel=self.base_lin_vel_b,
-                        pos=self.base_pos,
-                        accel=self.base_accel,
-                        contact=contact,
-                    )
+            raw_data = {
+                'q': self.q,
+                'dq': self.dq,
+                'quat': self.base_quat,
+                'gyro': self.base_ang_vel,
+                'vel': self.base_lin_vel_b,
+                'pos': self.base_pos,
+                'accel': self.base_accel,
+                'contact': contact
+            }
 
-                    # 2. Feed Policy (Unified Inference with Timing)
-                    actions, _ = self.runner.infer(
-                        state, self.cmd_vel, self.desired_qpos, self.mj_to_isaac
-                    )
-
-                    # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-                    self.latest_targets[:] = self.command_processor.process(
-                        actions, self.desired_qpos
-                    )
-
-
+            self.latest_targets[:] = self.pipeline.step(
+                raw_state_kwargs=raw_data,
+                cmd_vel=self.cmd_vel,
+                sim_time=self.sim_time
+            )
 
             actuator_count += 1
 
@@ -376,7 +359,7 @@ class Ros2GazeboDriver(Node):
             kd = self.ctrl_cfg.get("kd", 0.5)
             
             # Override with safety watchdog torque
-            effort_limit = self.command_processor.active_max_torque
+            effort_limit = self.pipeline.command_processor.active_max_torque
             sat_effort = self.motor_cfg.get("max_torque", 45.0)
             vel_lim = self.motor_cfg.get("max_velocity", 30.0)
             
@@ -403,35 +386,12 @@ class Ros2GazeboDriver(Node):
             # Silenced debug print to keep terminal clean
             pass
 
-            if count % 4 == 0:
-                contact = [0.0, 0.0, 0.0, 0.0]
-                R = rot_from_quat(self.base_quat)
-                for leg_idx in range(4):
-                    sl = slice(leg_idx * 3, leg_idx * 3 + 3)
-                    q_leg = self.q[sl]
-                    r_foot_b = self.kinematics.foot_position_body(leg_idx, q_leg)
-                    r_foot_w = self.base_pos + R @ r_foot_b
-                    if r_foot_w[2] < 0.03:  # 3cm threshold
-                        contact[leg_idx] = 1.0
-
-                state = self.telemetry.process_state(
-                    q=self.q,
-                    dq=self.dq,
-                    quat=self.base_quat,
-                    gyro=self.base_ang_vel,
-                    vel=self.base_lin_vel_b,
-                    pos=self.base_pos,
-                    accel=self.base_accel,
-                    contact=contact,
-                    update_estimator=False,
-                )
-                self.telemetry.publish(sim_time=self.sim_time, state=state)
             count += 1
             if count % 200 == 0:
                 # Access latest inference time if available from runner
                 inf_ms = 0.0
-                if self.runner and hasattr(self.runner, "inf_times") and self.runner.inf_times:
-                    inf_ms = self.runner.inf_times[-1] * 1000
+                if self.pipeline.runner and hasattr(self.pipeline.runner, "inf_times") and self.pipeline.runner.inf_times:
+                    inf_ms = self.pipeline.runner.inf_times[-1] * 1000
                 print(
                     f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+5.2f} | inf={inf_ms:4.1f}ms   ",
                     end="",

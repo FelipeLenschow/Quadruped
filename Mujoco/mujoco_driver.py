@@ -22,9 +22,7 @@ from geometry_msgs.msg import Quaternion, Vector3, Twist
 from nav_msgs.msg import Odometry
 import argparse
 import threading
-from Controller.policy_runner import PolicyRunner
-from Controller.policy_bridge import CommandProcessor
-from Telemetry.telemetry import TelemetryManager
+from pipeline import LocomotionPipeline
 from Configs.config_loader import load_config
 
 
@@ -35,23 +33,9 @@ class Ros2MujocoDriver(Node):
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
         self.headless = headless
 
-        # Internal Policy Runner
-        self.runner = None
-        if checkpoint:
-            print(f"[MujocoDriver] Loading internal policy runner: {checkpoint}")
-            self.runner = PolicyRunner(
-                checkpoint, obs_dim=obs_dim, robot_type=robot_type, verbose=True
-            )
-            self.mj_to_isaac = list(
-                range(12)
-            )  # Identity mapping for our standardized bridge
-
         # 0. Load Central Config
         self.config = load_config()
         self.ctrl_cfg = self.config.get("control", {})
-        
-        if self.runner:
-            self.runner.decimation = self.ctrl_cfg.get("decimation", 4)
 
         # 1. Load Go2 MuJoCo Scene
         mjcf_path = os.path.join(
@@ -67,10 +51,14 @@ class Ros2MujocoDriver(Node):
 
         self._init_physics()
 
-        # 2. ROS 2 Managers
-        self.telemetry = TelemetryManager(self, self.isaac_names, use_estimator=use_estimator)
-        self.command_processor = CommandProcessor(
-            self, robot_type=robot_type, joint_names=self.isaac_names
+        # 2. Locomotion Pipeline
+        self.pipeline = LocomotionPipeline(
+            node=self,
+            robot_type=robot_type,
+            checkpoint=checkpoint,
+            obs_dim=obs_dim,
+            use_estimator=use_estimator,
+            joint_names=self.isaac_names
         )
 
         # 3. Subscriptions
@@ -149,7 +137,7 @@ class Ros2MujocoDriver(Node):
         self.pos_err_hist = np.zeros((1, 12), dtype=np.float32)
         self.vel_hist = np.zeros((1, 12), dtype=np.float32)
 
-    def _get_standard_state(self, update_estimator=False):
+    def _get_raw_sensor_data(self):
         """Extracts raw state vectors from MuJoCo data."""
         q = self.data.qpos[self.isaac_qpos_addr]
         dq = self.data.qvel[self.isaac_qvel_addr]
@@ -188,9 +176,10 @@ class Ros2MujocoDriver(Node):
                        (name2 and foot_name.lower() in name2.lower()):
                         contact[foot_idx] = 1.0
 
-        return self.telemetry.process_state(
-            q=q, dq=dq, quat=quat, gyro=gyro, accel=accel, pos=pos, vel=vel_b, contact=contact, update_estimator=update_estimator
-        )
+        return {
+            'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro, 
+            'accel': accel, 'pos': pos, 'vel': vel_b, 'contact': contact
+        }
 
     def teleop_cb(self, msg):
         """Teleop passed through to sensors for the policy runner to see."""
@@ -215,7 +204,7 @@ class Ros2MujocoDriver(Node):
         kd = self.ctrl_cfg.get("kd", 0.5)
         
         # Override with safety watchdog torque
-        effort_limit = self.command_processor.active_max_torque
+        effort_limit = self.pipeline.command_processor.active_max_torque
         sat_effort, vel_lim = 23.5, 30.0
         
         if effort_limit <= 0.1:
@@ -269,21 +258,13 @@ class Ros2MujocoDriver(Node):
                 if not headless and not viewer.is_running():
                     break
                 
-                # --- Internal Inference (50 Hz) ---
-                if self.runner:
-                    if self.runner.should_step():
-                        # 1. Use standardized parser
-                        state = self._get_standard_state(update_estimator=True)
-
-                        # 2. Feed Policy (Unified Inference with Timing)
-                        actions, _ = self.runner.infer(
-                            state, self.cmd_vel, self.desired_qpos, self.mj_to_isaac
-                        )
-
-                        # 3. Use CommandProcessor for Sequenced Pipelining (Limit -> Sim -> ROS)
-                        self.current_targets = self.command_processor.process(
-                            actions, self.desired_qpos
-                        )
+                # --- Centralized Pipeline (handles inference & telemetry) ---
+                raw_data = self._get_raw_sensor_data()
+                self.current_targets = self.pipeline.step(
+                    raw_state_kwargs=raw_data,
+                    cmd_vel=self.cmd_vel,
+                    sim_time=self.data.time
+                )
 
                 # --- PD step (200 Hz) ---
                 torques = self._pd_torques(self.current_targets)
@@ -293,10 +274,6 @@ class Ros2MujocoDriver(Node):
                 # --- Physics steps ---
                 for _ in range(self.PD_DECIMATION):
                     mujoco.mj_step(self.model, self.data)
-
-                # --- Publish sensors (Standardized & Synchronized) ---
-                state = self._get_standard_state(update_estimator=False)
-                self.telemetry.publish(sim_time=self.data.time, state=state)
                 
                 if not headless:
                     viewer.sync()
