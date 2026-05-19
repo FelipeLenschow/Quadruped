@@ -43,10 +43,12 @@ class SupervisorNode(Node):
         self.safety_cfg = self.config.get("safety", {})
         self.freq = self.safety_cfg.get("supervisor_frequency", 10.0)
 
-        # Fall-detection threshold — same semantic as training base_angle_termination_thresh.
-        self.tilt_thresh: float = float(
-            self.safety_cfg.get("base_angle_termination_thresh", 0.5)
+        # Fall-detection threshold — loaded in degrees and converted to cosine
+        self.base_tilt_limit_deg: float = float(
+            self.safety_cfg.get("base_tilt_limit_deg", 72.5)
         )
+        self.tilt_thresh: float = float(np.cos(np.radians(self.base_tilt_limit_deg)))
+
         self.forward_tilt_limit: float = float(
             self.safety_cfg.get("base_forward_tilt_limit_deg", 30.0)
         )
@@ -131,7 +133,7 @@ class SupervisorNode(Node):
 
         self.get_logger().info(
             f"Supervisor Node initialised at {self.freq} Hz.  "
-            f"Tilt threshold: cos(θ) < {self.tilt_thresh:.2f}, "
+            f"Tilt threshold: {self.base_tilt_limit_deg:.1f}° (cos(θ) < {self.tilt_thresh:.3f}), "
             f"Forward pitch threshold: {self.forward_tilt_limit:.1f}°, "
             f"Joint ROM safe boundary margin: {self.rom_safety_margin*100}%, "
             f"Global max torque limit: {self.global_max_torque:.2f} Nm ({self.global_max_torque_percent}%)"
@@ -216,13 +218,16 @@ class SupervisorNode(Node):
         dangerous = fall_danger or forward_danger or joint_danger
 
         if dangerous and not self._shutdown_logged:
+            # Clear carriage return line first so the shutdown banner is perfectly clean
+            print("\r" + " " * 120 + "\r", end="", flush=True)
+
             reason = ""
             details_lines = []
             if fall_danger:
                 reason = "Base orientation tilt (fall)"
                 details_lines = [
-                    f"cos(θ) = {base_tilt_cos:+.3f} (thresh: {self.tilt_thresh:.2f})",
-                    f"Estimated tilt angle: {tilt_deg:5.1f}°"
+                    f"cos(θ) = {base_tilt_cos:+.3f} (thresh: {self.tilt_thresh:.3f})",
+                    f"Estimated tilt angle: {tilt_deg:5.1f}° (thresh: {self.base_tilt_limit_deg:.1f}°)"
                 ]
             elif forward_danger:
                 reason = "Dangerous forward tilt (pitch)"
@@ -259,6 +264,12 @@ class SupervisorNode(Node):
 
         if self._robot_safe:
             msg.data = float(self.global_max_torque)
+            # Print periodic safe status in-place replacing the older print
+            print(
+                f"\r[Supervisor] Status: SAFE | cos(θ)={base_tilt_cos:+.3f} ({tilt_deg:.1f}°/{self.base_tilt_limit_deg:.1f}°) | "
+                f"pitch={pitch_deg:+.1f}°/{self.forward_tilt_limit:.1f}° | max_t={self.global_max_torque:.1f}Nm   ",
+                end="", flush=True
+            )
         else:
             msg.data = 0.0
 
