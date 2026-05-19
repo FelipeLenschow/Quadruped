@@ -245,6 +245,8 @@ def run_cli_menu():
     headless = IS_ROBOT
     video = False
     teleop = False
+    if action in ["mujoco", "gazebo", "real_deploy", "isaac_sim"]:
+        teleop = True # Always active internally via /cmd_vel subscription
     run_name = ""
     use_estimator = False
 
@@ -265,12 +267,6 @@ def run_cli_menu():
             video = input("Record Video? [y/N]: ").lower().strip() == "y"
 
     if action in ["mujoco", "gazebo", "real_deploy"]:
-        # Only ask for teleop prompt for Gazebo and Real Deployment
-        if action != "mujoco":
-            teleop = input("Enable Remote Teleop? [y/N]: ").lower().strip() == "y"
-        else:
-            teleop = True # Always enable internally for MuJoCo
-            
         if not IS_ROBOT and action != "real_deploy":
             headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
 
@@ -459,9 +455,6 @@ def main():
         elif action == "teleop":
             cmd = ["ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard"]
             # No robot_key or ckpt needed for this
-
-        if teleop and action == "isaac_sim":
-            cmd.append("--teleop")
 
         subprocess.run(cmd, env=env)
 
