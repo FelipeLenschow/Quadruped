@@ -283,8 +283,9 @@ class Ros2MujocoDriver(Node):
                 # Logging for diagnosis (every 200 steps ~ 0.2s)
                 if self.step_counter % 200 == 0:
                     inf_ms = 0.0
-                    if self.pipeline.runner and hasattr(self.pipeline.runner, "inf_times") and self.pipeline.runner.inf_times:
-                        inf_ms = self.pipeline.runner.inf_times[-1] * 1000
+                    runner = self.pipeline.policy_manager.policies.get("main")
+                    if runner and hasattr(runner, "inf_times") and runner.inf_times:
+                        inf_ms = runner.inf_times[-1] * 1000
                     print(
                         f"\r[Bridge] t={self.data.time:7.2f} h={raw_data['pos'][2]:.2f} vx={raw_data['vel'][0]:+5.2f} | inf={inf_ms:4.1f}ms   ",
                         end="",

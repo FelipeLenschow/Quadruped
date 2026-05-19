@@ -390,8 +390,9 @@ class Ros2GazeboDriver(Node):
             if count % 200 == 0:
                 # Access latest inference time if available from runner
                 inf_ms = 0.0
-                if self.pipeline.runner and hasattr(self.pipeline.runner, "inf_times") and self.pipeline.runner.inf_times:
-                    inf_ms = self.pipeline.runner.inf_times[-1] * 1000
+                runner = self.pipeline.policy_manager.policies.get("main")
+                if runner and hasattr(runner, "inf_times") and runner.inf_times:
+                    inf_ms = runner.inf_times[-1] * 1000
                 print(
                     f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+5.2f} | inf={inf_ms:4.1f}ms   ",
                     end="",

@@ -241,7 +241,8 @@ class Ros2IsaacDriver(Node):
         # Apply Actions via Effort
         self.robot.set_joint_effort_target(torques, joint_ids=self.mapped_dof_idx)
 
-        if self.pipeline.runner and self.pipeline.runner.counter % 10 == 0:
+        runner = self.pipeline.policy_manager.policies.get("main")
+        if runner and runner.counter % 10 == 0:
             # Publish echo of internal commands for PlotJuggler
             js_echo = JointState()
             js_echo.header.stamp = self.get_clock().now().to_msg()

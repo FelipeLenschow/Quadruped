@@ -66,16 +66,12 @@ class CommandSafetyProcessor:
         # 2. Hardware Joint Limits (from config — physical, never change)
         # ------------------------------------------------------------------
         limits = self.config.get("joint_limits", {})
-        abd = limits.get("abduction", {"min": -1.047, "max": 1.047})
-        hip_f = limits.get("hip_front", {"min": -1.571, "max": 3.491})
-        hip_r = limits.get("hip_rear", {"min": -0.524, "max": 4.538})
-        knee = limits.get("knee", {"min": -2.723, "max": -0.5})
+        abd_limits = limits.get("abduction", {"min": -1.047, "max": 1.047})
+        hip_limits = limits.get("hip_front", {"min": -1.571, "max": 3.491})
+        knee_limits = limits.get("knee", {"min": -2.723, "max": -0.5})
 
-        # Saturation boundary arrays (12 joints)
-        abd_limits = limits.get("abduction", {"min": -1.04, "max": 1.04})
-        hip_limits = limits.get("hip", {"min": -1.57, "max": 3.49})
-        knee_limits = limits.get("knee", {"min": -2.72, "max": -0.83})
-
+        # Unified limit arrays (12 joints: 4 abd + 4 hip + 4 knee)
+        # Used for BOTH soft clipping AND safety ROM checks.
         self.hard_min = np.array(
             [abd_limits["min"]] * 4 + [hip_limits["min"]] * 4 + [knee_limits["min"]] * 4,
             dtype=np.float32)
@@ -88,13 +84,9 @@ class CommandSafetyProcessor:
         self.soft_min = (self.center - self.half_range * self.saturation).astype(np.float32)
         self.soft_max = (self.center + self.half_range * self.saturation).astype(np.float32)
 
-        # Safety boundary arrays
-        self.joint_limits_min = np.array(
-            [abd["min"]] * 4 + [hip_f["min"]] * 2 + [hip_r["min"]] * 2 + [knee["min"]] * 4,
-            dtype=np.float64)
-        self.joint_limits_max = np.array(
-            [abd["max"]] * 4 + [hip_f["max"]] * 2 + [hip_r["max"]] * 2 + [knee["max"]] * 4,
-            dtype=np.float64)
+        # Safety ROM check uses the same limits as soft clipping
+        self.joint_limits_min = self.hard_min.astype(np.float64)
+        self.joint_limits_max = self.hard_max.astype(np.float64)
 
         # Nominal Standing Pose (gating fallback)
         self.desired_qpos = np.array([

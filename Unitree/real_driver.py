@@ -133,7 +133,7 @@ class RealDriver(Node):
             sim_time=time.time()
         )
         
-        if self.pipeline.runner:
+        if "main" in self.pipeline.policy_manager.policies:
             self.send_to_sdk(cmds)
 
     def send_to_sdk(self, joint_targets):
