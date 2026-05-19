@@ -85,6 +85,7 @@ def run_cli_menu():
         print("  [7] Remote Teleop")
         print("  [8] Play Digital Twin")
         print("  [9] Play Safety Supervisor")
+        print("  [T] Test Joints (Real Robot)")
     else:
         print("  [X] Play MuJoCo (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Gazebo (REQUIRES DOCKER OR PY3.10)")
@@ -92,6 +93,7 @@ def run_cli_menu():
         print("  [X] Remote Teleop (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Digital Twin (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Safety Supervisor (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Test Joints (Real Robot) (REQUIRES DOCKER OR PY3.10)")
 
     action_map = {
         "0": "repeat",
@@ -104,15 +106,27 @@ def run_cli_menu():
         "7": "teleop",
         "8": "twin",
         "9": "supervisor",
+        "t": "hardware_tools",
+        "T": "hardware_tools",
     }
     
     default_action = "0" if last_cmd else "4"
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-9] (default {default_action}): ").strip() or default_action
-    action = action_map.get(choice, "None")
+    choice = input(f"Enter choice [0-9, T] (default {default_action}): ").strip() or default_action
+    action = action_map.get(choice.lower(), "None")
     
+    if action == "hardware_tools":
+        print("\n--- Hardware Tools ---")
+        print("  [1] Telemetry Only (Real Driver, No Policy)")
+        print("  [2] Joint Tester (Sine Wave Oscillation)")
+        hw_choice = input("Enter choice [1-2] (default 1): ").strip() or "1"
+        if hw_choice == "2":
+            action = "test_joints"
+        else:
+            action = "real_telemetry"
+            
     if action == "twin":
         twin_choice = input("Select Digital Twin Simulator [1: MuJoCo, 2: Gazebo] (default 1): ").strip() or "1"
         action = "gazebo_twin" if twin_choice == "2" else "mujoco_twin"
@@ -127,7 +141,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "mujoco_twin", "gazebo_twin", "supervisor"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "supervisor", "test_joints"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -153,7 +167,7 @@ def run_cli_menu():
         print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Aborting.")
         sys.exit(1)
         
-    if requires_docker and choice in ["4", "5", "6", "7", "8", "9"]:
+    if requires_docker and choice.lower() in ["4", "5", "6", "7", "8", "9", "t"]:
         print(f"\n[ERROR] Action '{action}' requires ROS 2 Humble (Python 3.10).")
         print("        Please run this task inside DOCKER or switch to a 3.10 environment.")
         sys.exit(1)
@@ -164,7 +178,7 @@ def run_cli_menu():
     selected_module_name = "None"
     selected_module_path = "."
     
-    if action not in ["mujoco_twin", "gazebo_twin", "supervisor", "teleop"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "supervisor", "teleop", "test_joints", "real_telemetry"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         
         if not modules:
@@ -197,7 +211,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "mujoco_twin", "gazebo_twin", "supervisor"]:
+    if action not in ["teleop", "mujoco_twin", "gazebo_twin", "supervisor", "test_joints", "real_telemetry"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -373,7 +387,7 @@ def main():
             cmd.append("--video_interval=5000")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "mujoco_twin", "gazebo_twin", "supervisor", "teleop"):
+    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "supervisor", "teleop", "test_joints"):
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@env_isaacsim/bin/python"
         sys_python = sys.executable 
@@ -442,19 +456,24 @@ def main():
             ]
             if use_estimator:
                 cmd.append("--use_estimator")
-        elif action == "real_deploy":
+        elif action in ["real_deploy", "real_telemetry"]:
             bridge_script = os.path.abspath(os.path.join("Unitree", "real_driver.py"))
             cmd = [
                 sys_python,
                 bridge_script,
                 f"--robot={robot_key}",
-                f"--internal_policy={abs_ckpt}",
                 f"--obs_dim={obs_dim}",
             ]
+            if action == "real_deploy" and abs_ckpt:
+                cmd.append(f"--internal_policy={abs_ckpt}")
 
         elif action == "teleop":
             cmd = ["ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard"]
             # No robot_key or ckpt needed for this
+
+        elif action == "test_joints":
+            bridge_script = os.path.abspath(os.path.join("Unitree", "test_joints.py"))
+            cmd = [sys_python, bridge_script]
 
         subprocess.run(cmd, env=env)
 
