@@ -176,13 +176,12 @@ class CommandSafetyProcessor:
         """Recalculate all derived safety thresholds from current params."""
         self.tilt_thresh = float(np.cos(np.radians(self.base_tilt_limit_deg)))
 
-        # Joint ROM safe boundaries — use the operational envelope (soft limits).
-        # If actual joint positions exceed soft bounds, external forces (fall,
-        # impact) have pushed the robot beyond what the policy can command.
-        # The saturation_limit (90%) already provides the safety buffer from
-        # the raw hardware limits.
-        self.joint_safe_min = self.soft_min.astype(np.float64)
-        self.joint_safe_max = self.soft_max.astype(np.float64)
+        # Joint ROM safe boundaries based on hard limits and safety margin fraction:
+        # safe_min = hard_min + margin * hard_range
+        # safe_max = hard_max - margin * hard_range
+        joint_rom = self.joint_limits_max - self.joint_limits_min
+        self.joint_safe_min = self.joint_limits_min + self.rom_safety_margin * joint_rom
+        self.joint_safe_max = self.joint_limits_max - self.rom_safety_margin * joint_rom
 
         self.global_max_torque = (self.max_torque_percent / 100.0) * self.motor_max_torque
 
@@ -250,6 +249,8 @@ class CommandSafetyProcessor:
             else:
                 self.active_max_torque = 0.0
                 return self.desired_qpos.copy(), 0.0
+
+
 
         is_safe, reason = self.evaluate_safety(state)
 
