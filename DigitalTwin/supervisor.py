@@ -105,25 +105,36 @@ class SupervisorNode(Node):
         self.cmd_thread = threading.Thread(target=self._command_listener, daemon=True)
         self.cmd_thread.start()
 
-        max_torque_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
-        self.get_logger().info(
-            f"Supervisor Heartbeat initialized at {self.freq} Hz.\n"
-            f"  Max torque: {self.max_torque_percent}% = {max_torque_nm:.1f} Nm\n"
-            f"  Roll limit: {self.base_tilt_limit_deg}°\n"
-            f"  Pitch limit: {self.base_forward_tilt_limit_deg}°\n"
-            f"  Joint ROM margin: {self.joint_rom_safety_margin * 100}%\n"
-            f"  Watchdog timeout: {self.watchdog_timeout}s\n"
-            f"Type commands below to configure safety dynamically (e.g. Torque Limit = 20, Roll = 30, Pitch = 30, Timeout = 0.5):"
-        )
 
     def _command_listener(self):
         """Listens for user commands from stdin to dynamically configure safety parameters."""
         import re
+        import readline
+
+        # Autocomplete options for safety parameters
+        COMMANDS = [
+            "Torque Limit = ",
+            "Max Roll = ",
+            "Max Pitch = ",
+            "Joint ROM = ",
+            "Watchdog = "
+        ]
+
+        def completer(text, state):
+            # Case-insensitive prefix match
+            options = [cmd for cmd in COMMANDS if cmd.lower().startswith(text.lower())]
+            if state < len(options):
+                return options[state]
+            return None
+
+        readline.set_completer(completer)
+        # Treat the entire line as a single word to correctly autocomplete space-separated command names
+        readline.set_completer_delims("")
+        readline.parse_and_bind("tab: complete")
+
         while rclpy.ok():
             try:
-                line = sys.stdin.readline()
-                if not line:
-                    break
+                line = input()
                 
                 # Dynamic terminal scroll tracking
                 self.input_submitted = True
@@ -131,6 +142,8 @@ class SupervisorNode(Node):
                 raw_line = line.strip()
                 if raw_line:
                     self.last_command = raw_line
+                    # Store submitted command in GNU readline history
+                    readline.add_history(raw_line)
 
                 # Enforce strict pattern: <Parameter Name> = <Number>
                 match = re.match(r"^\s*([a-zA-Z\s]+)\s*=\s*([-+]?\d*\.\d+|\d+)\s*$", raw_line)
@@ -155,8 +168,10 @@ class SupervisorNode(Node):
                         self.joint_rom_safety_margin = val
                 elif "timeout" in param or "watchdog" in param:
                     self.watchdog_timeout = val
-            except Exception:
+            except (EOFError, KeyboardInterrupt):
                 break
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Heartbeat Loop
@@ -186,14 +201,16 @@ class SupervisorNode(Node):
         
         if self.heartbeat_count > 1:
             if use_scroll_adjust:
-                # Move up 9 lines to compensate for terminal scroll/newline
-                print("\033[9A", end="")
+                # Move up 11 lines to compensate for terminal scroll/newline
+                print("\033[11A", end="")
                 self.input_submitted = False
             else:
-                # Save cursor position and move up 8 lines
-                print("\033[s\033[8A", end="")
+                # Save cursor position and move up 10 lines
+                print("\033[s\033[10A", end="")
 
         max_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
+        print(f"\r\033[K")
+        print(f"\r\033[K")
         print(f"\r  {_CYAN}[Last Command]{_RESET}: {self.last_command}\033[K")
         print(f"\r\033[K")
         print(f"\r{_GREEN}[Supervisor]{_RESET} Heartbeat #{self.heartbeat_count}\033[K")
