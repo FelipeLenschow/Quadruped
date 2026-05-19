@@ -9,6 +9,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState, Imu
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+import yaml
 
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -97,8 +98,9 @@ class RealDriver(Node):
     def _get_raw_sensor_data(self):
         """Standardizes LowState into raw vectors for the TelemetryManager."""
         raw = self.low_state
-        q = [float(raw.motor_state[i].q) for i in range(12)]
-        dq = [float(raw.motor_state[i].dq) for i in range(12)]
+        sdk_to_ros = [3, 0, 9, 6, 4, 1, 10, 7, 5, 2, 11, 8]
+        q = [float(raw.motor_state[i].q) for i in sdk_to_ros]
+        dq = [float(raw.motor_state[i].dq) for i in sdk_to_ros]
         quat = raw.imu_state.quaternion   # [w, x, y, z]
         gyro = raw.imu_state.gyroscope    # body frame
         accel = raw.imu_state.accelerometer # body frame
@@ -115,6 +117,8 @@ class RealDriver(Node):
                 float(ff[3] > thr),  # RL
                 float(ff[2] > thr),  # RR
             ]
+        # print(q)
+        #[0.031, 1.31, -2.85, 0.014, 1.32, -2.83, -0.320, 1.323, -2.83, 0.31, 1.31, -2.80] #Laydown
 
         return {
             'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro, 'accel': accel, 'contact': contact
@@ -153,13 +157,11 @@ class RealDriver(Node):
             2,
             6,
             10,
-        ]  # This needs to be carefully verified for SDK2
+        ]
 
-        # Re-using the logic from legacy bridge for now, but targeting motor_cmd
-        sdk_indices = [3, 0, 9, 6, 4, 1, 10, 7, 5, 2, 11, 8]
         max_torque = self.pipeline.safety_processor.active_max_torque
         
-        for i, ros_idx in enumerate(sdk_indices):
+        for i, ros_idx in enumerate(ros_to_sdk):
             self.low_cmd.motor_cmd[i].q = float(joint_targets[ros_idx])
             self.low_cmd.motor_cmd[i].dq = 0.0
             
@@ -194,7 +196,10 @@ def main():
         sys.exit(1)
 
     # 2. ROS 2 Initialization (Use a different Domain ID to avoid conflict with SDK)
-    os.environ["ROS_DOMAIN_ID"] = "1"
+    with open("Configs/config.yaml", 'r') as f:
+        cfg_data = yaml.safe_load(f)
+        domain = str(cfg_data.get("network", {}).get("ros_domain_id", "1"))
+    os.environ["ROS_DOMAIN_ID"] = domain
     rclpy.init()
     node = RealDriver(args.robot, args.internal_policy, args.obs_dim, interface=args.interface)
     try:
