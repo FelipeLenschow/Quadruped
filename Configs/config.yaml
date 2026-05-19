@@ -57,5 +57,7 @@ network:
 safety:
   watchdog_timeout: 1.0     # Seconds before torque is zeroed if no heartbeat
   supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
-  global_max_torque: 25.0   # Nm
+  global_max_torque_percent: 55.0 # Maximum allowed torque as a percentage of physical motor capacity (45.0 Nm)
   base_angle_termination_thresh: 0.3   # cos of the tilt angle between the robot's z-axis and world z-axis
+  base_forward_tilt_limit_deg: 30.0    # Trigger emergency stop if pitched forward past 30 degrees
+  joint_rom_safety_margin: 0.15        # Protect the outer 15% range of motion of each joint

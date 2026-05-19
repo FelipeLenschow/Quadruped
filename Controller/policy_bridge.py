@@ -65,9 +65,13 @@ class CommandProcessor:
         self.cmd_pub = self.node.create_publisher(JointState, '/commands/joint_commands', 10)
         
         # Safety / Max Torque
+        self.motor_cfg = self.config.get("motor", {})
+        self.motor_max_torque = float(self.motor_cfg.get("max_torque", 45.0))
+
         self.safety_cfg = self.config.get("safety", {})
         self.watchdog_timeout = self.safety_cfg.get("watchdog_timeout", 1.0)
-        self.global_max_torque = self.safety_cfg.get("global_max_torque", 23.5)
+        self.global_max_torque_percent = float(self.safety_cfg.get("global_max_torque_percent", 55.0))
+        self.global_max_torque = (self.global_max_torque_percent / 100.0) * self.motor_max_torque
         
         self.active_max_torque = 0.0     # Fail-safe start: Zero torque until supervisor says otherwise
         self.last_torque_msg_time = 0.0  # 0 means no supervisor heartbeat received yet
@@ -76,7 +80,10 @@ class CommandProcessor:
         self.node.create_subscription(Float32, "/safety/max_torque", self.max_torque_cb, 10)
         
         self.node.get_logger().info(f"[CommandProcessor] Initialized for {robot_type} (Sat: {self.saturation*100}%)")
-        self.node.get_logger().info(f"[CommandProcessor] Safety: Timeout={self.watchdog_timeout}s, GlobalMax={self.global_max_torque}Nm")
+        self.node.get_logger().info(
+            f"[CommandProcessor] Safety: Timeout={self.watchdog_timeout}s, "
+            f"GlobalMax={self.global_max_torque:.2f}Nm ({self.global_max_torque_percent}%)"
+        )
 
     def max_torque_cb(self, msg: Float32):
         # Apply global limit
