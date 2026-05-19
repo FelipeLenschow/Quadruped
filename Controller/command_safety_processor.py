@@ -240,21 +240,25 @@ class CommandSafetyProcessor:
         Returns:
             (final_targets: np.ndarray, max_torque: float)
         """
+        # ── Latched Shutdown: stay blocked until operator presses Enter ──
+        if self._policy_blocked:
+            if "safety" in proposed_targets:
+                self.active_max_torque = self.global_max_torque
+                targets = proposed_targets["safety"]
+                final_targets = np.clip(targets, self.soft_min, self.soft_max)
+                return final_targets, self.active_max_torque
+            else:
+                self.active_max_torque = 0.0
+                return self.desired_qpos.copy(), 0.0
+
         is_safe, reason = self.evaluate_safety(state)
 
         if is_safe:
             # ── Safe Mode: Use Main Policy ────────────────────────────────
-            if self._policy_blocked:
-                self.node.get_logger().info(
-                    "[CommandSafetyProcessor] Safety restored. Main policy re-enabled.")
-                self._policy_blocked = False
-                self._shutdown_logged = False
-
             self._robot_safe = True
             self.active_max_torque = self.global_max_torque
 
             targets = proposed_targets.get("main", self.desired_qpos)
-            # Capping output to the safety processor's physical limits (ROM soft margins)
             final_targets = np.clip(targets, self.soft_min, self.soft_max)
             return final_targets, self.active_max_torque
 
@@ -264,17 +268,15 @@ class CommandSafetyProcessor:
             self._shutdown_logged = True
             self._policy_blocked = True
             self._robot_safe = False
-            # Background thread wait for Enter
+            # Background thread: wait for Enter to unlatch
             threading.Thread(target=self._reset_worker, daemon=True).start()
 
         if "safety" in proposed_targets:
-            # Safety policy loaded -> use it
             self.active_max_torque = self.global_max_torque
             targets = proposed_targets["safety"]
             final_targets = np.clip(targets, self.soft_min, self.soft_max)
             return final_targets, self.active_max_torque
         else:
-            # No safety policy loaded -> limp mode (zero torque)
             self.active_max_torque = 0.0
             return self.desired_qpos.copy(), 0.0
 
@@ -303,6 +305,8 @@ class CommandSafetyProcessor:
     def _reset_worker(self):
         input()
         print(f"{_YELLOW}{_BOLD}>>> Safety RESET. Re-enabling main policy...{_RESET}")
+        self.node.get_logger().info(
+            "[CommandSafetyProcessor] Operator pressed ENTER. Main policy re-enabled.")
         self._robot_safe = True
         self._shutdown_logged = False
         self._policy_blocked = False
