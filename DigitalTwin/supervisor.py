@@ -125,17 +125,18 @@ class SupervisorNode(Node):
         self.rom_margin_pub.publish(
             Float32(data=float(self.joint_rom_safety_margin)))
 
-        # Periodic console output (every 5 seconds)
+        # Console status report on every heartbeat (replaces the last multi-line block in-place)
         self.heartbeat_count += 1
-        if self.heartbeat_count % int(self.freq * 5) == 0:
-            max_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
-            print(
-                f"\r{_GREEN}[Supervisor]{_RESET} ♥ Heartbeat #{self.heartbeat_count} | "
-                f"torque={self.max_torque_percent}% ({max_nm:.1f}Nm) | "
-                f"tilt={self.base_tilt_limit_deg}° | "
-                f"pitch={self.base_forward_tilt_limit_deg}° | "
-                f"ROM margin={self.joint_rom_safety_margin*100:.0f}%   ",
-                end="", flush=True)
+        if self.heartbeat_count > 1:
+            # Move cursor up 4 lines to overwrite the previous print block
+            print("\033[4A", end="")
+
+        max_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
+        print(f"\r{_GREEN}[Supervisor]{_RESET} Heartbeat #{self.heartbeat_count}\033[K")
+        print(f"\r ├─ Torque Limit : {self.max_torque_percent}% ({max_nm:.1f} Nm)\033[K")
+        print(f"\r ├─ Max Base Tilt: {self.base_tilt_limit_deg} deg\033[K")
+        print(f"\r ├─ Max Pitch    : {self.base_forward_tilt_limit_deg} deg\033[K")
+        print(f"\r └─ Joint ROM    : {self.joint_rom_safety_margin*100:.0f}% margin\033[K", end="", flush=True)
 
 
 def main():
@@ -153,7 +154,7 @@ def main():
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        print()
 
     node.destroy_node()
     rclpy.shutdown()
