@@ -1,7 +1,7 @@
 """
 Isaac Sim Driver for Quadruped Locomotion.
 Integrates the simulator's Articulation interface with the central
-Policy Runner and Command Processor (Turbo Mode).
+Policy Runner and Command Safety Processor (Turbo Mode).
 """
 
 import argparse
@@ -205,8 +205,6 @@ class Ros2IsaacDriver(Node):
         }
 
     def teleop_cb(self, msg):
-        # We just store it; if using policy_bridge, this is mostly for completeness
-        # as policy_bridge subscribes to /cmd_vel directly.
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
 
     def step(self):
@@ -231,7 +229,7 @@ class Ros2IsaacDriver(Node):
         kd = self.ctrl_cfg.get("kd", 0.5)
         
         # Override with safety watchdog torque
-        effort_limit = self.pipeline.command_processor.active_max_torque
+        effort_limit = self.pipeline.safety_processor.active_max_torque
 
         if effort_limit <= 0.1:
             kp = 0.0

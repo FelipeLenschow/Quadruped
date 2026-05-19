@@ -359,7 +359,7 @@ class Ros2GazeboDriver(Node):
             kd = self.ctrl_cfg.get("kd", 0.5)
             
             # Override with safety watchdog torque
-            effort_limit = self.pipeline.command_processor.active_max_torque
+            effort_limit = self.pipeline.safety_processor.active_max_torque
             sat_effort = self.motor_cfg.get("max_torque", 45.0)
             vel_lim = self.motor_cfg.get("max_velocity", 30.0)
             

@@ -157,7 +157,7 @@ class RealDriver(Node):
 
         # Re-using the logic from legacy bridge for now, but targeting motor_cmd
         sdk_indices = [3, 0, 9, 6, 4, 1, 10, 7, 5, 2, 11, 8]
-        max_torque = self.pipeline.command_processor.active_max_torque
+        max_torque = self.pipeline.safety_processor.active_max_torque
         
         for i, ros_idx in enumerate(sdk_indices):
             self.low_cmd.motor_cmd[i].q = float(joint_targets[ros_idx])

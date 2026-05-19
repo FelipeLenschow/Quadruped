@@ -1,14 +1,22 @@
+"""
+Safety Supervisor — Heartbeat Broadcaster.
+
+Reads safety parameters from config.yaml and broadcasts them on separate
+ROS 2 Float32 topics at a configurable frequency.  The robot's internal
+CommandSafetyProcessor subscribes to these topics and performs all actual
+safety evaluation.
+
+This node acts as a dead-man's switch: if it stops publishing, the robot's
+internal watchdog will detect the loss and disable torque.
+"""
+
 import os
 import sys
 import time
 import argparse
-import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import JointState
-from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Vector3
 from std_msgs.msg import Float32
 
 # Ensure absolute path of the repository is in sys.path
@@ -17,22 +25,30 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from Configs.config_loader import load_config
 
 # ---------------------------------------------------------------------------
-# ANSI helpers for coloured terminal output
+# ANSI helpers
 # ---------------------------------------------------------------------------
-_RED    = "\033[91m"
-_YELLOW = "\033[93m"
+_GREEN  = "\033[92m"
 _BOLD   = "\033[1m"
 _RESET  = "\033[0m"
 
 
 class SupervisorNode(Node):
     """
-    Supervisor Node.
-    Subscribes to robot telemetry and runs a safety check loop.
-    Publishes max torque overrides to /safety/max_torque.
+    Heartbeat Supervisor.
+
+    Publishes safety configuration parameters on separate Float32 topics:
+      /safety/heartbeat                   — alive signal (timestamp)
+      /safety/max_torque_percent          — max torque as % of motor capacity
+      /safety/base_tilt_limit_deg         — base tilt shutdown threshold
+      /safety/base_forward_tilt_limit_deg — forward pitch shutdown threshold
+      /safety/joint_rom_safety_margin     — joint ROM safe boundary fraction
+
+    All values are read from config.yaml at startup and broadcast every cycle.
+    The parameters are designed to be changeable on-the-fly in the future
+    (e.g., via a GUI or ros2 topic pub override).
     """
 
-    def __init__(self, robot_type: str = "go2", use_estimator: bool = False):
+    def __init__(self, robot_type: str = "go2"):
         super().__init__("supervisor_node")
         self.robot_type = robot_type
 
@@ -43,254 +59,97 @@ class SupervisorNode(Node):
         self.safety_cfg = self.config.get("safety", {})
         self.freq = self.safety_cfg.get("supervisor_frequency", 10.0)
 
-        # Fall-detection threshold — loaded in degrees and converted to cosine
-        self.base_tilt_limit_deg: float = float(
-            self.safety_cfg.get("base_tilt_limit_deg", 72.5)
-        )
-        self.tilt_thresh: float = float(np.cos(np.radians(self.base_tilt_limit_deg)))
-
-        self.forward_tilt_limit: float = float(
-            self.safety_cfg.get("base_forward_tilt_limit_deg", 30.0)
-        )
-        self.rom_safety_margin: float = float(
-            self.safety_cfg.get("joint_rom_safety_margin", 0.15)
-        )
-
-        # Dynamic max torque calculation based on percentage of motor limit
+        # Safety parameters (read from config, broadcast to robot)
         self.motor_cfg = self.config.get("motor", {})
         self.motor_max_torque = float(self.motor_cfg.get("max_torque", 45.0))
-        self.global_max_torque_percent = float(self.safety_cfg.get("global_max_torque_percent", 55.0))
-        self.global_max_torque = (self.global_max_torque_percent / 100.0) * self.motor_max_torque
+
+        self.max_torque_percent = float(
+            self.safety_cfg.get("global_max_torque_percent", 55.0))
+        self.base_tilt_limit_deg = float(
+            self.safety_cfg.get("base_tilt_limit_deg", 30.0))
+        self.base_forward_tilt_limit_deg = float(
+            self.safety_cfg.get("base_forward_tilt_limit_deg", 30.0))
+        self.joint_rom_safety_margin = float(
+            self.safety_cfg.get("joint_rom_safety_margin", 0.15))
+        self.watchdog_timeout = float(
+            self.safety_cfg.get("watchdog_timeout", 1.0))
 
         # ------------------------------------------------------------------
-        # Joint physical boundaries and 15% safety margins
+        # 2. ROS Publishers (separate Float32 topics)
         # ------------------------------------------------------------------
-        limits = self.config.get("joint_limits", {})
-        abd = limits.get("abduction", {"min": -1.047, "max": 1.047})
-        hip_f = limits.get("hip_front", {"min": -1.571, "max": 3.491})
-        hip_r = limits.get("hip_rear", {"min": -0.524, "max": 4.538})
-        knee = limits.get("knee", {"min": -2.723, "max": -0.5})
-
-        self.joint_limits_min = np.array(
-            [abd["min"]] * 4 + [hip_f["min"]] * 2 + [hip_r["min"]] * 2 + [knee["min"]] * 4,
-            dtype=np.float64
-        )
-        self.joint_limits_max = np.array(
-            [abd["max"]] * 4 + [hip_f["max"]] * 2 + [hip_r["max"]] * 2 + [knee["max"]] * 4,
-            dtype=np.float64
-        )
-        
-        self.joint_rom = self.joint_limits_max - self.joint_limits_min
-        self.joint_safe_min = self.joint_limits_min + self.rom_safety_margin * self.joint_rom
-        self.joint_safe_max = self.joint_limits_max - self.rom_safety_margin * self.joint_rom
-        
-        self.joint_names_list = [
-            "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
-            "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
-            "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint"
-        ]
+        self.heartbeat_pub = self.create_publisher(
+            Float32, "/safety/heartbeat", 10)
+        self.max_torque_percent_pub = self.create_publisher(
+            Float32, "/safety/max_torque_percent", 10)
+        self.base_tilt_pub = self.create_publisher(
+            Float32, "/safety/base_tilt_limit_deg", 10)
+        self.forward_tilt_pub = self.create_publisher(
+            Float32, "/safety/base_forward_tilt_limit_deg", 10)
+        self.rom_margin_pub = self.create_publisher(
+            Float32, "/safety/joint_rom_safety_margin", 10)
 
         # ------------------------------------------------------------------
-        # 2. State Variables
-        # ------------------------------------------------------------------
-        # Projected gravity in body frame [x, y, z].
-        # Default = [0, 0, -9.81] (upright robot).
-        # Updated by /estimator/projected_gravity published by TelemetryManager.
-        self.proj_gravity = np.array([0.0, 0.0, -9.81], dtype=np.float64)
-
-        self.base_pos         = np.array([0.0, 0.0, 0.35], dtype=np.float64)
-        self.joint_pos        = np.zeros(12, dtype=np.float64)
-        self.base_lin_vel_body = np.zeros(3, dtype=np.float64)
-
-        # Safety state machine
-        self._robot_safe: bool   = True   # False once a dangerous condition is detected
-        self._shutdown_logged: bool = False  # Avoid log spam
-        self._has_received_joints: bool = False
-
-        # ------------------------------------------------------------------
-        # 3. ROS Subscriptions
-        # ------------------------------------------------------------------
-        # Derived state from TelemetryManager — no geometry math needed here
-        self.create_subscription(Vector3,    "/estimator/projected_gravity",
-                                 self.proj_gravity_cb, 10)
-        # Raw sensors (kept for future safety extensions)
-        self.create_subscription(JointState, "/sensors/joint_states", self.joint_cb,  10)
-        
-        odom_topic = "/odom/state_estimator" if use_estimator else "/odom/state_simulator"
-        self.get_logger().info(f"Supervisor subscribing to: {odom_topic}")
-        self.create_subscription(Odometry, odom_topic, self.odom_cb, 10)
-
-        # ------------------------------------------------------------------
-        # 4. ROS Publishers
-        # ------------------------------------------------------------------
-        self.max_torque_pub = self.create_publisher(Float32, "/safety/max_torque", 10)
-
-        # ------------------------------------------------------------------
-        # 5. Timer Loops
+        # 3. Timer
         # ------------------------------------------------------------------
         self.timer_period = 1.0 / self.freq
-        self.create_timer(self.timer_period, self.safety_loop)
+        self.create_timer(self.timer_period, self.heartbeat_loop)
+        self.heartbeat_count = 0
 
+        max_torque_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
         self.get_logger().info(
-            f"Supervisor Node initialised at {self.freq} Hz.  "
-            f"Tilt threshold: {self.base_tilt_limit_deg:.1f}° (cos(θ) < {self.tilt_thresh:.3f}), "
-            f"Forward pitch threshold: {self.forward_tilt_limit:.1f}°, "
-            f"Joint ROM safe boundary margin: {self.rom_safety_margin*100}%, "
-            f"Global max torque limit: {self.global_max_torque:.2f} Nm ({self.global_max_torque_percent}%)"
+            f"Supervisor Heartbeat initialized at {self.freq} Hz.\n"
+            f"  Max torque: {self.max_torque_percent}% = {max_torque_nm:.1f} Nm\n"
+            f"  Tilt limit: {self.base_tilt_limit_deg}°\n"
+            f"  Forward tilt limit: {self.base_forward_tilt_limit_deg}°\n"
+            f"  Joint ROM margin: {self.joint_rom_safety_margin * 100}%\n"
+            f"  Watchdog timeout: {self.watchdog_timeout}s"
         )
 
     # ------------------------------------------------------------------
-    # Callbacks
+    # Heartbeat Loop
     # ------------------------------------------------------------------
-    def proj_gravity_cb(self, msg: Vector3):
-        """Receives the pre-computed gravity vector in body frame from TelemetryManager."""
-        self.proj_gravity = np.array([msg.x, msg.y, msg.z])
+    def heartbeat_loop(self):
+        """Publish all safety parameters on their respective topics."""
+        now = time.time()
 
-    def joint_cb(self, msg: JointState):
-        if msg.position:
-            self.joint_pos = np.array(msg.position[:12])
-            self._has_received_joints = True
+        # Core heartbeat (alive signal)
+        self.heartbeat_pub.publish(Float32(data=float(now)))
 
-    def odom_cb(self, msg: Odometry):
-        p = msg.pose.pose.position
-        self.base_pos = np.array([p.x, p.y, p.z])
-        v = msg.twist.twist.linear
-        self.base_lin_vel_body = np.array([v.x, v.y, v.z])
+        # Safety parameters
+        self.max_torque_percent_pub.publish(
+            Float32(data=float(self.max_torque_percent)))
+        self.base_tilt_pub.publish(
+            Float32(data=float(self.base_tilt_limit_deg)))
+        self.forward_tilt_pub.publish(
+            Float32(data=float(self.base_forward_tilt_limit_deg)))
+        self.rom_margin_pub.publish(
+            Float32(data=float(self.joint_rom_safety_margin)))
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-    def _check_joint_limits(self) -> tuple[bool, str]:
-        """Check if any joint has violated its 15% safe boundary."""
-        if not self._has_received_joints:
-            return False, ""
-            
-        for i in range(12):
-            val = self.joint_pos[i]
-            if val < self.joint_safe_min[i]:
-                msg = f"{self.joint_names_list[i]}: {val:+.3f} rad < safe min {self.joint_safe_min[i]:.3f}"
-                return True, msg
-            elif val > self.joint_safe_max[i]:
-                msg = f"{self.joint_names_list[i]}: {val:+.3f} rad > safe max {self.joint_safe_max[i]:.3f}"
-                return True, msg
-        return False, ""
-
-    def _get_dones(self) -> bool:
-        """
-        Evaluates active safety terminations.
-        Returns True when any safety watchdog triggers a shutdown.
-        """
-        # 1. Base orientation tilt (fall)
-        base_tilt_cos = -self.proj_gravity[2] / 9.81
-        fall_danger = base_tilt_cos < self.tilt_thresh
-
-        # 2. Forward tilt pitch detection
-        pitch_rad = np.arctan2(self.proj_gravity[0], -self.proj_gravity[2])
-        pitch_deg = np.degrees(pitch_rad)
-        forward_danger = pitch_deg > self.forward_tilt_limit
-
-        # 3. Joint range boundary detection
-        joint_danger, _ = self._check_joint_limits()
-
-        return bool(fall_danger or forward_danger or joint_danger)
-
-    # ------------------------------------------------------------------
-    # Main safety loop
-    # ------------------------------------------------------------------
-    def safety_loop(self):
-        """
-        Periodically evaluates robot safety.
-        On violation, sets max torque to 0 Nm and logs detailed banner.
-        """
-        msg = Float32()
-
-        # Check triggers
-        base_tilt_cos = -self.proj_gravity[2] / 9.81
-        tilt_deg = float(np.degrees(np.arccos(np.clip(base_tilt_cos, -1.0, 1.0))))
-        
-        pitch_rad = np.arctan2(self.proj_gravity[0], -self.proj_gravity[2])
-        pitch_deg = float(np.degrees(pitch_rad))
-        
-        fall_danger = base_tilt_cos < self.tilt_thresh
-        forward_danger = pitch_deg > self.forward_tilt_limit
-        joint_danger, joint_msg = self._check_joint_limits()
-
-        dangerous = fall_danger or forward_danger or joint_danger
-
-        if dangerous and not self._shutdown_logged:
-            # Clear carriage return line first so the shutdown banner is perfectly clean
-            print("\r" + " " * 120 + "\r", end="", flush=True)
-
-            reason = ""
-            details_lines = []
-            if fall_danger:
-                reason = "Base orientation tilt (fall)"
-                details_lines = [
-                    f"cos(θ) = {base_tilt_cos:+.3f} (thresh: {self.tilt_thresh:.3f})",
-                    f"Estimated tilt angle: {tilt_deg:5.1f}° (thresh: {self.base_tilt_limit_deg:.1f}°)"
-                ]
-            elif forward_danger:
-                reason = "Dangerous forward tilt (pitch)"
-                details_lines = [
-                    f"Pitch angle: {pitch_deg:+.1f}° (thresh: {self.forward_tilt_limit:+.1f}°)"
-                ]
-            elif joint_danger:
-                reason = "Joint range-of-motion boundary violation"
-                details_lines = [
-                    joint_msg
-                ]
-
-            print(f"\n{_BOLD}{_RED}╔══════════════════════════════════════════════════════╗")
-            print(f"║  ⚠  SAFETY SUPERVISOR — EMERGENCY SHUTDOWN  ⚠       ║")
-            print(f"╠══════════════════════════════════════════════════════╣")
-            print(f"║  Reason: {reason:<43} ║")
-            for line in details_lines:
-                print(f"║  * {line:<49} ║")
-            print(f"║                                                      ║")
-            print(f"║  ➜  Max torque set to 0 Nm — robot is limp.         ║")
-            print(f"║  ➜  Press [ENTER] here to RESET and re-enable.      ║")
-            print(f"╚══════════════════════════════════════════════════════╝{_RESET}\n")
-
-            self.get_logger().error(
-                f"[SAFETY] EMERGENCY SHUTDOWN triggered! Reason: {reason}. Details: "
-                f"{', '.join(details_lines)}. Torque zeroed. Waiting for reset..."
-            )
-            self._robot_safe      = False
-            self._shutdown_logged = True
-            
-            # Start background reset listener
-            import threading
-            threading.Thread(target=self._reset_worker, daemon=True).start()
-
-        if self._robot_safe:
-            msg.data = float(self.global_max_torque)
-            # Print periodic safe status in-place replacing the older print
+        # Periodic console output (every 5 seconds)
+        self.heartbeat_count += 1
+        if self.heartbeat_count % int(self.freq * 5) == 0:
+            max_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
             print(
-                f"\r[Supervisor] Status: SAFE | cos(θ)={base_tilt_cos:+.3f} ({tilt_deg:.1f}°/{self.base_tilt_limit_deg:.1f}°) | "
-                f"pitch={pitch_deg:+.1f}°/{self.forward_tilt_limit:.1f}° | max_t={self.global_max_torque:.1f}Nm   ",
-                end="", flush=True
-            )
-        else:
-            msg.data = 0.0
-
-        self.max_torque_pub.publish(msg)
-
-    def _reset_worker(self):
-        """Background thread waiting for user to press Enter."""
-        input()  # Wait for Enter
-        print(f"{_YELLOW}{_BOLD}>>> Supervisor RESET. Re-enabling torque...{_RESET}")
-        self._robot_safe = True
-        self._shutdown_logged = False
+                f"\r{_GREEN}[Supervisor]{_RESET} ♥ Heartbeat #{self.heartbeat_count} | "
+                f"torque={self.max_torque_percent}% ({max_nm:.1f}Nm) | "
+                f"tilt={self.base_tilt_limit_deg}° | "
+                f"pitch={self.base_forward_tilt_limit_deg}° | "
+                f"ROM margin={self.joint_rom_safety_margin*100:.0f}%   ",
+                end="", flush=True)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Safety Supervisor for the Unitree Go2")
-    parser.add_argument("--robot", type=str, default="go2", help="Robot model identifier")
-    parser.add_argument("--use_estimator", action="store_true", help="Use estimated odometry instead of ground truth")
+    parser = argparse.ArgumentParser(
+        description="Safety Supervisor — Heartbeat Broadcaster")
+    parser.add_argument("--robot", type=str, default="go2",
+                        help="Robot model identifier")
+    # Keep --use_estimator for CLI compatibility but it's unused now
+    parser.add_argument("--use_estimator", action="store_true",
+                        help="(Legacy, unused)")
     args = parser.parse_args()
 
     rclpy.init()
-    node = SupervisorNode(robot_type=args.robot, use_estimator=args.use_estimator)
+    node = SupervisorNode(robot_type=args.robot)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
