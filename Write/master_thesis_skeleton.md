@@ -108,7 +108,7 @@
   * Ensuring bit-perfect parity: All drivers feed data through the same `TelemetryManager.process_state()` and receive commands gated by the same `CommandSafetyProcessor.process()`. If a policy works in the validation simulator, it is mathematically guaranteed to see the same inputs on the real hardware.
 
 * **3.5 Operator Monitoring Layer** (bottom of diagram)
-  * **`DigitalTwin/` Package:**
+  * **`Operator/` Package:**
     * **`SupervisorNode` (`supervisor.py`):** Decoupled safety configuration heartbeat broadcaster.
       * Reads safety limits from `config.yaml` and broadcasts them on separate ROS 2 Float32 topics (torque limit, base tilt, pitch, ROM margins).
       * Acts as a dead-man's watchdog transmitter; the internal `CommandSafetyProcessor` drops torque to zero if these signals drop.

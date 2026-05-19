@@ -405,7 +405,7 @@ def main():
             if use_estimator:
                 cmd.append("--use_estimator")
         elif action == "mujoco_twin":
-            bridge_script = os.path.abspath(os.path.join("DigitalTwin", "mujoco_twin.py"))
+            bridge_script = os.path.abspath(os.path.join("Operator", "mujoco_twin.py"))
             cmd = [
                 sys_python,
                 bridge_script,
@@ -414,7 +414,7 @@ def main():
             if use_estimator:
                 cmd.append("--use_estimator")
         elif action == "gazebo_twin":
-            bridge_script = os.path.abspath(os.path.join("DigitalTwin", "gazebo_twin.py"))
+            bridge_script = os.path.abspath(os.path.join("Operator", "gazebo_twin.py"))
             cmd = [
                 sys_python,
                 bridge_script,
@@ -423,7 +423,7 @@ def main():
             if use_estimator:
                 cmd.append("--use_estimator")
         elif action == "supervisor":
-            bridge_script = os.path.abspath(os.path.join("DigitalTwin", "supervisor.py"))
+            bridge_script = os.path.abspath(os.path.join("Operator", "supervisor.py"))
             cmd = [
                 sys_python,
                 bridge_script,
