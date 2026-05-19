@@ -146,7 +146,7 @@ class SupervisorNode(Node):
                     readline.add_history(raw_line)
 
                 # Enforce strict pattern: <Parameter Name> = <Number>
-                match = re.match(r"^\s*([a-zA-Z\s]+)\s*=\s*([-+]?\d*\.\d+|\d+)\s*$", raw_line)
+                match = re.match(r"^\s*([a-zA-Z\s]+)\s*=\s*([-+]?(?:\d*\.\d+|\d+))\s*$", raw_line)
                 if not match:
                     continue
 
@@ -161,11 +161,7 @@ class SupervisorNode(Node):
                 elif "roll" in param:
                     self.base_tilt_limit_deg = val
                 elif "rom" in param or "joint" in param or "margin" in param:
-                    # Convert percentages > 1.0 (e.g. 15%) to decimal fractions (0.15)
-                    if val > 1.0:
-                        self.joint_rom_safety_margin = val / 100.0
-                    else:
-                        self.joint_rom_safety_margin = val
+                    self.joint_rom_safety_margin = val / 100.0
                 elif "timeout" in param or "watchdog" in param:
                     self.watchdog_timeout = val
             except (EOFError, KeyboardInterrupt):
