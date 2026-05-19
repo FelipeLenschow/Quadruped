@@ -280,6 +280,17 @@ class Ros2MujocoDriver(Node):
 
                 self.step_counter += 1
 
+                # Logging for diagnosis (every 200 steps ~ 0.2s)
+                if self.step_counter % 200 == 0:
+                    inf_ms = 0.0
+                    if self.pipeline.runner and hasattr(self.pipeline.runner, "inf_times") and self.pipeline.runner.inf_times:
+                        inf_ms = self.pipeline.runner.inf_times[-1] * 1000
+                    print(
+                        f"\r[Bridge] t={self.data.time:7.2f} h={raw_data['pos'][2]:.2f} vx={raw_data['vel'][0]:+5.2f} | inf={inf_ms:4.1f}ms   ",
+                        end="",
+                        flush=True,
+                    )
+
                 # Sync with real time
                 next_time += 0.001  # 1000 Hz
                 sleep_dur = next_time - time.time()
