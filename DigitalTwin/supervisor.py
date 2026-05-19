@@ -30,6 +30,7 @@ from Configs.config_loader import load_config
 _GREEN  = "\033[92m"
 _BOLD   = "\033[1m"
 _RESET  = "\033[0m"
+_CYAN   = "\033[96m"
 
 
 class SupervisorNode(Node):
@@ -94,16 +95,68 @@ class SupervisorNode(Node):
         self.timer_period = 1.0 / self.freq
         self.create_timer(self.timer_period, self.heartbeat_loop)
         self.heartbeat_count = 0
+        self.input_submitted = False
+        self.last_command = "None"
+
+        # ------------------------------------------------------------------
+        # 4. Command Input Thread
+        # ------------------------------------------------------------------
+        import threading
+        self.cmd_thread = threading.Thread(target=self._command_listener, daemon=True)
+        self.cmd_thread.start()
 
         max_torque_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
         self.get_logger().info(
             f"Supervisor Heartbeat initialized at {self.freq} Hz.\n"
             f"  Max torque: {self.max_torque_percent}% = {max_torque_nm:.1f} Nm\n"
-            f"  Tilt limit: {self.base_tilt_limit_deg}°\n"
-            f"  Forward tilt limit: {self.base_forward_tilt_limit_deg}°\n"
+            f"  Roll limit: {self.base_tilt_limit_deg}°\n"
+            f"  Pitch limit: {self.base_forward_tilt_limit_deg}°\n"
             f"  Joint ROM margin: {self.joint_rom_safety_margin * 100}%\n"
-            f"  Watchdog timeout: {self.watchdog_timeout}s"
+            f"  Watchdog timeout: {self.watchdog_timeout}s\n"
+            f"Type commands below to configure safety dynamically (e.g. Torque Limit = 20, Roll = 30, Pitch = 30, Timeout = 0.5):"
         )
+
+    def _command_listener(self):
+        """Listens for user commands from stdin to dynamically configure safety parameters."""
+        import re
+        while rclpy.ok():
+            try:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                
+                # Dynamic terminal scroll tracking
+                self.input_submitted = True
+                
+                raw_line = line.strip()
+                if raw_line:
+                    self.last_command = raw_line
+
+                # Enforce strict pattern: <Parameter Name> = <Number>
+                match = re.match(r"^\s*([a-zA-Z\s]+)\s*=\s*([-+]?\d*\.\d+|\d+)\s*$", raw_line)
+                if not match:
+                    continue
+
+                param = match.group(1).lower().strip()
+                val = float(match.group(2))
+
+                # Parameter mapping based on the matched parameter name
+                if "torque" in param:
+                    self.max_torque_percent = val
+                elif "pitch" in param:
+                    self.base_forward_tilt_limit_deg = val
+                elif "roll" in param:
+                    self.base_tilt_limit_deg = val
+                elif "rom" in param or "joint" in param or "margin" in param:
+                    # Convert percentages > 1.0 (e.g. 15%) to decimal fractions (0.15)
+                    if val > 1.0:
+                        self.joint_rom_safety_margin = val / 100.0
+                    else:
+                        self.joint_rom_safety_margin = val
+                elif "timeout" in param or "watchdog" in param:
+                    self.watchdog_timeout = val
+            except Exception:
+                break
 
     # ------------------------------------------------------------------
     # Heartbeat Loop
@@ -125,17 +178,37 @@ class SupervisorNode(Node):
         self.rom_margin_pub.publish(
             Float32(data=float(self.joint_rom_safety_margin)))
 
-        # Periodic console output (every 5 seconds)
+        # Console status report on every heartbeat (replaces the last multi-line block in-place)
         self.heartbeat_count += 1
-        if self.heartbeat_count % int(self.freq * 5) == 0:
-            max_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
-            print(
-                f"\r{_GREEN}[Supervisor]{_RESET} ♥ Heartbeat #{self.heartbeat_count} | "
-                f"torque={self.max_torque_percent}% ({max_nm:.1f}Nm) | "
-                f"tilt={self.base_tilt_limit_deg}° | "
-                f"pitch={self.base_forward_tilt_limit_deg}° | "
-                f"ROM margin={self.joint_rom_safety_margin*100:.0f}%   ",
-                end="", flush=True)
+        
+        # Check if user just submitted input (which prints a terminal newline and scrolls)
+        use_scroll_adjust = self.input_submitted
+        
+        if self.heartbeat_count > 1:
+            if use_scroll_adjust:
+                # Move up 9 lines to compensate for terminal scroll/newline
+                print("\033[9A", end="")
+                self.input_submitted = False
+            else:
+                # Save cursor position and move up 8 lines
+                print("\033[s\033[8A", end="")
+
+        max_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
+        print(f"\r  {_CYAN}[Last Command]{_RESET}: {self.last_command}\033[K")
+        print(f"\r\033[K")
+        print(f"\r{_GREEN}[Supervisor]{_RESET} Heartbeat #{self.heartbeat_count}\033[K")
+        print(f"\r ├─ Torque Limit : {self.max_torque_percent}% ({max_nm:.1f} Nm)\033[K")
+        print(f"\r ├─ Max Roll     : {self.base_tilt_limit_deg} deg\033[K")
+        print(f"\r ├─ Max Pitch    : {self.base_forward_tilt_limit_deg} deg\033[K")
+        print(f"\r ├─ Joint ROM    : {self.joint_rom_safety_margin*100:.0f}% margin\033[K")
+        print(f"\r └─ Watchdog     : {self.watchdog_timeout:.2f}s timeout\033[K")
+
+        if self.heartbeat_count > 1 and not use_scroll_adjust:
+            # Restore saved cursor position for standard continuous typing
+            print("\033[u", end="", flush=True)
+        else:
+            # Clear any typed text from this line and position cursor at the start of it
+            print("\033[K\r", end="", flush=True)
 
 
 def main():
@@ -153,7 +226,7 @@ def main():
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        print()
 
     node.destroy_node()
     rclpy.shutdown()
