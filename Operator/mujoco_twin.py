@@ -57,7 +57,7 @@ class MujocoTwinNode(Node):
                 self.qpos_addr[i] = self.model.jnt_qposadr[j_id]
 
         # 2. State Variables
-        self.base_pos = np.array([0.0, 0.0, 0.35], dtype=np.float64)
+        self.base_pos = np.array([0.0, 0.0, 0.50], dtype=np.float64)
         self.base_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
         self.joint_pos = np.zeros(12, dtype=np.float64)
         self.base_lin_vel_body = np.zeros(3, dtype=np.float64)

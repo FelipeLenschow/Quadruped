@@ -207,6 +207,14 @@ class TelemetryManager:
         odom_sim.header.stamp       = msg_time
         odom_sim.header.frame_id    = 'odom'
         odom_sim.child_frame_id     = 'base'
+        if state.base_pos:
+            odom_sim.pose.pose.position.x = float(state.base_pos[0])
+            odom_sim.pose.pose.position.y = float(state.base_pos[1])
+            odom_sim.pose.pose.position.z = float(state.base_pos[2])
+        if state.imu.quaternion:
+            odom_sim.pose.pose.orientation = Quaternion(
+                w=float(state.imu.quaternion[0]), x=float(state.imu.quaternion[1]),
+                y=float(state.imu.quaternion[2]), z=float(state.imu.quaternion[3]))
         lv_sim = getattr(state, 'base_lin_vel_sim', lv)
         odom_sim.twist.twist.linear = Vector3(x=float(lv_sim[0]), y=float(lv_sim[1]), z=float(lv_sim[2]))
         self.odom_sim_pub.publish(odom_sim)
@@ -216,6 +224,14 @@ class TelemetryManager:
         odom_est.header.stamp       = msg_time
         odom_est.header.frame_id    = 'odom'
         odom_est.child_frame_id     = 'base'
+        if state.base_pos:
+            odom_est.pose.pose.position.x = float(state.base_pos[0])
+            odom_est.pose.pose.position.y = float(state.base_pos[1])
+            odom_est.pose.pose.position.z = float(state.base_pos[2])
+        if state.imu.quaternion:
+            odom_est.pose.pose.orientation = Quaternion(
+                w=float(state.imu.quaternion[0]), x=float(state.imu.quaternion[1]),
+                y=float(state.imu.quaternion[2]), z=float(state.imu.quaternion[3]))
         lv_est = getattr(state, 'base_lin_vel_est', lv)
         odom_est.twist.twist.linear = Vector3(x=float(lv_est[0]), y=float(lv_est[1]), z=float(lv_est[2]))
         self.odom_est_pub.publish(odom_est)
