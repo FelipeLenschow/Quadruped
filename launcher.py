@@ -84,7 +84,7 @@ def run_cli_menu():
         print("  [6] Deploy to Robot")
         print("  [7] Remote Teleop")
         print("  [8] Play Digital Twin")
-        print("  [9] Play Safety Supervisor")
+        print("  [9] Play Console")
         print("  [T] Test Joints (Real Robot)")
     else:
         print("  [X] Play MuJoCo (REQUIRES DOCKER OR PY3.10)")
@@ -92,7 +92,7 @@ def run_cli_menu():
         print("  [X] Deploy to Robot (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Remote Teleop (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Digital Twin (REQUIRES DOCKER OR PY3.10)")
-        print("  [X] Play Safety Supervisor (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Play Console (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Test Joints (Real Robot) (REQUIRES DOCKER OR PY3.10)")
 
     action_map = {
@@ -105,7 +105,7 @@ def run_cli_menu():
         "6": "real_deploy",
         "7": "teleop",
         "8": "twin",
-        "9": "supervisor",
+        "9": "console",
         "t": "hardware_tools",
         "T": "hardware_tools",
     }
@@ -141,7 +141,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "supervisor", "test_joints"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "console", "test_joints"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -178,7 +178,7 @@ def run_cli_menu():
     selected_module_name = "None"
     selected_module_path = "."
     
-    if action not in ["mujoco_twin", "gazebo_twin", "supervisor", "teleop", "test_joints", "real_telemetry"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "console", "teleop", "test_joints", "real_telemetry"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         
         if not modules:
@@ -211,7 +211,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "mujoco_twin", "gazebo_twin", "supervisor", "test_joints", "real_telemetry"]:
+    if action not in ["teleop", "mujoco_twin", "gazebo_twin", "console", "test_joints", "real_telemetry"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -387,7 +387,7 @@ def main():
             cmd.append("--video_interval=5000")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "supervisor", "teleop", "test_joints"):
+    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "console", "teleop", "test_joints"):
         # Unified Driver Pipeline
         isaac_python = "/home/05680435969@env_isaacsim/bin/python"
         sys_python = sys.executable 
@@ -436,8 +436,8 @@ def main():
             ]
             if use_estimator:
                 cmd.append("--use_estimator")
-        elif action == "supervisor":
-            bridge_script = os.path.abspath(os.path.join("Operator", "supervisor.py"))
+        elif action == "console":
+            bridge_script = os.path.abspath(os.path.join("Operator", "console.py"))
             cmd = [
                 sys_python,
                 bridge_script,

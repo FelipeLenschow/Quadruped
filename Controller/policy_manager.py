@@ -7,6 +7,7 @@ from rclpy.node import Node
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from Controller.policy_runner import PolicyRunner
+from Controller.pose_generator import PoseGenerator
 from Configs.config_loader import load_config
 
 
@@ -83,7 +84,18 @@ class PolicyManager:
                 f"[PolicyManager] Failed to load policy '{name}': {e}")
             return False
 
-    def step_single(self, name: str, state, commands, mapping) -> np.ndarray:
+    def register_pose_generator(self, node: Node):
+        """
+        Create and register a PoseGenerator as a policy provider under 'pose'.
+        """
+        pg = PoseGenerator(node)
+        self.policies["pose"] = pg
+        self.node.get_logger().info(
+            "[PolicyManager] PoseGenerator registered under 'pose'.")
+        return pg
+
+    def step_single(self, name: str, state, commands, mapping,
+                    current_time: float = None) -> np.ndarray:
         """
         Step inference and compute joint-space targets for a single registered policy.
 
@@ -99,7 +111,15 @@ class PolicyManager:
         if name not in self.policies:
             raise KeyError(f"[PolicyManager] Policy '{name}' is not loaded.")
 
-        runner = self.policies[name]
+        provider = self.policies[name]
+
+        # --- Polymorphic dispatch ---
+        if isinstance(provider, PoseGenerator):
+            # PoseGenerator returns absolute joint targets directly
+            return provider.step(state, current_time)
+
+        # --- Standard PolicyRunner path ---
+        runner = provider
         # 1. Inference (returns raw action vector in [-1, 1])
         raw_actions, _ = runner.infer(
             state,

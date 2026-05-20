@@ -1,5 +1,6 @@
 import os
 import numpy as np
+from std_msgs.msg import String
 from Telemetry.telemetry import TelemetryManager
 from Controller.policy_manager import PolicyManager
 from Controller.command_safety_processor import CommandSafetyProcessor
@@ -59,6 +60,15 @@ class LocomotionPipeline:
         # 4. Distributor (hardware/ROS command output)
         self.distributor = Distributor(node, joint_names=joint_names)
 
+        # 5. Pose Generator (registered inside PolicyManager)
+        self.policy_manager.register_pose_generator(node)
+
+        # 6. Pipeline Mode: "pose" (default — robot starts in pose mode)
+        #    or "policy" (NN inference mode)
+        self.mode = "pose"
+        self.node.create_subscription(
+            String, "/pipeline/mode", self._mode_cb, 10)
+
         # Nominal standing pose (default fallback)
         self.desired_qpos = np.array([
             0.1, -0.1, 0.1, -0.1,  # hips
@@ -68,6 +78,30 @@ class LocomotionPipeline:
 
         self.latest_targets = self.desired_qpos.copy()
         self.step_counter = 0
+        self._pose_heartbeat_was_ok = False  # Track heartbeat lost→alive transitions
+
+    def _mode_cb(self, msg: String):
+        """Handle pipeline mode switch commands from the Console."""
+        new_mode = msg.data.strip().lower()
+        if new_mode in ("pose", "policy"):
+            if new_mode != self.mode:
+                self.node.get_logger().info(
+                    f"[Pipeline] Mode switched: {self.mode} → {new_mode}")
+                self.mode = new_mode
+                # Clear safety latch when entering pose mode — the pose
+                # generator IS the recovery mechanism for unsafe states.
+                if new_mode == "pose":
+                    self.safety_processor._policy_blocked = False
+                    self.safety_processor._shutdown_logged = False
+                    self.safety_processor._robot_safe = True
+                    # Re-sync pose generator to current joint positions
+                    # so it doesn't jump to the old cached targets.
+                    pose_gen = self.policy_manager.policies.get("pose")
+                    if pose_gen:
+                        pose_gen.sync_to_current()
+        else:
+            self.node.get_logger().warn(
+                f"[Pipeline] Unknown mode '{new_mode}'. Use 'pose' or 'policy'.")
 
     def step(self, raw_state_kwargs, cmd_vel, sim_time):
         """
@@ -90,35 +124,86 @@ class LocomotionPipeline:
         state = self.telemetry.process_state(**raw_state_kwargs)
 
         # 2. Policy Inference & Command Processing
-        if is_policy_step and "main" in self.policy_manager.policies:
-            # 2a. Pre-evaluate safety to determine which policy is actually needed
-            is_safe, _ = self.safety_processor.evaluate_safety(state)
-            active_policy = "main" if is_safe else "safety"
+        if is_policy_step:
 
-            # 2b. Only query the policy runner that is actually needed
-            proposed_targets = {}
-            if active_policy == "main":
-                proposed_targets["main"] = self.policy_manager.step_single(
-                    "main", state, cmd_vel, self.mj_to_isaac
+            if self.mode == "pose":
+                # ── POSE MODE ────────────────────────────────────────
+                # Bypass ROM/tilt safety checks — the whole point of the
+                # pose generator is to escape unsafe states (e.g., lying
+                # on the ground where joints are at their limits).
+                #
+                # We still require the Console heartbeat to be alive
+                # (watchdog) and apply soft joint clipping.
+                # ─────────────────────────────────────────────────────
+                import time as _time
+                sp = self.safety_processor
+                heartbeat_ok = (
+                    sp.has_received_heartbeat and
+                    (_time.time() - sp.last_heartbeat_time) <= sp.watchdog_timeout
                 )
-            elif active_policy == "safety" and "safety" in self.policy_manager.policies:
-                proposed_targets["safety"] = self.policy_manager.step_single(
-                    "safety", state, cmd_vel, self.mj_to_isaac
+
+                # Detect heartbeat lost→alive transition (Console restart)
+                # and re-sync pose generator to actual joint positions.
+                if heartbeat_ok and not self._pose_heartbeat_was_ok:
+                    pose_gen = self.policy_manager.policies.get("pose")
+                    if pose_gen:
+                        pose_gen.sync_to_current()
+                        self.node.get_logger().info(
+                            "[Pipeline] Heartbeat restored in pose mode — "
+                            "synced to current joint positions.")
+                self._pose_heartbeat_was_ok = heartbeat_ok
+
+                if heartbeat_ok and "pose" in self.policy_manager.policies:
+                    targets = self.policy_manager.step_single(
+                        "pose", state, cmd_vel, self.mj_to_isaac,
+                        current_time=sim_time
+                    )
+                    # Soft-clip to joint limits (still enforced)
+                    final_targets = np.clip(targets, sp.soft_min, sp.soft_max)
+                    max_torque = sp.global_max_torque
+                    # Update the safety processor's active torque so the
+                    # driver's PD loop (which reads it directly) applies force.
+                    sp.active_max_torque = max_torque
+                else:
+                    # No heartbeat → zero torque (same fail-safe as policy mode)
+                    final_targets = self.desired_qpos.copy()
+                    max_torque = 0.0
+                    sp.active_max_torque = 0.0
+
+                self.latest_targets = final_targets
+                self.distributor.send(final_targets, max_torque)
+
+            else:
+                # ── POLICY MODE ──────────────────────────────────────
+                # Full safety evaluation: ROM, tilt, and heartbeat checks.
+                # ─────────────────────────────────────────────────────
+                is_safe, _ = self.safety_processor.evaluate_safety(state)
+
+                if not is_safe:
+                    active_policy = "safety"
+                else:
+                    active_policy = "main"
+
+                proposed_targets = {}
+                if active_policy in self.policy_manager.policies:
+                    targets = self.policy_manager.step_single(
+                        active_policy, state, cmd_vel, self.mj_to_isaac,
+                        current_time=sim_time
+                    )
+                    key = "safety" if active_policy == "safety" else "main"
+                    proposed_targets[key] = targets
+
+                final_targets, max_torque = self.safety_processor.process(
+                    proposed_targets=proposed_targets,
+                    state=state
                 )
 
-            # 2c. Safety gate & select winner
-            final_targets, max_torque = self.safety_processor.process(
-                proposed_targets=proposed_targets,
-                state=state
-            )
-
-            self.latest_targets = final_targets
-
-            # Distribute final command to ROS 2/robot drivers
-            self.distributor.send(final_targets, max_torque)
+                self.latest_targets = final_targets
+                self.distributor.send(final_targets, max_torque)
 
         # 3. Telemetry Publishing
         if is_policy_step:
             self.telemetry.publish(sim_time=sim_time, state=state)
 
         return self.latest_targets
+
