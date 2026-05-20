@@ -86,6 +86,7 @@ def run_cli_menu():
         print("  [8] Play Digital Twin")
         print("  [9] Play Console")
         print("  [T] Test Joints (Real Robot)")
+        print("  [P] Launch PlotJuggler")
     else:
         print("  [X] Play MuJoCo (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Gazebo (REQUIRES DOCKER OR PY3.10)")
@@ -94,6 +95,7 @@ def run_cli_menu():
         print("  [X] Play Digital Twin (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Console (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Test Joints (Real Robot) (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Launch PlotJuggler (REQUIRES DOCKER OR PY3.10)")
 
     action_map = {
         "0": "repeat",
@@ -108,13 +110,15 @@ def run_cli_menu():
         "9": "console",
         "t": "hardware_tools",
         "T": "hardware_tools",
+        "p": "plotjuggler",
+        "P": "plotjuggler",
     }
     
     default_action = "0" if last_cmd else "4"
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-9, T] (default {default_action}): ").strip() or default_action
+    choice = input(f"Enter choice [0-9, T, P] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice.lower(), "None")
     
     if action == "hardware_tools":
@@ -167,7 +171,7 @@ def run_cli_menu():
         print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Aborting.")
         sys.exit(1)
         
-    if requires_docker and choice.lower() in ["4", "5", "6", "7", "8", "9", "t"]:
+    if requires_docker and choice.lower() in ["4", "5", "6", "7", "8", "9", "t", "p"]:
         print(f"\n[ERROR] Action '{action}' requires ROS 2 Humble (Python 3.10).")
         print("        Please run this task inside DOCKER or switch to a 3.10 environment.")
         sys.exit(1)
@@ -178,7 +182,7 @@ def run_cli_menu():
     selected_module_name = "None"
     selected_module_path = "."
     
-    if action not in ["mujoco_twin", "gazebo_twin", "console", "teleop", "test_joints", "real_telemetry"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "console", "teleop", "test_joints", "real_telemetry", "plotjuggler"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         
         if not modules:
@@ -211,7 +215,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "mujoco_twin", "gazebo_twin", "console", "test_joints", "real_telemetry"]:
+    if action not in ["teleop", "mujoco_twin", "gazebo_twin", "console", "test_joints", "real_telemetry", "plotjuggler"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -474,6 +478,9 @@ def main():
         elif action == "test_joints":
             bridge_script = os.path.abspath(os.path.join("Unitree", "test_joints.py"))
             cmd = [sys_python, bridge_script]
+        
+        elif action == "plotjuggler":
+            cmd = ["ros2", "run", "plotjuggler", "plotjuggler"]
 
         subprocess.run(cmd, env=env)
 
