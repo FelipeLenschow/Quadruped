@@ -30,6 +30,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion, Vector3, Twist
+from std_msgs.msg import Float32
 
 # Gazebo Transport & Msgs
 try:
@@ -69,6 +70,8 @@ class Ros2GazeboDriver(Node):
         self.motor_cfg = self.config.get("motor", {})
         est_cfg = self.config.get("state_estimator", {})
         
+        self.kp = float(self.ctrl_cfg.get("kp", 0.0))
+        self.kd = float(self.ctrl_cfg.get("kd", 0.0))
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]  # [vx, vy, wz, unused_height_cmd]
         
         # Priority: CLI arg (if explicitly True) > YAML config
@@ -90,6 +93,9 @@ class Ros2GazeboDriver(Node):
         )
 
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
+        self.create_subscription(Float32, "/control/kp", self._kp_cb, 10)
+        self.create_subscription(Float32, "/control/kd", self._kd_cb, 10)
+        self._startup_console_check = True
 
         # Nominal standing pose (Matches MuJoCo Driver exactly in Isaac order)
         self.desired_qpos = np.array(
@@ -138,6 +144,18 @@ class Ros2GazeboDriver(Node):
         self.cmd_vel[1] = msg.linear.y
         self.cmd_vel[2] = msg.angular.z
         self.cmd_vel[3] = 0.0
+
+    def _kp_cb(self, msg):
+        new_kp = float(msg.data)
+        if new_kp != self.kp:
+            self.kp = new_kp
+            self.get_logger().info(f"[GazeboDriver] Dynamic Kp updated to: {self.kp:.1f}")
+
+    def _kd_cb(self, msg):
+        new_kd = float(msg.data)
+        if new_kd != self.kd:
+            self.kd = new_kd
+            self.get_logger().info(f"[GazeboDriver] Dynamic Kd updated to: {self.kd:.2f}")
 
     # --- Control & Gains ---
     def _stats_cb(self, msg):
@@ -319,6 +337,18 @@ class Ros2GazeboDriver(Node):
             self.new_data_event.wait(timeout=0.1)
             self.new_data_event.clear()
 
+            # Check if console was opened before this pipeline
+            if hasattr(self, "_startup_console_check") and self._startup_console_check:
+                if not hasattr(self, "_startup_ticks"):
+                    self._startup_ticks = 0
+                self._startup_ticks += 1
+                if self._startup_ticks >= 40: # 200ms at 200Hz loop rate
+                    self._startup_console_check = False
+                    if self.count_publishers("/safety/heartbeat") > 0:
+                        self.get_logger().error("[Safety] Console was detected running before driver! Exiting bridge for safety.")
+                        import sys
+                        sys.exit(0)
+
             # We process a new PD/NN step every time we get a joint state callback (200 Hz).
             # Do NOT skip steps based on sim_time, as it can cause massive latency
             # if timestamps are coarse or not updated fast enough.
@@ -355,8 +385,8 @@ class Ros2GazeboDriver(Node):
 
             # Motor model matching MuJoCo.
             targets = self.latest_targets
-            kp = self.ctrl_cfg.get("kp", 25.0)
-            kd = self.ctrl_cfg.get("kd", 0.5)
+            kp = self.kp
+            kd = self.kd
             
             # Override with safety watchdog torque
             effort_limit = self.pipeline.safety_processor.active_max_torque

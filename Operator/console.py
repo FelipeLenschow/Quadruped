@@ -75,6 +75,10 @@ class ConsoleNode(Node):
         self.motor_cfg = self.config.get("motor", {})
         self.motor_max_torque = float(self.motor_cfg.get("max_torque", 45.0))
 
+        self.control_cfg = self.config.get("control", {})
+        self.kp = float(self.control_cfg.get("kp", 0.0))
+        self.kd = float(self.control_cfg.get("kd", 0.0))
+
         self.max_torque_percent = float(
             self.safety_cfg.get("global_max_torque_percent", 55.0))
         self.base_tilt_limit_deg = float(
@@ -105,6 +109,10 @@ class ConsoleNode(Node):
             Float32, "/safety/base_forward_tilt_limit_deg", 10)
         self.rom_margin_pub = self.create_publisher(
             Float32, "/safety/joint_rom_safety_margin", 10)
+        self.kp_pub = self.create_publisher(
+            Float32, "/control/kp", 10)
+        self.kd_pub = self.create_publisher(
+            Float32, "/control/kd", 10)
 
         # ------------------------------------------------------------------
         # 3. ROS Publishers — Pipeline & Pose Control
@@ -138,6 +146,10 @@ class ConsoleNode(Node):
         self.cmd_thread = threading.Thread(target=self._command_listener, daemon=True)
         self.cmd_thread.start()
 
+        # Publish initial gains once at startup
+        self.kp_pub.publish(Float32(data=float(self.kp)))
+        self.kd_pub.publish(Float32(data=float(self.kd)))
+
     # ------------------------------------------------------------------
     # Pose Status Feedback
     # ------------------------------------------------------------------
@@ -164,6 +176,8 @@ class ConsoleNode(Node):
             "Max Pitch = ",
             "Joint ROM = ",
             "Watchdog = ",
+            "Kp = ",
+            "Kd = ",
             "Mode = pose",
             "Mode = policy",
             "Mode = ",
@@ -219,6 +233,12 @@ class ConsoleNode(Node):
                     self.joint_rom_safety_margin = float(val_str) / 100.0
                 elif param in ("timeout", "watchdog"):
                     self.watchdog_timeout = float(val_str)
+                elif param in ("kp", "p gain"):
+                    self.kp = float(val_str)
+                    self.kp_pub.publish(Float32(data=float(self.kp)))
+                elif param in ("kd", "d gain"):
+                    self.kd = float(val_str)
+                    self.kd_pub.publish(Float32(data=float(self.kd)))
 
                 # --- Pipeline mode ---
                 elif param == "mode":
@@ -276,6 +296,10 @@ class ConsoleNode(Node):
             Float32(data=float(self.base_forward_tilt_limit_deg)))
         self.rom_margin_pub.publish(
             Float32(data=float(self.joint_rom_safety_margin)))
+        self.kp_pub.publish(
+            Float32(data=float(self.kp)))
+        self.kd_pub.publish(
+            Float32(data=float(self.kd)))
 
         # Also re-publish mode on every heartbeat so late-joining nodes pick it up
         mode_msg = String()
@@ -288,8 +312,8 @@ class ConsoleNode(Node):
         # Check if user just submitted input (which prints a terminal newline and scrolls)
         use_scroll_adjust = self.input_submitted
 
-        # Total display lines (including blanks): 11
-        DISPLAY_LINES = 11
+        # Total display lines (including blanks): 13
+        DISPLAY_LINES = 13
         
         if self.heartbeat_count > 1:
             if use_scroll_adjust:
@@ -337,6 +361,8 @@ class ConsoleNode(Node):
         print(f"\r ├─ Max Roll     : {self.base_tilt_limit_deg} deg\033[K")
         print(f"\r ├─ Max Pitch    : {self.base_forward_tilt_limit_deg} deg\033[K")
         print(f"\r ├─ Joint ROM    : {self.joint_rom_safety_margin*100:.0f}% margin\033[K")
+        print(f"\r ├─ Active Kp    : {self.kp:.1f}\033[K")
+        print(f"\r ├─ Active Kd    : {self.kd:.2f}\033[K")
         print(f"\r └─ Watchdog     : {self.watchdog_timeout:.2f}s timeout\033[K")
 
         if self.heartbeat_count > 1 and not use_scroll_adjust:

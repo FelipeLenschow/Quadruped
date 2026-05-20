@@ -20,6 +20,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from geometry_msgs.msg import Quaternion, Vector3, Twist
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Float32
 import argparse
 import threading
 from pipeline import LocomotionPipeline
@@ -36,6 +37,8 @@ class Ros2MujocoDriver(Node):
         # 0. Load Central Config
         self.config = load_config()
         self.ctrl_cfg = self.config.get("control", {})
+        self.kp = float(self.ctrl_cfg.get("kp", 0.0))
+        self.kd = float(self.ctrl_cfg.get("kd", 0.0))
 
         # 1. Load Go2 MuJoCo Scene
         mjcf_path = os.path.join(
@@ -63,6 +66,9 @@ class Ros2MujocoDriver(Node):
 
         # 3. Subscriptions
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
+        self.create_subscription(Float32, "/control/kp", self.kp_cb, 10)
+        self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
+        self._startup_console_check = True
 
         # 4. Physics Thread
         self.physics_thread = threading.Thread(target=self._physics_loop, args=(self.headless,), daemon=True)
@@ -185,6 +191,18 @@ class Ros2MujocoDriver(Node):
         """Teleop passed through to sensors for the policy runner to see."""
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
 
+    def kp_cb(self, msg):
+        new_kp = float(msg.data)
+        if new_kp != self.kp:
+            self.kp = new_kp
+            self.get_logger().info(f"[MujocoDriver] Dynamic Kp updated to: {self.kp:.1f}")
+
+    def kd_cb(self, msg):
+        new_kd = float(msg.data)
+        if new_kd != self.kd:
+            self.kd = new_kd
+            self.get_logger().info(f"[MujocoDriver] Dynamic Kd updated to: {self.kd:.2f}")
+
     def _reset_robot(self):
         mujoco.mj_resetData(self.model, self.data)
         for i, addr in enumerate(self.isaac_qpos_addr):
@@ -200,8 +218,8 @@ class Ros2MujocoDriver(Node):
         v = self.data.qvel[self.isaac_qvel_addr]
 
         pos_err = targets - q  # Target - Actual
-        kp = self.ctrl_cfg.get("kp", 25.0)
-        kd = self.ctrl_cfg.get("kd", 0.5)
+        kp = self.kp
+        kd = self.kd
         
         # Override with safety watchdog torque
         effort_limit = self.pipeline.safety_processor.active_max_torque
@@ -257,6 +275,18 @@ class Ros2MujocoDriver(Node):
             while rclpy.ok():
                 if not headless and not viewer.is_running():
                     break
+
+                # Check if console was opened before this pipeline
+                if hasattr(self, "_startup_console_check") and self._startup_console_check:
+                    if not hasattr(self, "_startup_ticks"):
+                        self._startup_ticks = 0
+                    self._startup_ticks += 1
+                    if self._startup_ticks >= 200: # 200ms at 1000Hz physics loop rate
+                        self._startup_console_check = False
+                        if self.count_publishers("/safety/heartbeat") > 0:
+                            self.get_logger().error("[Safety] Console was detected running before driver! Exiting simulator for safety.")
+                            import sys
+                            sys.exit(0)
                 
                 # --- Centralized Pipeline (handles inference & telemetry) ---
                 raw_data = self._get_raw_sensor_data()

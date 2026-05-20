@@ -9,6 +9,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState, Imu
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Float32
 import yaml
 
 # Add project root to sys.path
@@ -68,6 +69,25 @@ class RealDriver(Node):
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
         self.cmds_vel = np.zeros(3)
 
+        # Dynamic gains subscription & initialization
+        config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Configs", "config.yaml"))
+        self.kp = 0.0
+        self.kd = 0.0
+        try:
+            with open(config_path, 'r') as f:
+                cfg_data = yaml.safe_load(f)
+                ctrl_cfg = cfg_data.get("control", {})
+                self.kp = float(ctrl_cfg.get("kp", 0.0))
+                self.kd = float(ctrl_cfg.get("kd", 0.0))
+        except Exception as e:
+            self.kp = 0.0
+            self.kd = 0.0
+            self.get_logger().warn(f"[RealDriver] Could not load gains from config.yaml, defaulting to 0.0: {e}")
+
+        self.create_subscription(Float32, "/control/kp", self.kp_cb, 10)
+        self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
+        self._startup_console_check = True
+
         # 5. Initialization logic for SDK
         self._init_low_cmd()
 
@@ -94,6 +114,18 @@ class RealDriver(Node):
 
     def teleop_cb(self, msg):
         self.cmds_vel = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
+
+    def kp_cb(self, msg):
+        new_kp = float(msg.data)
+        if new_kp != self.kp:
+            self.kp = new_kp
+            self.get_logger().info(f"[RealDriver] Dynamic Kp updated to: {self.kp:.1f}")
+
+    def kd_cb(self, msg):
+        new_kd = float(msg.data)
+        if new_kd != self.kd:
+            self.kd = new_kd
+            self.get_logger().info(f"[RealDriver] Dynamic Kd updated to: {self.kd:.2f}")
 
     def _get_raw_sensor_data(self):
         """Standardizes LowState into raw vectors for the TelemetryManager."""
@@ -128,6 +160,18 @@ class RealDriver(Node):
         """Internal inference logic."""
         if self.low_state is None:
             return
+
+        # Check if console was opened before this pipeline
+        if hasattr(self, "_startup_console_check") and self._startup_console_check:
+            if not hasattr(self, "_startup_ticks"):
+                self._startup_ticks = 0
+            self._startup_ticks += 1
+            if self._startup_ticks >= 20: # 100ms at 200Hz
+                self._startup_console_check = False
+                if self.count_publishers("/safety/heartbeat") > 0:
+                    self.get_logger().error("[Safety] Console was detected running before driver! Exiting driver for safety.")
+                    import sys
+                    sys.exit(0)
 
         raw_data = self._get_raw_sensor_data()
 
@@ -170,8 +214,8 @@ class RealDriver(Node):
                 self.low_cmd.motor_cmd[i].kd = 0.0
                 self.low_cmd.motor_cmd[i].tau = 0.0
             else:
-                self.low_cmd.motor_cmd[i].kp = 45.0  # Typical Go2 gains
-                self.low_cmd.motor_cmd[i].kd = 1.0
+                self.low_cmd.motor_cmd[i].kp = self.kp
+                self.low_cmd.motor_cmd[i].kd = self.kd
                 self.low_cmd.motor_cmd[i].tau = 0.0
 
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)
