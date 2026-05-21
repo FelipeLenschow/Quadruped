@@ -58,6 +58,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from geometry_msgs.msg import Quaternion, Vector3, Twist
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Bool
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg
@@ -173,6 +174,7 @@ class Ros2IsaacDriver(Node):
 
         # 3. Subscriptions
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
+        self.create_subscription(Bool, "/base/freeze", self._freeze_base_cb, 10)
 
         # 4. Buffers
         self.latest_targets = self.robot.data.default_joint_pos[
@@ -206,6 +208,11 @@ class Ros2IsaacDriver(Node):
 
     def teleop_cb(self, msg):
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
+
+    def _freeze_base_cb(self, msg: Bool):
+        """Freeze base is not supported in IsaacSim."""
+        state = "on" if msg.data else "off"
+        print(f"[IsaacDriver] freeze_base ({state}): Not supported on this simulator.")
 
     def step(self):
         raw_data = self._get_raw_sensor_data()

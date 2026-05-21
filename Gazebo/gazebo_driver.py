@@ -30,7 +30,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion, Vector3, Twist
-from std_msgs.msg import Float32
+from std_msgs.msg import Bool, Float32
 
 # Gazebo Transport & Msgs
 try:
@@ -95,6 +95,7 @@ class Ros2GazeboDriver(Node):
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
         self.create_subscription(Float32, "/control/kp", self._kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self._kd_cb, 10)
+        self.create_subscription(Bool, "/base/freeze", self._freeze_base_cb, 10)
         self._startup_console_check = True
 
         # Nominal standing pose (Matches MuJoCo Driver exactly in Isaac order)
@@ -156,6 +157,11 @@ class Ros2GazeboDriver(Node):
         if new_kd != self.kd:
             self.kd = new_kd
             self.get_logger().info(f"[GazeboDriver] Dynamic Kd updated to: {self.kd:.2f}")
+
+    def _freeze_base_cb(self, msg: Bool):
+        """Freeze base is not supported in Gazebo."""
+        state = "on" if msg.data else "off"
+        print(f"[GazeboDriver] freeze_base ({state}): Not supported on this simulator.")
 
     # --- Control & Gains ---
     def _stats_cb(self, msg):

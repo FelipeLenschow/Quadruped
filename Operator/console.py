@@ -21,7 +21,7 @@ import argparse
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, String
+from std_msgs.msg import Bool, Float32, String
 
 # Ensure absolute path of the repository is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -96,6 +96,9 @@ class ConsoleNode(Node):
         self.pose_status_progress = 0.0
         self.pose_status_label = ""
 
+        # Freeze Base state
+        self.freeze_base = False
+
         # ------------------------------------------------------------------
         # 2. ROS Publishers — Safety Heartbeat
         # ------------------------------------------------------------------
@@ -123,6 +126,8 @@ class ConsoleNode(Node):
             String, "/pose/command", 10)
         self.pose_interp_pub = self.create_publisher(
             Float32, "/pose/interp_duration", 10)
+        self.freeze_base_pub = self.create_publisher(
+            Bool, "/base/freeze", 10)
 
         # ------------------------------------------------------------------
         # 4. ROS Subscriber — Pose Status Feedback
@@ -187,6 +192,8 @@ class ConsoleNode(Node):
             "Pose = pushup",
             "Pose = ",
             "Interp = ",
+            "Freeze Base = on",
+            "Freeze Base = off",
         ]
 
         def completer(text, state):
@@ -272,6 +279,14 @@ class ConsoleNode(Node):
                         msg.data = dur
                         self.pose_interp_pub.publish(msg)
 
+                # --- Freeze Base ---
+                elif param in ("freeze base", "freeze"):
+                    active = val_str.lower().strip() in ("on", "true", "1", "yes")
+                    self.freeze_base = active
+                    msg = Bool()
+                    msg.data = active
+                    self.freeze_base_pub.publish(msg)
+
             except (EOFError, KeyboardInterrupt):
                 break
             except Exception:
@@ -312,8 +327,8 @@ class ConsoleNode(Node):
         # Check if user just submitted input (which prints a terminal newline and scrolls)
         use_scroll_adjust = self.input_submitted
 
-        # Total display lines (including blanks): 13
-        DISPLAY_LINES = 13
+        # Total display lines (including blanks): 14
+        DISPLAY_LINES = 14
         
         if self.heartbeat_count > 1:
             if use_scroll_adjust:
@@ -363,7 +378,9 @@ class ConsoleNode(Node):
         print(f"\r ├─ Joint ROM    : {self.joint_rom_safety_margin*100:.0f}% margin\033[K")
         print(f"\r ├─ Active Kp    : {self.kp:.1f}\033[K")
         print(f"\r ├─ Active Kd    : {self.kd:.2f}\033[K")
-        print(f"\r └─ Watchdog     : {self.watchdog_timeout:.2f}s timeout\033[K")
+        print(f"\r ├─ Watchdog     : {self.watchdog_timeout:.2f}s timeout\033[K")
+        freeze_indicator = f"{_CYAN}\u2744 FROZEN @ 1.0m{_RESET}" if self.freeze_base else "\u25cb off"
+        print(f"\r \u2514\u2500 Base Freeze  : {freeze_indicator}\033[K")
 
         if self.heartbeat_count > 1 and not use_scroll_adjust:
             # Restore saved cursor position for standard continuous typing

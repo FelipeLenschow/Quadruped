@@ -20,7 +20,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from geometry_msgs.msg import Quaternion, Vector3, Twist
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float32
+from std_msgs.msg import Bool, Float32
 import argparse
 import threading
 from pipeline import LocomotionPipeline
@@ -66,6 +66,12 @@ class Ros2MujocoDriver(Node):
 
         # 3. Subscriptions
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
+        self.create_subscription(Bool, "/base/freeze", self._freeze_base_cb, 10)
+
+        # Freeze-base state
+        self._freeze_base_active = False
+        self._freeze_base_pose = None  # np.array of shape (7,): xyz + quat [w,x,y,z]
+
         self.create_subscription(Float32, "/control/kp", self.kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
         self._startup_console_check = True
@@ -191,6 +197,24 @@ class Ros2MujocoDriver(Node):
         """Teleop passed through to sensors for the policy runner to see."""
         self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
 
+    def _freeze_base_cb(self, msg: Bool):
+        """Enable/disable mid-air base freeze at Z=1.0m."""
+        if msg.data and not self._freeze_base_active:
+            # Capture current XY and orientation, but force Z = 1.0 m
+            pos = self.data.qpos[0:3].copy()
+            quat = self.data.qpos[3:7].copy()  # [w, x, y, z]
+            self._freeze_base_pose = np.array([
+                pos[0], pos[1], 1.0,          # X, Y from current pose; Z fixed
+                quat[0], quat[1], quat[2], quat[3],
+            ], dtype=np.float64)
+            self._freeze_base_active = True
+            self.get_logger().info(
+                f"[MujocoDriver] Base FROZEN at XY=({pos[0]:.2f}, {pos[1]:.2f}) Z=1.0m")
+        elif not msg.data and self._freeze_base_active:
+            self._freeze_base_active = False
+            self._freeze_base_pose = None
+            self.get_logger().info("[MujocoDriver] Base freeze RELEASED.")
+
     def kp_cb(self, msg):
         new_kp = float(msg.data)
         if new_kp != self.kp:
@@ -202,6 +226,7 @@ class Ros2MujocoDriver(Node):
         if new_kd != self.kd:
             self.kd = new_kd
             self.get_logger().info(f"[MujocoDriver] Dynamic Kd updated to: {self.kd:.2f}")
+
 
     def _reset_robot(self):
         mujoco.mj_resetData(self.model, self.data)
@@ -304,6 +329,12 @@ class Ros2MujocoDriver(Node):
                 # --- Physics steps ---
                 for _ in range(self.PD_DECIMATION):
                     mujoco.mj_step(self.model, self.data)
+
+                # --- Freeze Base (override free-joint after every step) ---
+                if self._freeze_base_active and self._freeze_base_pose is not None:
+                    self.data.qpos[0:7] = self._freeze_base_pose
+                    self.data.qvel[0:6] = 0.0   # zero linear + angular base velocity
+                    mujoco.mj_forward(self.model, self.data)  # resync kinematics
                 
                 if not headless:
                     viewer.sync()
