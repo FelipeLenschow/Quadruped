@@ -88,7 +88,7 @@ class RealDriver(Node):
 
         # 4. Teleop Subscription
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
-        self.cmds_vel = np.zeros(3)
+        self.cmds_vel = np.zeros(4)  # [vx, vy, wz, height_cmd(unused)]
 
         # Dynamic gains subscription & initialization
         config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Configs", "config.yaml"))
@@ -134,7 +134,7 @@ class RealDriver(Node):
         self.low_state = msg
 
     def teleop_cb(self, msg):
-        self.cmds_vel = np.array([msg.linear.x, msg.linear.y, msg.angular.z])
+        self.cmds_vel = np.array([msg.linear.x, msg.linear.y, msg.angular.z, 0.0])
 
     def kp_cb(self, msg):
         new_kp = float(msg.data)
