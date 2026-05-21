@@ -29,6 +29,8 @@ from unitree_sdk2py.core.channel import (
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.utils.crc import CRC
+from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
+from unitree_sdk2py.go2.sport.sport_client import SportClient
 
 
 class RealDriver(Node):
@@ -45,6 +47,25 @@ class RealDriver(Node):
         self.low_state = None
         self.low_cmd = unitree_go_msg_dds__LowCmd_()
         self.crc = CRC()
+
+        # Release high-level motion mode so low-level control can take over
+        self.get_logger().info("[RealDriver] Checking motion mode...")
+        sc = SportClient()
+        sc.SetTimeout(5.0)
+        sc.Init()
+        msc = MotionSwitcherClient()
+        msc.SetTimeout(5.0)
+        msc.Init()
+        status, result = msc.CheckMode()
+        while result['name']:
+            self.get_logger().warn(
+                f"[RealDriver] Robot is in mode '{result['name']}' — calling StandDown + ReleaseMode."
+            )
+            sc.StandDown()
+            msc.ReleaseMode()
+            status, result = msc.CheckMode()
+            time.sleep(1)
+        self.get_logger().info("[RealDriver] Motion mode released. Low-level control is active.")
 
         # 2. Locomotion Pipeline
         try:
