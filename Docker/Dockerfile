@@ -65,7 +65,9 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
     torchaudio \
     onnxruntime \
     skrl \
-    tensorboard
+    tensorboard \
+    mcap \
+    mcap-ros2-support
 
 # 8. Set environment variables for Domain Isolation and Protobuf compatibility
 ENV ROS_DOMAIN_ID=1

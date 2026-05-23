@@ -1,13 +1,17 @@
 import os
 import sys
+import time
 import glob
 import subprocess
 import json
 import platform
 import yaml
+from datetime import datetime
+
 
 TASKS_DIR = "IsaacLab_Tasks"
 LAST_COMMAND_FILE = ".launcher_last_command.json"
+CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Configs", "config.yaml"))
 
 # Global Environment Detection
 IS_DOCKER = os.path.exists("/.dockerenv")
@@ -87,6 +91,7 @@ def run_cli_menu():
         print("  [9] Play Console")
         print("  [T] Test Joints (Real Robot)")
         print("  [P] Launch PlotJuggler")
+        print("  [M] MCAP Log & Replay")
     else:
         print("  [X] Play MuJoCo (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Gazebo (REQUIRES DOCKER OR PY3.10)")
@@ -96,6 +101,7 @@ def run_cli_menu():
         print("  [X] Play Console (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Test Joints (Real Robot) (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Launch PlotJuggler (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] MCAP Log & Replay (REQUIRES DOCKER OR PY3.10)")
 
     action_map = {
         "0": "repeat",
@@ -112,13 +118,15 @@ def run_cli_menu():
         "T": "hardware_tools",
         "p": "plotjuggler",
         "P": "plotjuggler",
+        "m": "mcap",
+        "M": "mcap",
     }
     
     default_action = "0" if last_cmd else "4"
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-9, T, P] (default {default_action}): ").strip() or default_action
+    choice = input(f"Enter choice [0-9, T, P, M] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice.lower(), "None")
     
     if action == "hardware_tools":
@@ -145,7 +153,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "console", "test_joints"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "console", "test_joints", "mcap_record", "mcap_replay"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -164,6 +172,7 @@ def run_cli_menu():
             last_cmd.get("run_name", ""),
             last_cmd.get("domain_id", "1"),
             last_cmd.get("use_estimator", False),
+            last_cmd.get("record_session", False),
         )
 
     # 1.2 Validation
@@ -171,7 +180,7 @@ def run_cli_menu():
         print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Aborting.")
         sys.exit(1)
         
-    if requires_docker and choice.lower() in ["4", "5", "6", "7", "8", "9", "t", "p"]:
+    if requires_docker and choice.lower() in ["4", "5", "6", "7", "8", "9", "t", "p", "m"]:
         print(f"\n[ERROR] Action '{action}' requires ROS 2 Humble (Python 3.10).")
         print("        Please run this task inside DOCKER or switch to a 3.10 environment.")
         sys.exit(1)
@@ -182,7 +191,7 @@ def run_cli_menu():
     selected_module_name = "None"
     selected_module_path = "."
     
-    if action not in ["mujoco_twin", "gazebo_twin", "console", "teleop", "test_joints", "real_telemetry", "plotjuggler"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "console", "teleop", "test_joints", "real_telemetry", "plotjuggler", "mcap"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         
         if not modules:
@@ -215,7 +224,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "mujoco_twin", "gazebo_twin", "console", "test_joints", "real_telemetry", "plotjuggler"]:
+    if action not in ["teleop", "mujoco_twin", "gazebo_twin", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -250,7 +259,7 @@ def run_cli_menu():
     # Load default domain from config.yaml
     default_domain = "1"
     try:
-        with open("Configs/config.yaml", 'r') as f:
+        with open(CONFIG_PATH, 'r') as f:
             cfg_data = yaml.safe_load(f)
             default_domain = str(cfg_data.get("network", {}).get("ros_domain_id", "1"))
     except Exception:
@@ -292,7 +301,71 @@ def run_cli_menu():
         ans = input("Use State Estimator? [Y/n] (default Y): ").lower().strip()
         use_estimator = ans != "n"
 
-    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator
+    # Auto-record prompt if launching driver
+    record_session = False
+    if action in ["mujoco", "gazebo", "isaac_sim", "real_deploy"]:
+        # First check config default
+        cfg_auto = False
+        try:
+            with open(CONFIG_PATH, 'r') as f:
+                cfg_data = yaml.safe_load(f)
+                cfg_auto = cfg_data.get("logging", {}).get("auto_record", False)
+        except Exception:
+            pass
+        
+        default_prompt = "Y/n" if cfg_auto else "y/N"
+        ans = input(f"Record this session to MCAP? [{default_prompt}]: ").lower().strip()
+        if ans == "":
+            record_session = cfg_auto
+        else:
+            record_session = (ans == "y")
+
+    if action == "mcap":
+        # MCAP Log & Replay sub-menu
+        print("\n--- MCAP Telemetry Manager ---")
+        print("  [1] Record Live Telemetry")
+        print("  [2] Replay Recorded Session")
+        mcap_choice = input("Enter choice [1-2] (default 2): ").strip() or "2"
+        
+        # Load record_dir from config
+        record_dir = "Mcap/Recordings"
+        try:
+            with open(CONFIG_PATH, 'r') as f:
+                cfg_data = yaml.safe_load(f)
+                record_dir = cfg_data.get("logging", {}).get("record_dir", "Mcap/Recordings")
+        except Exception:
+            pass
+            
+        os.makedirs(record_dir, exist_ok=True)
+
+        if mcap_choice == "1":
+            action = "mcap_record"
+            filename = input("Enter output filename (optional, e.g. run1): ").strip()
+            if not filename:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"run_{timestamp}"
+            if not filename.endswith(".mcap"):
+                filename += ".mcap"
+            # Set record filepath in the run_name slot so we can pass it
+            run_name = os.path.join(record_dir, filename)
+        else:
+            action = "mcap_replay"
+            # List files
+            files = sorted([f for f in os.listdir(record_dir) if f.endswith(".mcap")])
+            if not files:
+                print(f"[Launcher] No recorded MCAP files found in '{record_dir}/'.")
+                sys.exit(0)
+            print("\nSelect MCAP File to Play Back:")
+            for i, f in enumerate(files):
+                print(f"  [{i+1}] {f}")
+            f_choice = input(f"Enter choice [1-{len(files)}] (default 1): ").strip() or "1"
+            try:
+                selected_file = files[int(f_choice) - 1]
+            except (ValueError, IndexError):
+                selected_file = files[0]
+            run_name = os.path.join(record_dir, selected_file)
+
+    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, record_session
 
 def main():
     (
@@ -309,6 +382,7 @@ def main():
         run_name,
         domain_id,
         use_estimator,
+        record_session,
     ) = run_cli_menu()
 
     # Save for next time
@@ -326,6 +400,7 @@ def main():
         "run_name": run_name,
         "domain_id": domain_id,
         "use_estimator": use_estimator,
+        "record_session": record_session,
     })
 
     print("\n" + "=" * 50)
@@ -391,9 +466,9 @@ def main():
             cmd.append("--video_interval=5000")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "console", "teleop", "test_joints", "plotjuggler"):
+    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "console", "teleop", "test_joints", "plotjuggler", "mcap_record", "mcap_replay"):
         # Unified Driver Pipeline
-        isaac_python = "/home/05680435969@env_isaacsim/bin/python"
+        isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable 
 
 
@@ -482,7 +557,65 @@ def main():
         elif action == "plotjuggler":
             cmd = ["ros2", "run", "plotjuggler", "plotjuggler"]
 
-        subprocess.run(cmd, env=env)
+        elif action == "mcap_record":
+            bridge_script = os.path.abspath(os.path.join("Mcap", "mcap_tool.py"))
+            cmd = [
+                sys_python,
+                bridge_script,
+                "--record",
+                os.path.abspath(run_name)
+            ]
+        elif action == "mcap_replay":
+            bridge_script = os.path.abspath(os.path.join("Mcap", "mcap_tool.py"))
+            cmd = [
+                sys_python,
+                bridge_script,
+                "--replay",
+                os.path.abspath(run_name)
+            ]
+
+        # Check if we should auto-record this session
+        record_proc = None
+        if record_session:
+            record_dir = "Mcap/Recordings"
+            try:
+                with open(CONFIG_PATH, 'r') as f:
+                    cfg_data = yaml.safe_load(f)
+                    record_dir = cfg_data.get("logging", {}).get("record_dir", "Mcap/Recordings")
+            except Exception:
+                pass
+            os.makedirs(record_dir, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            mcap_filename = os.path.join(record_dir, f"run_{action}_{timestamp}.mcap")
+            abs_mcap = os.path.abspath(mcap_filename)
+            
+            print(f"\n[Launcher] Auto-recording enabled. Saving to: {mcap_filename}")
+            
+            bridge_script = os.path.abspath(os.path.join("Mcap", "mcap_tool.py"))
+            record_cmd = [
+                "/usr/bin/python3", # Force system python 3.10 for ROS 2 Humble C-extension compatibility
+                bridge_script,
+                "--record",
+                abs_mcap
+            ]
+            # Start recorder in background
+            record_proc = subprocess.Popen(record_cmd, env=env)
+            time.sleep(0.5)
+
+        try:
+            subprocess.run(cmd, env=env)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if record_proc is not None:
+                print("\n[Launcher] Stopping background MCAP recorder...")
+                record_proc.terminate()
+                try:
+                    record_proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    record_proc.kill()
+                print("[Launcher] Background recorder terminated cleanly.")
 
 if __name__ == "__main__":
     main()

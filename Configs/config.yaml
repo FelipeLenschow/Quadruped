@@ -69,3 +69,9 @@ poses:
   stand:    [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5]
   lie_flat: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
   sit:      [0.1, -0.1, 0.1, -0.1, 1.2, 1.2, 2.0, 2.0, -2.0, -2.0, -2.5, -2.5]
+
+# --- MCAP Logging & Telemetry Recording ---
+logging:
+  auto_record: true            # Automatically start background recording when launching simulation drivers
+  record_dir: "Mcap/Recordings"      # Destination directory for recorded MCAP logs
+  cluster_window_ms: 5              # Time window in ms to cluster messages into a single physical playback frame
