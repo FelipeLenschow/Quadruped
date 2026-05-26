@@ -24,11 +24,12 @@ RUN apt-get update && apt-get install -y curl gnupg lsb-release && \
     python3-gz-msgs10 \
     && rm -rf /var/lib/apt/lists/*
 
-# 3.5 Install PlotJuggler and Teleop tools
+# 3.5 Install PlotJuggler, Teleop tools, and MCAP storage plugin
 RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false && \
     apt-get install -y \
     ros-humble-plotjuggler-ros \
     ros-humble-teleop-twist-keyboard \
+    ros-humble-rosbag2-storage-mcap \
     || echo "Some ROS tools unavailable on this architecture. Continuing."
 
 # 4. Create a workspace

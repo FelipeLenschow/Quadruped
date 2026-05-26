@@ -115,74 +115,7 @@ def get_msg_type_and_def(msg_class):
     return msg_type, msg_def
 
 
-class McapRecorder(Node):
-    def __init__(self, filepath: str):
-        super().__init__("mcap_recorder")
-        self.filepath = filepath
-        
-        # Ensure parent directory exists
-        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-        
-        self.file = open(self.filepath, "wb")
-        self.writer = McapWriter(self.file)
-        self.registered_types = {}
-        self.msg_count = 0
-        self.start_time = time.time()
-        
-        self.subscriptions_dict = {}
-        
-        # Run an immediate manual scan to capture topics present at launch
-        self._scan_topics()
 
-        # Start a fast dynamic discovery timer to rapidly catch any delayed topics
-        self.discovery_timer = self.create_timer(0.5, self._scan_topics)
-
-        self.get_logger().info(f"MCAP Recorder Node started -> Recording to {self.filepath} (Auto-discovering all topics)")
-
-    def _subscribe_topic(self, topic: str, msg_type: str):
-        if topic in self.subscriptions_dict:
-            return
-        try:
-            msg_class = get_msg_class(msg_type)
-            cb = self._make_callback(topic, msg_class)
-            self.subscriptions_dict[topic] = self.create_subscription(
-                msg_class, topic, cb, 10
-            )
-        except Exception:
-            pass
-
-    def _scan_topics(self):
-        for topic, types in self.get_topic_names_and_types():
-            if not types: continue
-            self._subscribe_topic(topic, types[0])
-
-    def _make_callback(self, topic: str, msg_class):
-        def callback(msg):
-            msg_type, msg_def = get_msg_type_and_def(msg_class)
-            if msg_type not in self.registered_types:
-                schema = self.writer.register_msgdef(msg_type, msg_def)
-                self.registered_types[msg_type] = schema
-                
-            schema = self.registered_types[msg_type]
-            from rosidl_runtime_py.convert import message_to_ordereddict
-            self.writer.write_message(
-                topic=topic,
-                schema=schema,
-                message=message_to_ordereddict(msg),
-                log_time=time.time_ns(),
-                publish_time=time.time_ns()
-            )
-            self.file.flush()
-            self.msg_count += 1
-            elapsed = time.time() - self.start_time
-            # print(f"\r[Recorder] Active | Time: {elapsed:7.2f}s | Messages written: {self.msg_count:<6}", end="", flush=True)
-        return callback
-
-    def close(self):
-        print() # New line after the status reports
-        self.writer.finish()
-        self.file.close()
-        self.get_logger().info(f"MCAP file successfully closed: {self.filepath}")
 
 
 def dynamic_msg_to_dict(obj):
@@ -214,7 +147,16 @@ class PlaybackFrame:
 class McapReplayer(Node):
     def __init__(self, filepath: str):
         super().__init__("mcap_replayer")
-        self.filepath = filepath
+        if os.path.isdir(filepath):
+            # If a rosbag directory is provided, find the .mcap file inside
+            mcap_files = [f for f in os.listdir(filepath) if f.endswith(".mcap")]
+            if mcap_files:
+                self.filepath = os.path.join(filepath, mcap_files[0])
+            else:
+                self.filepath = filepath
+        else:
+            self.filepath = filepath
+            
         self.publishers_dict = {}
 
     def replay(self):
@@ -330,13 +272,20 @@ class McapReplayer(Node):
             print(f"\r[Replayer] [{state}] |{bar}| Frame: {idx + 1:>5}/{total:<5} | Speed: {speed:.2f}x ", end="", flush=True)
 
         paused = False
+        exit_requested = False
         idx = 0
         t0 = None
         start_real_time = time.time()
         playback_speed = 1.0
         
         try:
-            while rclpy.ok() and idx < len(frames):
+            while rclpy.ok() and not exit_requested:
+                if idx >= len(frames):
+                    idx = 0
+                    t0 = None
+                    if not paused:
+                        start_real_time = time.time()
+
                 # 0. Check for keyboard input (throttled) ONLY if playing
                 if not paused and (idx % max(1, int(20 * playback_speed)) == 0):
                     key = get_key_nonblock()
@@ -358,6 +307,7 @@ class McapReplayer(Node):
                         start_real_time = time.time()
                     elif key == 'q':
                         print("\n\n[Replayer] Exiting.")
+                        exit_requested = True
                         break
                     elif key in ('r', 'R'):
                         idx = 0
@@ -399,7 +349,7 @@ class McapReplayer(Node):
                             break
                         elif key == 'q':
                             print("\n\n[Replayer] Exiting.")
-                            idx = len(frames) # Trigger exit
+                            exit_requested = True
                             break
                         time.sleep(min(sleep_needed, 0.005))
                         
@@ -414,10 +364,10 @@ class McapReplayer(Node):
                             print("\n\n[Replayer] RESUMED (Playing)...")
                             break
                         elif key in ('right', 'd'):
-                            idx = min(idx + 1, len(frames) - 1)
+                            idx = (idx + 1) % len(frames)
                             break
                         elif key in ('left', 'a'):
-                            idx = max(idx - 1, 0)
+                            idx = (idx - 1) % len(frames)
                             break
                         elif key == 'up':
                             playback_speed = min(playback_speed * 2.0, 16.0)
@@ -432,11 +382,11 @@ class McapReplayer(Node):
                             break
                         elif key == 'q':
                             print("\n\n[Replayer] Exiting.")
-                            idx = len(frames) # Trigger exit
+                            exit_requested = True
                             break
                         time.sleep(0.01)
 
-                if idx >= len(frames):
+                if exit_requested:
                     break
 
                 # 3. Publish the current frame's messages
@@ -475,20 +425,15 @@ class McapReplayer(Node):
 def main():
     parser = argparse.ArgumentParser(description="MCAP Recorder & Replay Tool")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--record", type=str, help="Path to write the recorded MCAP file")
-    group.add_argument("--replay", type=str, help="Path to read and replay the MCAP file")
+    group.add_argument("--record", type=str, help="DEPRECATED: Use ros2 bag record instead")
+    group.add_argument("--replay", type=str, help="Path to read and replay the MCAP file or rosbag directory")
     args = parser.parse_args()
 
     rclpy.init()
     if args.record:
-        node = McapRecorder(args.record)
-        try:
-            rclpy.spin(node)
-        except (KeyboardInterrupt, SystemExit):
-            pass
-        finally:
-            node.close()
-            node.destroy_node()
+        print("[ERROR] The internal MCAP recorder has been removed in favor of ros2 bag.")
+        print("Please use 'ros2 bag record -s mcap' instead.")
+        sys.exit(1)
     else:
         node = McapReplayer(args.replay)
         node.replay()

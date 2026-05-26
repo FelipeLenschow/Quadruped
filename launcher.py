@@ -167,7 +167,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "console", "test_joints", "mcap_record", "mcap_replay"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -337,9 +337,11 @@ def run_cli_menu():
     if action == "mcap":
         # MCAP Log & Replay sub-menu
         print("\n--- MCAP Telemetry Manager ---")
-        print("  [1] Record Live Telemetry")
-        print("  [2] Replay Recorded Session")
-        mcap_choice = input("Enter choice [1-2] (default 2): ").strip() or "2"
+        print("  [WARNING] If you started MuJoCo, Gazebo, IsaacSim, or Deploy with auto-record enabled, it is already recording!")
+        print("  [1] Record Topics (Ros2 Bag)")
+        print("  [2] Replay (Ros2 Bag)")
+        print("  [3] Replay (Custom Script)")
+        mcap_choice = input("Enter choice [1-3] (default 3): ").strip() or "3"
         
         # Load record_dir from config
         record_dir = "Mcap/Recordings"
@@ -354,22 +356,29 @@ def run_cli_menu():
 
         if mcap_choice == "1":
             action = "mcap_record"
-            filename = input("Enter output filename (optional, e.g. run1): ").strip()
+            filename = input("Enter output directory name (optional, e.g. run1): ").strip()
             if not filename:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"run_{timestamp}"
-            if not filename.endswith(".mcap"):
-                filename += ".mcap"
-            # Set record filepath in the run_name slot so we can pass it
             run_name = os.path.join(record_dir, filename)
         else:
-            action = "mcap_replay"
-            # List files
-            files = sorted([f for f in os.listdir(record_dir) if f.endswith(".mcap")])
+            if mcap_choice == "2":
+                action = "mcap_replay_rosbag"
+            else:
+                action = "mcap_replay_interactive"
+                
+            # List files and directories
+            items = sorted(os.listdir(record_dir))
+            files = []
+            for item in items:
+                full_path = os.path.join(record_dir, item)
+                if item.endswith(".mcap") or os.path.isdir(full_path):
+                    files.append(item)
+
             if not files:
-                print(f"[Launcher] No recorded MCAP files found in '{record_dir}/'.")
+                print(f"[Launcher] No recorded sessions found in '{record_dir}/'.")
                 sys.exit(0)
-            print("\nSelect MCAP File to Play Back:")
+            print("\nSelect Session to Play Back:")
             for i, f in enumerate(files):
                 print(f"  [{i+1}] {f}")
             f_choice = input(f"Enter choice [1-{len(files)}] (default 1): ").strip() or "1"
@@ -480,7 +489,7 @@ def main():
             cmd.append("--video_interval=5000")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "console", "teleop", "test_joints", "plotjuggler", "mcap_record", "mcap_replay"):
+    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "console", "teleop", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable 
@@ -574,14 +583,18 @@ def main():
             cmd = ["ros2", "run", "plotjuggler", "plotjuggler"]
 
         elif action == "mcap_record":
-            bridge_script = os.path.abspath(os.path.join("Mcap", "mcap_tool.py"))
             cmd = [
-                sys_python,
-                bridge_script,
-                "--record",
+                "ros2", "bag", "record",
+                "-a",
+                "-s", "mcap",
+                "-o", os.path.abspath(run_name)
+            ]
+        elif action == "mcap_replay_rosbag":
+            cmd = [
+                "ros2", "bag", "play",
                 os.path.abspath(run_name)
             ]
-        elif action == "mcap_replay":
+        elif action == "mcap_replay_interactive":
             bridge_script = os.path.abspath(os.path.join("Mcap", "mcap_tool.py"))
             cmd = [
                 sys_python,
@@ -603,17 +616,16 @@ def main():
             os.makedirs(record_dir, exist_ok=True)
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            mcap_filename = os.path.join(record_dir, f"run_{action}_{timestamp}.mcap")
+            mcap_filename = os.path.join(record_dir, f"run_{action}_{timestamp}")
             abs_mcap = os.path.abspath(mcap_filename)
             
             print(f"\n[Launcher] Auto-recording enabled. Saving to: {mcap_filename}")
             
-            bridge_script = os.path.abspath(os.path.join("Mcap", "mcap_tool.py"))
             record_cmd = [
-                "/usr/bin/python3", # Force system python 3.10 for ROS 2 Humble C-extension compatibility
-                bridge_script,
-                "--record",
-                abs_mcap
+                "ros2", "bag", "record",
+                "-a",
+                "-s", "mcap",
+                "-o", abs_mcap
             ]
             # Start recorder in background
             record_proc = subprocess.Popen(record_cmd, env=env)
