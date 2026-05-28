@@ -27,7 +27,7 @@ Make a way to reward a walking pattern
 
 - MCAP record and replay
 Implement Pinoccchio 
-Implement Led color control for modes
+- Implement Led color control for modes
 - RViz
 - Ros bag
 Fix IsaacSim

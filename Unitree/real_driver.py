@@ -239,6 +239,14 @@ class RealDriver(Node):
                 self.low_cmd.motor_cmd[i].kd = self.kd
                 self.low_cmd.motor_cmd[i].tau = 0.0
 
+        # Set LED Color based on pipeline mode
+        if self.pipeline.safety_processor.is_policy_blocked:
+            self.low_cmd.led = [255, 0, 0] * 4  # Red (Emergency Stop)
+        elif self.pipeline.mode == "policy":
+            self.low_cmd.led = [0, 0, 255] * 4  # Blue (Policy Mode)
+        elif self.pipeline.mode == "pose":
+            self.low_cmd.led = [0, 255, 0] * 4  # Green (Pose Generator Mode)
+
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)
         self.lowcmd_publisher.Write(self.low_cmd)
 
