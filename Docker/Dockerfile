@@ -29,7 +29,16 @@ RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=fa
     apt-get install -y \
     ros-humble-plotjuggler-ros \
     ros-humble-teleop-twist-keyboard \
+    ros-humble-teleop-twist-joy \
+    ros-humble-joy \
     ros-humble-rosbag2-storage-mcap \
+    ros-humble-rviz2 \
+    ros-humble-foxglove-bridge \
+    ros-humble-tf2-tools \
+    ros-humble-rqt-graph \
+    ros-humble-rqt-tf-tree \
+    ros-humble-robot-state-publisher \
+    ros-humble-xacro \
     || echo "Some ROS tools unavailable on this architecture. Continuing."
 
 # 4. Create a workspace

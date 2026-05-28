@@ -77,10 +77,10 @@ def run_cli_menu():
         print("  " + "-" * 45)
         print("  [3] Play IsaacSim")
     else:
-        print("  [X] Train Policy (DISABLED IN DOCKER)")
-        print("  [X] Play IsaacLab (DISABLED IN DOCKER)")
+        print("  [X] Train Policy (AVAILABLE ONLY ON ISAACSIM VENV)")
+        print("  [X] Play IsaacLab (AVAILABLE ONLY ON ISAACSIM VENV)")
         print("  " + "-" * 45)
-        print("  [X] Play IsaacSim (DISABLED IN DOCKER)")
+        print("  [X] Play IsaacSim (AVAILABLE ONLY ON ISAACSIM VENV)")
         
 
     # Detect if we are in an environment that CANNOT run ROS 2 Humble natively
@@ -91,23 +91,31 @@ def run_cli_menu():
         print("  [5] Play Gazebo")
         print("  [6] Deploy to Robot")
         print("  " + "-" * 45)
-        print("  [K] Remote Teleop")
-        print("  [V] Visualizers")
         print("  [C] Console")
         print("  [T] Test Joints (Real Robot)")
+        print("  " + "-" * 45)
+        print("  --- ROS 2 Tools ---")
+        print("  [K] Remote Teleop")
+        print("  [V] Visualizers")
         print("  [P] PlotJuggler")
         print("  [M] MCAP Log & Replay")
+        print("  [R] RQT Graph")
+        print("  [F] TF2 Tree")
     else:
         print("  [X] Play MuJoCo (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Gazebo (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Deploy to Robot (REQUIRES DOCKER OR PY3.10)")
         print("  " + "-" * 45)
-        print("  [X] Remote Teleop (REQUIRES DOCKER OR PY3.10)")
-        print("  [X] Visualizers (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Console (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Test Joints (Real Robot) (REQUIRES DOCKER OR PY3.10)")
+        print("  " + "-" * 45)
+        print("  --- ROS 2 Tools ---")
+        print("  [X] Remote Teleop (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Visualizers (REQUIRES DOCKER OR PY3.10)")
         print("  [X] PlotJuggler (REQUIRES DOCKER OR PY3.10)")
         print("  [X] MCAP Log & Replay (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] RQT Graph (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] TF2 Tree (REQUIRES DOCKER OR PY3.10)")
 
     action_map = {
         "0": "repeat",
@@ -129,13 +137,17 @@ def run_cli_menu():
         "P": "plotjuggler",
         "m": "mcap",
         "M": "mcap",
+        "r": "rqt_graph",
+        "R": "rqt_graph",
+        "f": "tf2_tree",
+        "F": "tf2_tree",
     }
     
     default_action = "0" if last_cmd else "4"
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-6, K, V, C, T, P, M] (default {default_action}): ").strip() or default_action
+    choice = input(f"Enter choice [0-6, K, V, C, T, P, M, R, F] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice.lower(), "None")
     
     if action == "hardware_tools":
@@ -148,9 +160,18 @@ def run_cli_menu():
         else:
             action = "real_telemetry"
             
+    if action == "teleop":
+        tel_choice = input("Select Teleop [1: Keyboard, 2: Gamepad (Joy)] (default 1): ").strip() or "1"
+        if tel_choice == "2":
+            action = "teleop_joy"
+        else:
+            action = "teleop_keyboard"
+            
     if action == "visualizers":
-        vis_choice = input("Select Visualizer [1: MuJoCo Twin, 2: Gazebo Twin, 3: RViz] (default 1): ").strip() or "1"
-        if vis_choice == "3":
+        vis_choice = input("Select Visualizer [1: MuJoCo Twin, 2: Gazebo Twin, 3: RViz, 4: Foxglove] (default 1): ").strip() or "1"
+        if vis_choice == "4":
+            action = "foxglove"
+        elif vis_choice == "3":
             action = "rviz"
         elif vis_choice == "2":
             action = "gazebo_twin"
@@ -167,7 +188,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "rqt_graph", "tf2_tree"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -194,7 +215,7 @@ def run_cli_menu():
         print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Aborting.")
         sys.exit(1)
         
-    if requires_docker and choice.lower() in ["4", "5", "6", "k", "v", "c", "t", "p", "m"]:
+    if requires_docker and choice.lower() in ["4", "5", "6", "k", "v", "c", "t", "p", "m", "r", "f"]:
         print(f"\n[ERROR] Action '{action}' requires ROS 2 Humble (Python 3.10).")
         print("        Please run this task inside DOCKER or switch to a 3.10 environment.")
         sys.exit(1)
@@ -205,7 +226,7 @@ def run_cli_menu():
     selected_module_name = "None"
     selected_module_path = "."
     
-    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "console", "teleop", "test_joints", "real_telemetry", "plotjuggler", "mcap"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         
         if not modules:
@@ -238,7 +259,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "mujoco_twin", "gazebo_twin", "rviz", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap"]:
+    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -489,7 +510,7 @@ def main():
             cmd.append("--video_interval=5000")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "console", "teleop", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive"):
+    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable 
@@ -571,9 +592,12 @@ def main():
             if action == "real_deploy" and abs_ckpt:
                 cmd.append(f"--internal_policy={abs_ckpt}")
 
-        elif action == "teleop":
+        elif action == "teleop_keyboard":
             cmd = ["ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard"]
             # No robot_key or ckpt needed for this
+            
+        elif action == "teleop_joy":
+            cmd = ["ros2", "launch", "teleop_twist_joy", "teleop-launch.py"]
 
         elif action == "test_joints":
             bridge_script = os.path.abspath(os.path.join("Unitree", "test_joints.py"))
@@ -581,6 +605,15 @@ def main():
         
         elif action == "plotjuggler":
             cmd = ["ros2", "run", "plotjuggler", "plotjuggler"]
+            
+        elif action == "foxglove":
+            cmd = ["ros2", "launch", "foxglove_bridge", "foxglove_bridge_launch.xml"]
+
+        elif action == "rqt_graph":
+            cmd = ["ros2", "run", "rqt_graph", "rqt_graph"]
+
+        elif action == "tf2_tree":
+            cmd = ["ros2", "run", "rqt_tf_tree", "rqt_tf_tree"]
 
         elif action == "mcap_record":
             cmd = [
