@@ -221,6 +221,22 @@ def run_cli_menu():
         sys.exit(1)
 
     print(f"\n--- Selected Action: {action.upper()} ---\n")
+    
+    # Rename Terminator window pane based on action and environment
+    try:
+        if IS_ROBOT:
+            env_str = "ROBOT"
+        elif IS_DOCKER:
+            env_str = "DOCKER"
+        elif is_isaac:
+            env_str = "ISAAC"
+        else:
+            env_str = "HOST"
+            
+        sys.stdout.write(f"\x1b]2;[{env_str}] {action.upper()}\x07")
+        sys.stdout.flush()
+    except Exception:
+        pass
 
     # 2. Module Selection
     selected_module_name = "None"
