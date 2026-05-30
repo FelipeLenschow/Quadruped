@@ -31,6 +31,7 @@ Implement Pinoccchio
 - RViz
 - Ros bag
 Fix IsaacSim
+NN to compensate the friction of the actuators 
 
 cp5: Added sensor noise
 cp6: Added friction, foot height reward, robot variation
