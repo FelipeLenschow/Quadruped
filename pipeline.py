@@ -80,6 +80,12 @@ class LocomotionPipeline:
         self.step_counter = 0
         self._pose_heartbeat_was_ok = False  # Track heartbeat lost→alive transitions
 
+        # Mode Transition State
+        self.mode_transition_active = False
+        self.mode_transition_start_time = None
+        self.mode_transition_duration = 3.0  # Smooth transition duration in seconds
+        self.mode_transition_start_targets = self.desired_qpos.copy()
+
     def _mode_cb(self, msg: String):
         """Handle pipeline mode switch commands from the Console."""
         new_mode = msg.data.strip().lower()
@@ -88,6 +94,12 @@ class LocomotionPipeline:
                 self.node.get_logger().info(
                     f"[Pipeline] Mode switched: {self.mode} → {new_mode}")
                 self.mode = new_mode
+
+                # Start smooth transition from current targets
+                self.mode_transition_active = True
+                self.mode_transition_start_time = None
+                self.mode_transition_start_targets = self.latest_targets.copy()
+
                 # Clear safety latch when entering pose mode — the pose
                 # generator IS the recovery mechanism for unsafe states.
                 if new_mode == "pose":
@@ -170,9 +182,6 @@ class LocomotionPipeline:
                     max_torque = 0.0
                     sp.active_max_torque = 0.0
 
-                self.latest_targets = final_targets
-                self.distributor.send(final_targets, max_torque)
-
             else:
                 # ── POLICY MODE ──────────────────────────────────────
                 # Full safety evaluation: ROM, tilt, and heartbeat checks.
@@ -198,8 +207,22 @@ class LocomotionPipeline:
                     state=state
                 )
 
-                self.latest_targets = final_targets
-                self.distributor.send(final_targets, max_torque)
+            # ── MODE TRANSITION INTERPOLATION ────────────────────
+            if self.mode_transition_active:
+                if self.mode_transition_start_time is None:
+                    self.mode_transition_start_time = sim_time
+                
+                elapsed = sim_time - self.mode_transition_start_time
+                alpha = np.clip(elapsed / self.mode_transition_duration, 0.0, 1.0)
+                
+                final_targets = (1.0 - alpha) * self.mode_transition_start_targets + alpha * final_targets
+                
+                if alpha >= 1.0:
+                    self.mode_transition_active = False
+                    self.mode_transition_start_time = None
+
+            self.latest_targets = final_targets
+            self.distributor.send(final_targets, max_torque)
 
         # 3. Telemetry Publishing
         if is_policy_step:

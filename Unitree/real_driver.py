@@ -31,6 +31,7 @@ from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.utils.crc import CRC
 from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
 from unitree_sdk2py.go2.sport.sport_client import SportClient
+from unitree_sdk2py.go2.vui.vui_client import VuiClient
 
 
 class RealDriver(Node):
@@ -47,6 +48,11 @@ class RealDriver(Node):
         self.low_state = None
         self.low_cmd = unitree_go_msg_dds__LowCmd_()
         self.crc = CRC()
+
+        self.vui = VuiClient()
+        self.vui.SetTimeout(5.0)
+        self.vui.Init()
+        self._current_brightness = -1
 
         # Release high-level motion mode so low-level control can take over
         self.get_logger().info("[RealDriver] Checking motion mode...")
@@ -239,13 +245,19 @@ class RealDriver(Node):
                 self.low_cmd.motor_cmd[i].kd = self.kd
                 self.low_cmd.motor_cmd[i].tau = 0.0
 
-        # Set LED Color based on pipeline mode
+        # Set Head Light Brightness based on pipeline mode
+        desired_brightness = 0
         if self.pipeline.safety_processor.is_policy_blocked:
-            self.low_cmd.led = [255, 0, 0] * 4  # Red (Emergency Stop)
+            desired_brightness = 10  # Emergency Stop (Max brightness)
         elif self.pipeline.mode == "policy":
-            self.low_cmd.led = [0, 0, 255] * 4  # Blue (Policy Mode)
+            desired_brightness = 0  # Policy Mode (Off)
         elif self.pipeline.mode == "pose":
-            self.low_cmd.led = [0, 255, 0] * 4  # Green (Pose Generator Mode)
+            desired_brightness = 3  # Pose Generator Mode (Dim)
+
+        if desired_brightness != self._current_brightness:
+            self._current_brightness = desired_brightness
+            # Run in a background thread to avoid blocking the 200Hz loop
+            threading.Thread(target=self.vui.SetBrightness, args=(desired_brightness,), daemon=True).start()
 
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)
         self.lowcmd_publisher.Write(self.low_cmd)
