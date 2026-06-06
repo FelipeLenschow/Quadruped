@@ -60,7 +60,7 @@ class MujocoTwin(Node):
         # 2. State Variables
         # Start floating at z=0.35 with identity quaternion
         self.base_pos = np.array([0.0, 0.0, 0.35], dtype=np.float64)
-        self.base_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64) # [w, x, y, z]
+        self.base_quat = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64) # [x, y, z, w]
         self.joint_pos = np.zeros(12, dtype=np.float64)
         self.base_lin_vel_body = np.zeros(3, dtype=np.float64)
 
@@ -91,10 +91,8 @@ class MujocoTwin(Node):
     def imu_cb(self, msg: Imu):
         with self.lock:
             q = msg.orientation
-            # ROS is usually [x, y, z, w], we want [w, x, y, z] for MuJoCo
-            # Wait, our telemetry publishes: w=float(q[0]), x=float(q[1]), y=float(q[2]), z=float(q[3])
-            # So the msg has w, x, y, z explicitly defined.
-            self.base_quat = np.array([q.w, q.x, q.y, q.z])
+            # ROS Quaternion msg fields: x, y, z, w — matches our pipeline convention
+            self.base_quat = np.array([q.x, q.y, q.z, q.w])  # [x, y, z, w]
 
     def odom_cb(self, msg: Odometry):
         with self.lock:
@@ -129,8 +127,9 @@ class MujocoTwin(Node):
                     # Update MuJoCo Data
                     # Base pos [x, y, z]
                     self.data.qpos[0:3] = self.base_pos
-                    # Base quat [w, x, y, z]
-                    self.data.qpos[3:7] = self.base_quat
+                    # Base quat: pipeline stores [x, y, z, w], MuJoCo needs [w, x, y, z]
+                    self.data.qpos[3:7] = [self.base_quat[3], self.base_quat[0],
+                                           self.base_quat[1], self.base_quat[2]]
                     # Joints
                     for i, addr in enumerate(self.qpos_addr):
                         if addr > 0:

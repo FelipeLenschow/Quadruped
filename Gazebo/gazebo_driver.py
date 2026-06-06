@@ -113,7 +113,7 @@ class Ros2GazeboDriver(Node):
         self.q = np.zeros(12)
         self.dq = np.zeros(12)
         self.base_pos = np.zeros(3)
-        self.base_quat = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
+        self.base_quat = np.array([0.0, 0.0, 0.0, 1.0])  # [x, y, z, w]
         self.base_ang_vel = np.zeros(3)
         self.base_lin_vel_b = np.zeros(3)
         self.base_accel = np.array([0., 0., 9.81])  # body-frame specific force (m/s^2)
@@ -168,9 +168,9 @@ class Ros2GazeboDriver(Node):
         self.sim_time = msg.sim_time.sec + msg.sim_time.nsec * 1e-9
 
     def _imu_cb(self, msg):
-        # msg.orientation is [x, y, z, w] in protobuf
+        # Gazebo protobuf orientation is [x, y, z, w]
         q = msg.orientation
-        self.base_quat = np.array([q.w, q.x, q.y, q.z])
+        self.base_quat = np.array([q.x, q.y, q.z, q.w])  # [x, y, z, w]
         self.base_ang_vel = np.array(
             [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
         )
@@ -200,7 +200,7 @@ class Ros2GazeboDriver(Node):
         
         # Ground truth orientation and angular velocity from simulator
         q = msg.pose.orientation
-        self.base_quat = np.array([q.w, q.x, q.y, q.z])
+        self.base_quat = np.array([q.x, q.y, q.z, q.w])  # [x, y, z, w]
         w_body = np.array([msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z])
 
         # gz::sim::systems::OdometryPublisher (dimensions=3) reports the twist
@@ -405,7 +405,10 @@ class Ros2GazeboDriver(Node):
             
             pos_err = targets - self.q
             raw_torques = kp * pos_err - kd * self.dq
-            
+
+            # Add feedforward gravity compensation torques
+            tau_ff = getattr(self.pipeline, 'latest_tau_ff', np.zeros(12))
+            raw_torques = raw_torques + tau_ff
             vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
             v_clamp = np.clip(self.dq, -vel_at_lim, vel_at_lim)
             t_top = effort_limit * (1.0 - v_clamp / vel_lim)

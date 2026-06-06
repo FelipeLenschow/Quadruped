@@ -160,7 +160,8 @@ class RealDriver(Node):
         sdk_to_ros = [3, 0, 9, 6, 4, 1, 10, 7, 5, 2, 11, 8]
         q = [float(raw.motor_state[i].q) for i in sdk_to_ros]
         dq = [float(raw.motor_state[i].dq) for i in sdk_to_ros]
-        quat = raw.imu_state.quaternion   # [w, x, y, z]
+        quat_wxyz = raw.imu_state.quaternion   # SDK: [w, x, y, z]
+        quat = [quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]]  # → [x, y, z, w]
         gyro = raw.imu_state.gyroscope    # body frame
         accel = raw.imu_state.accelerometer # body frame
 
@@ -231,6 +232,7 @@ class RealDriver(Node):
         ]
 
         max_torque = self.pipeline.safety_processor.active_max_torque
+        tau_ff = getattr(self.pipeline, 'latest_tau_ff', np.zeros(12))
         
         for i, ros_idx in enumerate(ros_to_sdk):
             self.low_cmd.motor_cmd[i].q = float(joint_targets[ros_idx])
@@ -243,7 +245,7 @@ class RealDriver(Node):
             else:
                 self.low_cmd.motor_cmd[i].kp = self.kp
                 self.low_cmd.motor_cmd[i].kd = self.kd
-                self.low_cmd.motor_cmd[i].tau = 0.0
+                self.low_cmd.motor_cmd[i].tau = float(tau_ff[ros_idx])
 
         # Set Head Light Brightness based on pipeline mode
         desired_brightness = 0

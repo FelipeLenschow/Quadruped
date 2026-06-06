@@ -197,7 +197,8 @@ class Ros2IsaacDriver(Node):
         robot_data = self.robot.data
         q = robot_data.joint_pos[0, self.mapped_dof_idx].cpu().numpy()
         dq = robot_data.joint_vel[0, self.mapped_dof_idx].cpu().numpy()
-        quat = robot_data.root_quat_w[0].cpu().numpy()  # [w, x, y, z]
+        quat_wxyz = robot_data.root_quat_w[0].cpu().numpy()  # IsaacLab: [w, x, y, z]
+        quat = np.array([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]])  # → [x, y, z, w]
         gyro = robot_data.root_ang_vel_b[0].cpu().numpy()
         vel_b = robot_data.root_lin_vel_b[0].cpu().numpy()
         pos = robot_data.root_pos_w[0].cpu().numpy()
@@ -243,6 +244,13 @@ class Ros2IsaacDriver(Node):
             kd = 0.0
 
         torques = kp * pos_err + kd * (0 - curr_jvel)
+
+        # Add feedforward gravity compensation torques
+        tau_ff_np = getattr(self.pipeline, 'latest_tau_ff', np.zeros(12))
+        tau_ff_t = torch.from_numpy(tau_ff_np).to(
+            device=self.robot.data.joint_pos.device, dtype=torch.float32)
+        torques = torques + tau_ff_t
+
         torques = torch.clamp(torques, -effort_limit, effort_limit).to(torch.float32)
 
         # Apply Actions via Effort

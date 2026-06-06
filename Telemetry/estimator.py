@@ -31,9 +31,9 @@ import numpy as np
 _GRAVITY_WORLD = np.array([0.0, 0.0, -9.81])
 
 
-def rot_from_quat(quat_wxyz) -> np.ndarray:
-    """Return 3×3 rotation matrix R (body → world) from quaternion [w, x, y, z]."""
-    w, x, y, z = quat_wxyz
+def rot_from_quat(quat_xyzw) -> np.ndarray:
+    """Return 3×3 rotation matrix R (body → world) from quaternion [x, y, z, w]."""
+    x, y, z, w = quat_xyzw
     return np.array([
         [1 - 2*y**2 - 2*z**2,  2*x*y - 2*w*z,       2*x*z + 2*w*y],
         [2*x*y + 2*w*z,         1 - 2*x**2 - 2*z**2,  2*y*z - 2*w*x],
@@ -41,13 +41,13 @@ def rot_from_quat(quat_wxyz) -> np.ndarray:
     ], dtype=np.float64)
 
 
-def projected_gravity_b(quat_wxyz) -> np.ndarray:
+def projected_gravity_b(quat_xyzw) -> np.ndarray:
     """
     Return the gravity vector expressed in the robot body frame.
 
     Mirrors Isaac Lab's ``projected_gravity_b`` observation:
         projected_gravity = R^T @ g_world
-    where R = rot_from_quat(quat_wxyz)  (body → world).
+    where R = rot_from_quat(quat_xyzw)  (body → world).
 
     Typical values
     --------------
@@ -62,7 +62,7 @@ def projected_gravity_b(quat_wxyz) -> np.ndarray:
         → 0.0  robot on its side
         → 0.7  ≈ 45° (training termination default)
     """
-    R = rot_from_quat(quat_wxyz)
+    R = rot_from_quat(quat_xyzw)
     return R.T @ _GRAVITY_WORLD
 
 
@@ -169,7 +169,7 @@ class StateEstimator:
     # ------------------------------------------------------------------
     def update(
         self,
-        quat_wxyz,
+        quat_xyzw,
         accel_body,
         feet_contact,
         joint_pos=None,
@@ -181,7 +181,7 @@ class StateEstimator:
 
         Parameters
         ----------
-        quat_wxyz   : [w, x, y, z]  orientation quaternion (body → world).
+        quat_xyzw   : [x, y, z, w]  orientation quaternion (body → world).
         accel_body  : [ax, ay, az]  IMU specific force in body frame.
                       Upright & still ≈ [0, 0, +9.81].
         feet_contact: [FL, FR, RL, RR]  binary contact flags (1.0 = contact).
@@ -195,11 +195,11 @@ class StateEstimator:
         -------
         v_body : np.ndarray, shape (3,)  — estimated linear velocity in body frame.
         """
-        quat_wxyz   = np.asarray(quat_wxyz,   dtype=np.float64)
+        quat_xyzw   = np.asarray(quat_xyzw,   dtype=np.float64)
         accel_body  = np.asarray(accel_body,  dtype=np.float64)
         feet_contact = np.asarray(feet_contact, dtype=np.float64)
 
-        R = rot_from_quat(quat_wxyz)
+        R = rot_from_quat(quat_xyzw)
 
         # ── 1. Predict ─────────────────────────────────────────────────────
         v   = self._x[:3]
@@ -286,7 +286,7 @@ if __name__ == "__main__":
 
     est = StateEstimator(dt=0.02, q_vel=0.01, q_bias=1e-4, r_meas=0.02)
 
-    q_upright = np.array([1.0, 0.0, 0.0, 0.0])
+    q_upright = np.array([0.0, 0.0, 0.0, 1.0])  # identity in [x, y, z, w]
     true_bias  = np.array([0.05, 0.0, 0.0])  # 0.05 m/s² forward bias
 
     print("=== StateEstimator LKF Self-Test ===")

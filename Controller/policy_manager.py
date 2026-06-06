@@ -95,7 +95,7 @@ class PolicyManager:
         return pg
 
     def step_single(self, name: str, state, commands, mapping,
-                    current_time: float = None) -> np.ndarray:
+                     current_time: float = None) -> dict:
         """
         Step inference and compute joint-space targets for a single registered policy.
 
@@ -106,7 +106,8 @@ class PolicyManager:
             mapping:  Joint mapping (e.g., self.mj_to_isaac).
 
         Returns:
-            np.ndarray: Proposed absolute joint targets in radians.
+            dict: {"q_des": np.ndarray, "tau_ff": np.ndarray} — absolute targets
+                  and feedforward torques (12-dim each).
         """
         if name not in self.policies:
             raise KeyError(f"[PolicyManager] Policy '{name}' is not loaded.")
@@ -115,7 +116,7 @@ class PolicyManager:
 
         # --- Polymorphic dispatch ---
         if isinstance(provider, PoseGenerator):
-            # PoseGenerator returns absolute joint targets directly
+            # PoseGenerator returns {"q_des": ..., "tau_ff": ...} directly
             return provider.step(state, current_time)
 
         # --- Standard PolicyRunner path ---
@@ -133,7 +134,10 @@ class PolicyManager:
         qpos = runner.desired_qpos if runner.desired_qpos is not None else self.desired_qpos
 
         targets = raw_actions * scale + qpos
-        return targets.astype(np.float32)
+        return {
+            "q_des": targets.astype(np.float32),
+            "tau_ff": np.zeros(12, dtype=np.float32)
+        }
 
     def step_all(self, state, commands, mapping) -> dict:
         """

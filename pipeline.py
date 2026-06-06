@@ -77,8 +77,12 @@ class LocomotionPipeline:
         ], dtype=np.float32)
 
         self.latest_targets = self.desired_qpos.copy()
+        self.latest_tau_ff = np.zeros(12, dtype=np.float32)
         self.step_counter = 0
         self._pose_heartbeat_was_ok = False  # Track heartbeat lost→alive transitions
+
+        # Gravity compensation in policy mode (disabled for now, flag for future)
+        self.use_gravity_comp_in_policy = False
 
         # Mode Transition State
         self.mode_transition_active = False
@@ -137,6 +141,8 @@ class LocomotionPipeline:
 
         # 2. Policy Inference & Command Processing
         if is_policy_step:
+            # tau_ff defaults to zero; overwritten by pose mode or future policy mode
+            tau_ff = np.zeros(12, dtype=np.float32)
 
             if self.mode == "pose":
                 # ── POSE MODE ────────────────────────────────────────
@@ -166,12 +172,13 @@ class LocomotionPipeline:
                 self._pose_heartbeat_was_ok = heartbeat_ok
 
                 if heartbeat_ok and "pose" in self.policy_manager.policies:
-                    targets = self.policy_manager.step_single(
+                    result = self.policy_manager.step_single(
                         "pose", state, cmd_vel, self.mj_to_isaac,
                         current_time=sim_time
                     )
-                    # Soft-clip to joint limits (still enforced)
-                    final_targets = np.clip(targets, sp.soft_min, sp.soft_max)
+                    # Unpack dict: {"q_des": ..., "tau_ff": ...}
+                    final_targets = np.clip(result["q_des"], sp.soft_min, sp.soft_max)
+                    tau_ff = result["tau_ff"]
                     max_torque = sp.global_max_torque
                     # Update the safety processor's active torque so the
                     # driver's PD loop (which reads it directly) applies force.
@@ -179,6 +186,7 @@ class LocomotionPipeline:
                 else:
                     # No heartbeat → zero torque (same fail-safe as policy mode)
                     final_targets = self.desired_qpos.copy()
+                    tau_ff = np.zeros(12, dtype=np.float32)
                     max_torque = 0.0
                     sp.active_max_torque = 0.0
 
@@ -195,12 +203,18 @@ class LocomotionPipeline:
 
                 proposed_targets = {}
                 if active_policy in self.policy_manager.policies:
-                    targets = self.policy_manager.step_single(
+                    result = self.policy_manager.step_single(
                         active_policy, state, cmd_vel, self.mj_to_isaac,
                         current_time=sim_time
                     )
+                    # Unpack dict: pass only q_des to safety processor
                     key = "safety" if active_policy == "safety" else "main"
-                    proposed_targets[key] = targets
+                    proposed_targets[key] = result["q_des"]
+
+                    # In policy mode, only use tau_ff if the flag is set
+                    if self.use_gravity_comp_in_policy:
+                        tau_ff = result["tau_ff"]
+                    # else: tau_ff stays np.zeros(12)
 
                 final_targets, max_torque = self.safety_processor.process(
                     proposed_targets=proposed_targets,
@@ -215,6 +229,7 @@ class LocomotionPipeline:
                 elapsed = sim_time - self.mode_transition_start_time
                 alpha = np.clip(elapsed / self.mode_transition_duration, 0.0, 1.0)
                 
+                # Interpolate q_des only; tau_ff uses new mode's values directly
                 final_targets = (1.0 - alpha) * self.mode_transition_start_targets + alpha * final_targets
                 
                 if alpha >= 1.0:
@@ -222,11 +237,13 @@ class LocomotionPipeline:
                     self.mode_transition_start_time = None
 
             self.latest_targets = final_targets
-            self.distributor.send(final_targets, max_torque)
+            self.latest_tau_ff = tau_ff
+            self.distributor.send(final_targets, max_torque, tau_ff=tau_ff)
 
         # 3. Telemetry Publishing
         if is_policy_step:
             self.telemetry.publish(sim_time=sim_time, state=state)
 
         return self.latest_targets
+
 

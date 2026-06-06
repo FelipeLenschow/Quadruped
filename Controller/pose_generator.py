@@ -9,6 +9,7 @@ from std_msgs.msg import String, Float32
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from Configs.config_loader import load_config
+from Controller.gravity_compensator import GravityCompensator
 
 
 class PoseGenerator:
@@ -60,6 +61,13 @@ class PoseGenerator:
         for name, default_vals in self._DEFAULT_POSES.items():
             cfg_vals = poses_cfg.get(name, default_vals)
             self.pose_library[name] = np.array(cfg_vals, dtype=np.float32)
+
+        # ------------------------------------------------------------------
+        # 1b. Gravity Compensator (Pinocchio)
+        # ------------------------------------------------------------------
+        grav_cfg = config.get("gravity_compensation", {})
+        urdf_path = grav_cfg.get("urdf_path", "Configs/go2_model/go2.urdf")
+        self._gravity_comp = GravityCompensator(urdf_path)
 
         # ------------------------------------------------------------------
         # 2. Interpolation state
@@ -143,11 +151,9 @@ class PoseGenerator:
         self.node.get_logger().info(
             f"[PoseGenerator] Interpolating to '{name}' over {self.interp_duration:.1f}s")
 
-    def step(self, state, current_time: float) -> np.ndarray:
+    def _step_interpolation(self, state, current_time: float) -> np.ndarray:
         """
-        Compute the current interpolated joint targets.
-
-        Called by PolicyManager.step_single() when the pipeline mode is "pose".
+        Internal: compute the current interpolated joint targets.
 
         Args:
             state:        StandardState (used to capture current joint pos on first call)
@@ -205,6 +211,35 @@ class PoseGenerator:
                     self._pending_target = self._PUSHUP_LOW_POSE.copy()
 
         return self._current_targets
+    def step(self, state, current_time: float) -> dict:
+        """
+        Compute the current interpolated joint targets and gravity compensation torques.
+
+        Called by PolicyManager.step_single() when the pipeline mode is "pose".
+
+        Args:
+            state:        StandardState (used to capture current joint pos on first call)
+            current_time: Simulation or wall-clock time in seconds.
+
+        Returns:
+            dict: {"q_des": 12-dim position targets, "tau_ff": 12-dim feedforward torques}
+        """
+        q_des = self._step_interpolation(state, current_time)
+
+        # Compute gravity compensation using ACTUAL joint positions (not targets)
+        # and current contact sensor data
+        joint_pos_actual = np.array(
+            [state.motorState[i].q for i in range(12)], dtype=np.float64)
+        contact = np.array(state.feet_contact, dtype=np.float64)
+
+        tau_ff = self._gravity_comp.compute(
+            quat_xyzw=state.imu.quaternion,
+            joint_pos=joint_pos_actual,
+            contact_flags=contact
+        )
+
+        return {"q_des": q_des, "tau_ff": tau_ff}
+
 
     def sync_to_current(self):
         """

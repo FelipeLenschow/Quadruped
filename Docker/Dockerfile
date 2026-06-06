@@ -77,7 +77,8 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
     skrl \
     tensorboard \
     mcap \
-    mcap-ros2-support
+    mcap-ros2-support \
+    pin
 
 # 8. Set environment variables for Domain Isolation and Protobuf compatibility
 ENV ROS_DOMAIN_ID=1

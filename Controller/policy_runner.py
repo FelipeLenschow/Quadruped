@@ -7,8 +7,8 @@ import numpy as np
 
 # Rotation helper
 def quat_to_rot_matrix(q):
-    """(w, x, y, z) -> [3,3] matrix"""
-    w, x, y, z = q
+    """(x, y, z, w) -> [3,3] matrix"""
+    x, y, z, w = q
     return np.array(
         [
             [1 - 2 * y**2 - 2 * z**2, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y],
@@ -208,7 +208,7 @@ class PolicyRunner:
         Generic observation builder that works with LowState (Real or Mock).
         state: object with imu.quaternion, base_lin_vel, imu.gyroscope, motorState[...]
         """
-        # Base quaternion (w, x, y, z)
+        # Base quaternion (x, y, z, w)
         quat = state.imu.quaternion
         R = quat_to_rot_matrix(quat)
 

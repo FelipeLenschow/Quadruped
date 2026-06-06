@@ -1,8 +1,8 @@
 import numpy as np
 
 def quat_to_rot_matrix(q):
-    """(w, x, y, z) -> [3,3] matrix"""
-    w, x, y, z = q
+    """(x, y, z, w) -> [3,3] matrix"""
+    x, y, z, w = q
     return np.array([
         [1 - 2*y**2 - 2*z**2, 2*x*y - 2*w*z, 2*x*z + 2*w*y],
         [2*x*y + 2*w*z, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*w*x],
@@ -17,7 +17,7 @@ class MotorState:
 
 class IMU:
     def __init__(self):
-        self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])
+        self.quaternion = np.array([0.0, 0.0, 0.0, 1.0])  # [x, y, z, w] identity
         self.gyroscope = np.array([0.0, 0.0, 0.0])
         self.accelerometer = np.array([0.0, 0.0, 0.0])
         self.rpy = np.array([0.0, 0.0, 0.0])
@@ -56,8 +56,9 @@ class MockUDP:
         # Base state
         state.base_pos = self.data.qpos[0:3].copy()
         
-        # IMU logic (MuJoCo data.qpos[3:7] is base quat [w,x,y,z])
-        state.imu.quaternion = self.data.qpos[3:7].copy()
+        # IMU logic (MuJoCo data.qpos[3:7] is base quat [w,x,y,z] → convert to [x,y,z,w])
+        quat_wxyz = self.data.qpos[3:7].copy()
+        state.imu.quaternion = np.array([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]])
         
         # Calculate Rotation Matrix for Body Frame conversion
         R = quat_to_rot_matrix(state.imu.quaternion)

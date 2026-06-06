@@ -18,7 +18,7 @@ class StandardState:
     """Standardized state object used as input for the PolicyRunner."""
     def __init__(self):
         self.imu = type('obj', (object,), {
-            'quaternion':    [1.0, 0.0, 0.0, 0.0],
+            'quaternion':    [0.0, 0.0, 0.0, 1.0],  # [x, y, z, w] identity
             'gyroscope':     [0.0, 0.0, 0.0],
             'accelerometer': [0.0, 0.0, 9.81],   # body-frame specific force
         })
@@ -109,7 +109,7 @@ class TelemetryManager:
 
         Args:
             q, dq   : 12-dim joint positions and velocities.
-            quat    : [w, x, y, z] orientation.
+            quat    : [x, y, z, w] orientation.
             gyro    : [wx, wy, wz] angular velocity in body frame.
             accel   : [ax, ay, az] specific force in body frame (default [0,0,9.81]).
             pos     : [x, y, z] global position (optional).
@@ -152,7 +152,7 @@ class TelemetryManager:
         # 3. LKF velocity
         if update_estimator:
             v_est = self.estimator.update(
-                quat_wxyz   = state.imu.quaternion,
+                quat_xyzw   = state.imu.quaternion,
                 accel_body  = state.imu.accelerometer,
                 feet_contact= state.feet_contact,
                 joint_pos   = [m.q  for m in state.motorState],
@@ -190,9 +190,9 @@ class TelemetryManager:
         imu = Imu()
         imu.header.stamp    = msg_time
         imu.header.frame_id = 'imu_link'
-        q = state.imu.quaternion
-        imu.orientation          = Quaternion(w=float(q[0]), x=float(q[1]),
-                                              y=float(q[2]), z=float(q[3]))
+        q = state.imu.quaternion  # [x, y, z, w]
+        imu.orientation          = Quaternion(x=float(q[0]), y=float(q[1]),
+                                              z=float(q[2]), w=float(q[3]))
         gv = state.imu.gyroscope
         imu.angular_velocity     = Vector3(x=float(gv[0]), y=float(gv[1]), z=float(gv[2]))
         if hasattr(state.imu, 'accelerometer'):
@@ -213,8 +213,8 @@ class TelemetryManager:
             odom_sim.pose.pose.position.z = float(state.base_pos[2])
         if state.imu.quaternion:
             odom_sim.pose.pose.orientation = Quaternion(
-                w=float(state.imu.quaternion[0]), x=float(state.imu.quaternion[1]),
-                y=float(state.imu.quaternion[2]), z=float(state.imu.quaternion[3]))
+                x=float(state.imu.quaternion[0]), y=float(state.imu.quaternion[1]),
+                z=float(state.imu.quaternion[2]), w=float(state.imu.quaternion[3]))
         lv_sim = getattr(state, 'base_lin_vel_sim', lv)
         odom_sim.twist.twist.linear = Vector3(x=float(lv_sim[0]), y=float(lv_sim[1]), z=float(lv_sim[2]))
         self.odom_sim_pub.publish(odom_sim)
@@ -230,8 +230,8 @@ class TelemetryManager:
             odom_est.pose.pose.position.z = float(state.base_pos[2])
         if state.imu.quaternion:
             odom_est.pose.pose.orientation = Quaternion(
-                w=float(state.imu.quaternion[0]), x=float(state.imu.quaternion[1]),
-                y=float(state.imu.quaternion[2]), z=float(state.imu.quaternion[3]))
+                x=float(state.imu.quaternion[0]), y=float(state.imu.quaternion[1]),
+                z=float(state.imu.quaternion[2]), w=float(state.imu.quaternion[3]))
         lv_est = getattr(state, 'base_lin_vel_est', lv)
         odom_est.twist.twist.linear = Vector3(x=float(lv_est[0]), y=float(lv_est[1]), z=float(lv_est[2]))
         self.odom_est_pub.publish(odom_est)

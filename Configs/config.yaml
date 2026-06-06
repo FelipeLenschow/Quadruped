@@ -70,6 +70,10 @@ poses:
   lie_flat: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
   sit:      [0.1, -0.1, 0.1, -0.1, 1.2, 1.2, 2.0, 2.0, -2.0, -2.0, -2.5, -2.5]
 
+# --- Gravity Compensation (Pinocchio) ---
+gravity_compensation:
+  enabled: true
+  urdf_path: "Configs/go2_model/go2.urdf"
 # --- MCAP Logging & Telemetry Recording ---
 logging:
   auto_record: true            # Automatically start background recording when launching simulation drivers

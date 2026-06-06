@@ -24,7 +24,7 @@ class Distributor:
         self.cmd_pub = self.node.create_publisher(JointState, '/commands/joint_commands', 10)
         self.node.get_logger().info("[Distributor] Initialized.")
 
-    def send(self, targets: np.ndarray, max_torque: float, send_to_robot_cb=None):
+    def send(self, targets: np.ndarray, max_torque: float, tau_ff=None, send_to_robot_cb=None):
         """
         Publish final targets + torque to the ROS 2 topic, and optionally
         invoke a driver-specific callback (SDK write, sim actuator set, etc.).
@@ -32,6 +32,7 @@ class Distributor:
         Args:
             targets:          12-dim array of joint position targets.
             max_torque:       Maximum torque (Nm) to apply.
+            tau_ff:           12-dim array of feedforward torques (optional).
             send_to_robot_cb: Optional callable(targets) for driver-specific output.
         """
         if send_to_robot_cb:
@@ -41,5 +42,5 @@ class Distributor:
         msg.header.stamp = self.node.get_clock().now().to_msg()
         msg.name = self.joint_names
         msg.position = targets.tolist()
-        msg.effort = [float(max_torque)] * len(self.joint_names)
+        msg.effort = tau_ff.tolist() if tau_ff is not None else [0.0] * len(self.joint_names)
         self.cmd_pub.publish(msg)

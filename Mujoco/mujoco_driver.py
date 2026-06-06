@@ -153,11 +153,12 @@ class Ros2MujocoDriver(Node):
         """Extracts raw state vectors from MuJoCo data."""
         q = self.data.qpos[self.isaac_qpos_addr]
         dq = self.data.qvel[self.isaac_qvel_addr]
-        quat = self.data.qpos[3:7]  # [w, x, y, z]
+        quat_wxyz = self.data.qpos[3:7]  # MuJoCo stores [w, x, y, z]
+        quat = np.array([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]])  # → [x, y, z, w]
         pos = self.data.qpos[:3]
 
-        # Body frame rotation
-        w, x, y, z = quat
+        # Body frame rotation (using x,y,z,w convention)
+        x, y, z, w = quat
         R = np.array([
             [1-2*y**2-2*z**2, 2*x*y-2*w*z,      2*x*z+2*w*y],
             [2*x*y+2*w*z,     1-2*x**2-2*z**2,  2*y*z-2*w*x],
@@ -256,6 +257,10 @@ class Ros2MujocoDriver(Node):
             kd = 0.0
 
         torques = kp * pos_err + kd * (0 - v)
+
+        # Add feedforward gravity compensation torques
+        tau_ff = getattr(self.pipeline, 'latest_tau_ff', np.zeros(12))
+        torques = torques + tau_ff
 
         vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
         v_clamp = np.clip(v, -vel_at_lim, vel_at_lim)
