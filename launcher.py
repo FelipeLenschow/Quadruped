@@ -329,8 +329,8 @@ def run_cli_menu():
     use_estimator = False
 
     if action in ["train", "isaac_lab", "isaac_sim"]:
-        robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1] (default 1): ").strip() or "1"
-        robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG"}.get(robot_choice, "UNITREE_GO2_CFG")
+        robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1, 4: All (Mixed)] (default 1): ").strip() or "1"
+        robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG", "4": "RANDOM"}.get(robot_choice, "UNITREE_GO2_CFG")
         
         terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
         terrain_cfg = "rough" if terrain_choice == "2" else "flat"
@@ -477,26 +477,46 @@ def main():
     env = os.environ.copy()
     env["ROS_DOMAIN_ID"] = str(domain_id)
     env["QUADRUPED_ROBOT_CFG"] = robot_cfg
+    env["QUADRUPED_ROBOT"] = robot_cfg
     
     # Search for OBS_DIM in the same folder as the checkpoint
     if ckpt:
         ckpt_dir = os.path.dirname(ckpt)
         params_dir = os.path.abspath(os.path.join(ckpt_dir, "..", "params"))
         agent_cfg = os.path.join(params_dir, "agent.yaml")
+        env_cfg_path = os.path.join(params_dir, "env.yaml")
+        obs_dim = 0
+        
+        # Try agent.yaml first
         if os.path.exists(agent_cfg):
             try:
                 with open(agent_cfg, 'r') as f:
-                    data = yaml.safe_load(f)
-                    # Support for different skrl/rl_games config structures
+                    data = yaml.load(f, Loader=yaml.UnsafeLoader)
                     obs_dim = data.get("models", {}).get("policy", {}).get("input_shape", [0])[0]
-                    if obs_dim:
-                        env["QUADRUPED_OBS_DIM"] = str(obs_dim)
-                        print(f"[INFO] Detected observation dimension from checkpoint: {obs_dim}")
             except Exception:
                 pass
+                
+        # Try env.yaml if not found in agent.yaml
+        if not obs_dim and os.path.exists(env_cfg_path):
+            try:
+                with open(env_cfg_path, 'r') as f:
+                    data = yaml.load(f, Loader=yaml.UnsafeLoader)
+                    obs_dim = data.get("observation_space", 0)
+            except Exception:
+                pass
+                
+        if obs_dim:
+            env["QUADRUPED_OBS_DIM"] = str(obs_dim)
+            print(f"[INFO] Detected observation dimension from checkpoint: {obs_dim}")
 
     # Prepare environment
     env["QUADRUPED_TERRAIN"] = terrain_cfg
+
+    # Inject the task module's source directory into PYTHONPATH so that Quadruped.tasks can be imported
+    source_path = os.path.abspath(os.path.join(module_path, "source", "Quadruped"))
+    if os.path.exists(source_path):
+        current_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{source_path}:{current_pythonpath}" if current_pythonpath else source_path
 
     # Final Command Assembly
     abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
@@ -524,6 +544,17 @@ def main():
             cmd.append("--video")
             cmd.append("--video_length=200")
             cmd.append("--video_interval=5000")
+        subprocess.run(cmd, env=env, cwd=module_path)
+
+    elif action == "isaac_lab":
+        script_path = os.path.join("scripts", "skrl", "play.py")
+        cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
+        if num_envs:
+            cmd.append(f"--num_envs={num_envs}")
+        if ckpt:
+            cmd.append(f"--checkpoint={abs_ckpt}")
+        if headless:
+            cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
     elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree"):
