@@ -329,8 +329,12 @@ def run_cli_menu():
     use_estimator = False
 
     if action in ["train", "isaac_lab", "isaac_sim"]:
-        robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1, 4: All (Mixed)] (default 1): ").strip() or "1"
-        robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG", "4": "RANDOM"}.get(robot_choice, "UNITREE_GO2_CFG")
+        if action == "isaac_sim":
+            robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1] (default 1): ").strip() or "1"
+            robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG"}.get(robot_choice, "UNITREE_GO2_CFG")
+        else:
+            robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1, 4: All (Mixed)] (default 1): ").strip() or "1"
+            robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG", "4": "RANDOM"}.get(robot_choice, "UNITREE_GO2_CFG")
         
         terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
         terrain_cfg = "rough" if terrain_choice == "2" else "flat"
@@ -343,6 +347,11 @@ def run_cli_menu():
         if action == "train":
             run_name = input("Enter Run Name (optional): ").strip()
             video = input("Record Video? [y/N]: ").lower().strip() == "y"
+            
+        if action == "isaac_lab":
+            ans = input("Enable Manual Keyboard Control? [y/N]: ").lower().strip()
+            if ans == "y":
+                teleop = True
 
     if action in ["mujoco", "gazebo", "real_deploy"]:
         if not IS_ROBOT and action != "real_deploy":
@@ -478,6 +487,8 @@ def main():
     env["ROS_DOMAIN_ID"] = str(domain_id)
     env["QUADRUPED_ROBOT_CFG"] = robot_cfg
     env["QUADRUPED_ROBOT"] = robot_cfg
+    if teleop:
+        env["QUADRUPED_TELEOP"] = "1"
     
     # Search for OBS_DIM in the same folder as the checkpoint
     if ckpt:
