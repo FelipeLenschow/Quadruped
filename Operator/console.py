@@ -391,6 +391,12 @@ class ConsoleNode(Node):
 
 
 def main():
+    import sys
+    old_termios = None
+    if sys.stdin.isatty():
+        import termios
+        old_termios = termios.tcgetattr(sys.stdin.fileno())
+
     parser = argparse.ArgumentParser(
         description="Console — Operator Command Center")
     parser.add_argument("--robot", type=str, default="go2",
@@ -406,9 +412,12 @@ def main():
         rclpy.spin(node)
     except KeyboardInterrupt:
         print()
-
-    node.destroy_node()
-    rclpy.shutdown()
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+        if old_termios:
+            import termios
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_termios)
 
 
 if __name__ == "__main__":

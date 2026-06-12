@@ -152,6 +152,12 @@ class GazeboSimBridge:
 
 
 def main():
+    # Save terminal settings to restore after Ctrl+C (since daemon thread may leave it raw)
+    old_termios = None
+    if sys.stdin.isatty():
+        import termios
+        old_termios = termios.tcgetattr(sys.stdin.fileno())
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, help="Path to policy checkpoint")
     parser.add_argument("--robot", default="go2")
@@ -326,6 +332,9 @@ def main():
     finally:
         _stop.set()
         proc.terminate()
+        if old_termios:
+            import termios
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_termios)
         print("\n[Gazebo] Done.")
 
 
