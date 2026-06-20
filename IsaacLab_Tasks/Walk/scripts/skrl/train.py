@@ -199,6 +199,8 @@ def main(
         agent_cfg["trainer"]["timesteps"] = (
             args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
         )
+    elif hasattr(env_cfg, "max_timesteps") and getattr(env_cfg, "max_timesteps") is not None:
+        agent_cfg["trainer"]["timesteps"] = env_cfg.max_timesteps
     agent_cfg["trainer"]["close_environment_at_exit"] = False
     # configure the ML framework into the global skrl variable
     if args_cli.ml_framework.startswith("jax"):

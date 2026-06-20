@@ -168,6 +168,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     action_space = 12
     state_space = 0
     action_scale = _phase_cfg["env"]["action_scale"]
+    max_timesteps = _phase_cfg["env"].get("max_timesteps", 500000)
 
     # ── Robot ─────────────────────────────────────────────────────────────────
     # A1 body (minimum rigid bodies → compatible view across all variants)

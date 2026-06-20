@@ -9,6 +9,7 @@ default: &default
     num_envs: 8192
     action_scale: 0.25
     observation_noise_scale: 0.05
+    max_timesteps: 300000
   domain_randomization:
     # Zeroed out for now; available for future activation.
     joint_friction_range: [0.0, 0.0]

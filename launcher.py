@@ -208,6 +208,7 @@ def run_cli_menu():
             last_cmd.get("domain_id", "1"),
             last_cmd.get("use_estimator", False),
             last_cmd.get("record_session", False),
+            last_cmd.get("training_phase", ""),
         )
 
     # 1.2 Validation
@@ -327,6 +328,7 @@ def run_cli_menu():
         teleop = True # Always active internally via /cmd_vel subscription
     run_name = ""
     use_estimator = False
+    training_phase = ""
 
     if action in ["train", "isaac_lab", "isaac_sim"]:
         if action == "isaac_sim":
@@ -336,8 +338,11 @@ def run_cli_menu():
             robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1, 4: All (Mixed)] (default 1): ").strip() or "1"
             robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG", "4": "RANDOM"}.get(robot_choice, "UNITREE_GO2_CFG")
         
-        terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
-        terrain_cfg = "rough" if terrain_choice == "2" else "flat"
+        if action == "isaac_lab":
+            terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
+            terrain_cfg = "rough" if terrain_choice == "2" else "flat"
+        else:
+            terrain_cfg = ""
         
         num_envs = input("Number of Envs (default 1): ").strip() or "1"
         
@@ -345,6 +350,8 @@ def run_cli_menu():
             headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
         
         if action == "train":
+            phase_choice = input("Select Training Phase [1: phase1, 2: phase2, 3: phase3] (default 3): ").strip() or "3"
+            training_phase = f"phase{phase_choice}"
             run_name = input("Enter Run Name (optional): ").strip()
             video = input("Record Video? [y/N]: ").lower().strip() == "y"
             
@@ -434,7 +441,7 @@ def run_cli_menu():
                 selected_file = files[0]
             run_name = os.path.join(record_dir, selected_file)
 
-    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, record_session
+    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, record_session, training_phase
 
 def main():
     (
@@ -452,6 +459,7 @@ def main():
         domain_id,
         use_estimator,
         record_session,
+        training_phase,
     ) = run_cli_menu()
 
     # Save for next time
@@ -470,13 +478,17 @@ def main():
         "domain_id": domain_id,
         "use_estimator": use_estimator,
         "record_session": record_session,
+        "training_phase": training_phase,
     })
 
     print("\n" + "=" * 50)
     print(f"Launching {action.upper()} Mode for {module_name}!")
     print(f"Robot:    {robot_cfg}")
-    print(f"Terrain:  {terrain_cfg}")
+    if action == "isaac_lab":
+        print(f"Terrain:  {terrain_cfg}")
     print(f"Domain ID: {domain_id}")
+    if training_phase:
+        print(f"Phase:    {training_phase}")
     if ckpt:
         print(f"Checkpoint: {ckpt_display_name(ckpt)}")
     print(f"Teleop:   {teleop}")
@@ -489,6 +501,8 @@ def main():
     env["QUADRUPED_ROBOT"] = robot_cfg
     if teleop:
         env["QUADRUPED_TELEOP"] = "1"
+    if training_phase:
+        env["QUADRUPED_TRAINING_PHASE"] = training_phase
     
     # Search for OBS_DIM in the same folder as the checkpoint
     if ckpt:
@@ -521,7 +535,8 @@ def main():
             print(f"[INFO] Detected observation dimension from checkpoint: {obs_dim}")
 
     # Prepare environment
-    env["QUADRUPED_TERRAIN"] = terrain_cfg
+    if terrain_cfg:
+        env["QUADRUPED_TERRAIN"] = terrain_cfg
 
     # Inject the task module's source directory into PYTHONPATH so that Quadruped.tasks can be imported
     source_path = os.path.abspath(os.path.join(module_path, "source", "Quadruped"))

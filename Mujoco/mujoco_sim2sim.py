@@ -100,12 +100,6 @@ def resolve_joint_order(model) -> dict:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    # Save terminal settings to restore after Ctrl+C (since daemon thread may leave it raw)
-    old_termios = None
-    if sys.stdin.isatty():
-        import termios
-        old_termios = termios.tcgetattr(sys.stdin.fileno())
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, help="Path to best_agent.pt")
     parser.add_argument("--duration", type=float, default=0.0)

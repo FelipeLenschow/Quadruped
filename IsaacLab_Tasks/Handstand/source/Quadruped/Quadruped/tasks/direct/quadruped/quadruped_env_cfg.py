@@ -130,7 +130,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     action_scale = 0.25
     # - spaces definition
     action_space = 12
-    observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 49))  # Dynamic: 49 (state) or 236 (height scan)
+    observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 49))  # Dynamic: 49 (state)
     state_space = 0
 
     # simulation

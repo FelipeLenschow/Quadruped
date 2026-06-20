@@ -145,7 +145,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     action_scale = 0.25
     # - spaces definition
     action_space = 12
-    observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 236))  # Dynamic: 49 (state) or 236 (height scan)
+    observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 49))  # Dynamic: 49 (state)
     state_space = 0
     debug_vis = True  # Enable by default for perception feedback
 
@@ -192,7 +192,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
         track_air_time=False,
     )
 
-    # observation space stays 236: 49 (state) + 187 (height scan: 17x11)
+    # observation space is 49 (state)
 
     # sim2real noise
     observation_noise_scale = 0.05

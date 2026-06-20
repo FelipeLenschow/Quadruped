@@ -74,7 +74,7 @@ class Ros2MujocoDriver(Node):
 
         self.create_subscription(Float32, "/control/kp", self.kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
-        self._startup_console_check = True
+        self._startup_console_check = False
 
         # 4. Physics Thread
         self.physics_thread = threading.Thread(target=self._physics_loop, args=(self.headless,), daemon=True)

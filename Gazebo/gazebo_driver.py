@@ -55,6 +55,8 @@ JOINT_NAMES = [
     "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
 
+# Removed HAA_SIGN since both Gazebo and MuJoCo models use 1 0 0 for both hips.
+
 
 class Ros2GazeboDriver(Node):
     def __init__(
@@ -96,7 +98,7 @@ class Ros2GazeboDriver(Node):
         self.create_subscription(Float32, "/control/kp", self._kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self._kd_cb, 10)
         self.create_subscription(Bool, "/base/freeze", self._freeze_base_cb, 10)
-        self._startup_console_check = True
+        self._startup_console_check = False
 
         # Nominal standing pose (Matches MuJoCo Driver exactly in Isaac order)
         self.desired_qpos = np.array(
@@ -180,8 +182,10 @@ class Ros2GazeboDriver(Node):
 
     def _joint_cb(self, msg):
         if hasattr(msg, "header") and hasattr(msg.header, "stamp"):
-            self.sim_time = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
-            
+            t = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
+            if t > 0 and t > self.sim_time:
+                self.sim_time = t
+
         for joint in msg.joint:
             if joint.name in JOINT_NAMES:
                 idx = JOINT_NAMES.index(joint.name)
@@ -223,8 +227,9 @@ class Ros2GazeboDriver(Node):
 
     def _repeater_loop(self):
         """
-        Background thread to repeat the latest torques at 1000Hz.
-        Gazebo clears forces every step; this ensures the robot stays powered.
+        Background thread to repeat the latest torques at 2000Hz.
+        Gazebo Harmonic's ApplyJointForce clears forces every step; this ensures 
+        the robot stays powered and prevents chatter from missed steps.
         """
         while not self._stop.is_set():
             if hasattr(self, "joint_pubs") and len(self.joint_pubs) == 12:
@@ -233,7 +238,7 @@ class Ros2GazeboDriver(Node):
                     msg = double_pb2.Double()
                     msg.data = float(torque)
                     self.joint_pubs[i].publish(msg)
-            time.sleep(0.001)
+            time.sleep(0.0005)
 
     def _physics_loop(self):
         # 1. Load ActuatorNet
@@ -429,8 +434,13 @@ class Ros2GazeboDriver(Node):
                 runner = self.pipeline.policy_manager.policies.get("main")
                 if runner and hasattr(runner, "inf_times") and runner.inf_times:
                     inf_ms = runner.inf_times[-1] * 1000
+                
+                # Debug Pose Error and Torque
+                err_norm = np.linalg.norm(pos_err)
+                torque_norm = np.linalg.norm(pd_torques)
+                
                 print(
-                    f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+5.2f} | inf={inf_ms:4.1f}ms   ",
+                    f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} err={err_norm:.3f} tq={torque_norm:.1f} | inf={inf_ms:4.1f}ms   ",
                     end="",
                     flush=True,
                 )

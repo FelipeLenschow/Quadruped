@@ -8,7 +8,9 @@ def push_robot_heterogeneous(env, env_ids, asset_cfg, velocity_range):
     """
     # Resolve asset name from object or dict
     if isinstance(asset_cfg, dict):
+        from isaaclab.managers import SceneEntityCfg
         asset_name = asset_cfg["name"]
+        asset_cfg = SceneEntityCfg(name=asset_name)
     else:
         asset_name = asset_cfg.name
 
