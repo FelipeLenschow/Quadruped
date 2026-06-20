@@ -65,8 +65,7 @@ class QuadrupedEnv(DirectRLEnv):
                     self.robot_feet_ids.append(f_ids)
 
             # Contact sensor mapping (relative to sensor matched bodies)
-            c_f_ids, _ = self._contact_sensor.find_bodies(".*_foot")
-            self._feet_ids = c_f_ids
+            self._feet_ids, _ = self._contact_sensor.find_bodies(".*_foot")
         else:
             self.joint_pos = self.robot.data.joint_pos
             self.joint_vel = self.robot.data.joint_vel
@@ -87,8 +86,11 @@ class QuadrupedEnv(DirectRLEnv):
                 feet_ids[0],
                 feet_ids[1],
             ]
-            # Contact sensor ordering (relative index [0,1,2,3])
-            self._feet_ids = [1, 0, 3, 2]
+            # Contact sensor mapping
+            self._feet_ids, _ = self._contact_sensor.find_bodies(".*_foot")
+            
+        self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*_thigh|.*_calf|trunk")
+        self._base_id, _ = self._contact_sensor.find_bodies("base")
 
         self.net_contact_forces = torch.zeros(self.num_envs, 20, 3, device=self.device)
         self._joint_dof_idx, _ = self.robot.find_joints(
@@ -116,6 +118,22 @@ class QuadrupedEnv(DirectRLEnv):
             (self.num_envs,), 100.0, device=self.device
         )  # Force immediate resample
 
+        # Domain Randomization Buffers
+        max_delay = self.cfg.action_latency_range_steps[1]
+        self.action_history = torch.zeros(
+            (self.num_envs, max_delay + 1, self.cfg.action_space), device=self.device
+        )
+        self.env_latencies = torch.zeros(
+            (self.num_envs,), dtype=torch.long, device=self.device
+        )
+        self.backlash_state = torch.zeros(
+            (self.num_envs, 12), device=self.device
+        )
+        self.env_backlash_sizes = torch.zeros(
+            (self.num_envs, 12), device=self.device
+        )
+        self.last_targets = self.desired_joint_pos.clone()
+
     def _setup_scene(self):
         import os
         from .quadruped_env_cfg import ROBOT_VARIANTS
@@ -126,6 +144,10 @@ class QuadrupedEnv(DirectRLEnv):
             "QUADRUPED_ROBOT", os.environ.get("FORCE_ROBOT", "")
         ).upper()
         num_envs = self.scene.cfg.num_envs
+        
+        # Guard clause for Heterogeneous + Replicate Physics
+        if (selection == "RANDOM" or not selection) and self.scene.cfg.replicate_physics:
+            raise ValueError("Heterogeneous multi-robot training requires replicate_physics=False! You cannot use GPU instancing with mixed robot models. Please select a single robot model in the launcher, or set replicate_physics=False.")
 
         if selection == "RANDOM" or not selection:
             # MIXED MODE: Partition and Spawn
@@ -167,9 +189,6 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.contact_sensor.prim_path = (
                 "/World/envs/env_.*/(A1|Quadruped|Go2)/Robot/.*_foot"
             )
-            self.cfg.height_scanner.prim_path = (
-                "/World/envs/env_.*/(A1|Quadruped|Go2)/Robot/base"
-            )
 
             # Register in scene (needed for Event Manager and base class consistency)
             self.scene.articulations["robot_a1"] = self.a1_view
@@ -197,8 +216,11 @@ class QuadrupedEnv(DirectRLEnv):
             elif "QUADRUPED" in selection:
                 variant_cfg = ROBOT_VARIANTS[1]
 
-            for i in range(num_envs):
-                variant_cfg.spawn.func(f"/World/envs/env_{i}/Robot", variant_cfg.spawn)
+            if self.scene.cfg.replicate_physics:
+                variant_cfg.spawn.func("/World/envs/env_0/Robot", variant_cfg.spawn)
+            else:
+                for i in range(num_envs):
+                    variant_cfg.spawn.func(f"/World/envs/env_{i}/Robot", variant_cfg.spawn)
 
             robot_cfg = copy.deepcopy(variant_cfg)
             robot_cfg.spawn = None
@@ -210,14 +232,21 @@ class QuadrupedEnv(DirectRLEnv):
             self.scene.articulations["robot_go2"] = self.robot
 
         # Common sensors and setup
+        if isinstance(self.cfg.contact_sensor.prim_path, list):
+            self.cfg.contact_sensor.prim_path = self.cfg.contact_sensor.prim_path[0]
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
+        print(f"DEBUG_CONTACT_SENSOR_CFG_TYPE: {type(self._contact_sensor.cfg.prim_path)}")
+        print(f"DEBUG_CONTACT_SENSOR_CFG_VAL: {self._contact_sensor.cfg.prim_path}")
         self.scene.sensors["contact_sensor"] = self._contact_sensor
-        self._height_scanner = RayCaster(self.cfg.height_scanner)
-        self.scene.sensors["height_scanner"] = self._height_scanner
+
 
         # Lighting
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+
+        # Clone environments if replicate_physics is enabled
+        if self.scene.cfg.replicate_physics:
+            self.scene.clone_environments(copy_from_source=False)
 
     def _resample_commands(self, env_ids: Sequence[int]):
         """Resamples the velocity commands for the specified environments."""
@@ -245,8 +274,8 @@ class QuadrupedEnv(DirectRLEnv):
         # Heading (unused for now, kept zero)
         self.commands[env_ids, 3] = 0.0
 
-        # Add zero velocity case for 25% of the resampled environments
-        zero_mask = torch.rand(len(env_ids), device=self.device) < 0.25
+        # Zero-command case (fraction set in cfg: zero_command_fraction)
+        zero_mask = torch.rand(len(env_ids), device=self.device) < self.cfg.zero_command_fraction
         self.commands[env_ids[zero_mask], :3] = 0.0
 
         # Reset timer
@@ -257,6 +286,10 @@ class QuadrupedEnv(DirectRLEnv):
         self.previous_actions = self.actions.clone()
         self.last_joint_vel = self.joint_vel.clone()
         self.actions = actions.clone()
+
+        # Update action history for latency simulation
+        self.action_history = torch.roll(self.action_history, shifts=1, dims=1)
+        self.action_history[:, 0, :] = self.actions.clone()
 
         # Update command timer
         self.command_timer += self.step_dt
@@ -351,8 +384,24 @@ class QuadrupedEnv(DirectRLEnv):
         Applies the neural network action to the robot joints.
         Mode: Absolute Position Control (PD)
         """
+        # Fetch delayed action
+        env_indices = torch.arange(self.num_envs, device=self.device)
+        delayed_actions = self.action_history[env_indices, self.env_latencies, :]
+
         # 1. Compute Targets
-        targets = self.actions * self.cfg.action_scale + self.desired_joint_pos
+        targets = delayed_actions * self.cfg.action_scale + self.desired_joint_pos
+
+        # Apply backlash deadband
+        diff = targets - self.last_targets
+        self.backlash_state = torch.clamp(
+            self.backlash_state + diff,
+            -self.env_backlash_sizes / 2.0,
+            self.env_backlash_sizes / 2.0
+        )
+        effective_targets = targets - self.backlash_state
+        self.last_targets = targets.clone()
+
+        targets = effective_targets
 
         if getattr(self, "is_heterogeneous", False):
             # DISTRIBUTE to partitioned views
@@ -425,6 +474,10 @@ class QuadrupedEnv(DirectRLEnv):
             self.joint_acc = self.robot.data.joint_acc
 
         self.net_contact_forces = self._contact_sensor.data.net_forces_w
+        if len(self._undesired_contact_body_ids) > 0:
+            self.net_undesired_contact_forces = self.net_contact_forces[:, self._undesired_contact_body_ids, :]
+        else:
+            self.net_undesired_contact_forces = torch.zeros((self.num_envs, 1, 3), device=self.device)
 
         # -- Update feet air time logic --
         # Check contact (force > threshold, e.g. 1.0)
@@ -449,7 +502,7 @@ class QuadrupedEnv(DirectRLEnv):
         # Safe implementation: mask with command norm to avoid farming air time while standing still
         rew_air_time = torch.sum(
             (self.feet_air_time - 0.5).clamp(min=0.0) * first_contact.float(), dim=1
-        ) * (torch.norm(self.commands[:, :2], dim=1) > 0.1)
+        ) * (torch.norm(self.commands[:, :2], dim=1) > self.cfg.static_velocity_threshold)
         self.feet_air_time_reward_val = rew_air_time
 
         # -- Update foot height reward logic --
@@ -476,14 +529,14 @@ class QuadrupedEnv(DirectRLEnv):
             dim=1,
         )
         # Apply command mask (x, y, yaw commands)
-        rew_foot_height *= (torch.norm(self.commands[:, :3], dim=1) > 0.1).float()
+        rew_foot_height *= (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold).float()
 
         self.foot_height_reward_val = rew_foot_height
 
         # Penalty for each foot in the air (constant per-step)
         self.feet_air_penalty_val = torch.sum((~contact).float(), dim=1)
         # Extra penalty when standing still (commands == 0)
-        static_mask = (torch.norm(self.commands[:, :3], dim=1) < 0.1).float()
+        static_mask = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.static_velocity_threshold).float()
         self.feet_air_penalty_static_val = self.feet_air_penalty_val * static_mask
         self.joint_vel_l2_static_val = (
             torch.sum(torch.square(self.joint_vel), dim=1) * static_mask
@@ -493,26 +546,20 @@ class QuadrupedEnv(DirectRLEnv):
         self.feet_air_time[contact] = 0.0
         self.last_feet_contact = contact
 
-        # Height Scan Processing
-        if self.cfg.observation_space != 49:
-            height_scan = self._height_scanner.data.pos_w[:, :, 2] - self.root_pos_w[:, 2].unsqueeze(1)
-            # Clip to a reasonable range and potentially add noise later if needed
-            # (Already adding noise to the whole 'obs' tensor below)
-            height_scan = torch.clip(height_scan, -1.0, 1.0)
 
-        obs_list = [
-            self.base_lin_vel,
-            self.base_ang_vel,
-            self.projected_gravity,
-            self.commands,
-            self.joint_pos - self.desired_joint_pos,
-            self.joint_vel,
-            self.actions,
-        ]
-        if self.cfg.observation_space != 49:
-            obs_list.append(height_scan)
-
-        obs = torch.cat(obs_list, dim=-1)
+        # Observations (unscaled)
+        obs = torch.cat(
+            (
+                self.base_lin_vel,
+                self.base_ang_vel,
+                self.projected_gravity,
+                self.commands,
+                self.joint_pos - self.desired_joint_pos,
+                self.joint_vel,
+                self.actions,
+            ),
+            dim=-1,
+        )
 
         # Add observation noise (Sim2Real)
         obs_noise = torch.randn_like(obs) * self.cfg.observation_noise_scale
@@ -525,8 +572,13 @@ class QuadrupedEnv(DirectRLEnv):
         Computes the reward (score) for the current step.
         The goal is to teach the robot to stand up and retain balance.
         """
+        # Calculate undesired contacts penalty
+        # If any thigh/calf/trunk sensor registers > 1.0 N force, it's a contact
+        undesired_contacts = (torch.norm(self.net_undesired_contact_forces, dim=-1).max(dim=1)[0] > 1.0).float()
+        
         total_reward = compute_rewards(
             self.cfg.rew_scale_alive,
+            self.cfg.rew_scale_undesired_contacts,
             self.cfg.rew_scale_track_lin_vel_xy_exp,
             self.cfg.rew_scale_track_ang_vel_z_exp,
             self.cfg.rew_scale_lin_vel_z_l2,
@@ -541,6 +593,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_feet_air_penalty,
             self.cfg.rew_scale_feet_air_penalty_static,
             self.cfg.rew_scale_joint_vel_l2_static,
+            self.cfg.rew_scale_base_height_l2,
+            self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
             self.commands,
@@ -560,6 +614,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.feet_air_penalty_val,
             self.feet_air_penalty_static_val,
             self.joint_vel_l2_static_val,
+            self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
+            undesired_contacts,
             self.reset_terminated,
             self.step_dt,
         )
@@ -568,7 +624,7 @@ class QuadrupedEnv(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Determines if the episode is over.
-        1. Died: Base height is too low (fell over).
+        1. Died: Base hit the ground.
         2. Timeout: Episode duration exceeded limit.
         """
         time_out = self.episode_length_buf >= self.max_episode_length - 1
@@ -638,7 +694,7 @@ class QuadrupedEnv(DirectRLEnv):
         # Use correct ID set for shape (local_ids if heterogeneous, else env_ids)
         ids = local_ids if local_ids is not None else env_ids
 
-        # 0.1 Randomize Joint Friction and Damping (Enforce Config)
+        # 0.1 Randomize internal joint friction (viscous drag, usually very small)
         friction_noise = sample_uniform(
             self.cfg.joint_friction_range[0],
             self.cfg.joint_friction_range[1],
@@ -651,17 +707,53 @@ class QuadrupedEnv(DirectRLEnv):
             env_ids=ids,
         )
 
-        damping_noise = sample_uniform(
-            self.cfg.joint_damping_range[0],
-            self.cfg.joint_damping_range[1],
-            (len(ids), len(self._joint_dof_idx)),
+        # 0.2 Randomize PD gains (Kp = stiffness, Kd = damping) for DCMotorCfg actuators.
+        # NOTE: These writes have no effect when using ActuatorNetMLPCfg (Go1-style),
+        # because the net computes torques directly and bypasses PhysX PD.
+        # They ARE effective with DCMotorCfg (A1-style), which uses PhysX's PD drive.
+        if self.cfg.joint_stiffness_range[0] != 0.0 or self.cfg.joint_stiffness_range[1] != 0.0:
+            kp_noise = sample_uniform(
+                self.cfg.joint_stiffness_range[0],
+                self.cfg.joint_stiffness_range[1],
+                (len(ids), len(self._joint_dof_idx)),
+                self.device,
+            )
+            view.write_joint_stiffness_to_sim(
+                kp_noise,
+                joint_ids=self._joint_dof_idx,
+                env_ids=ids,
+            )
+
+        if self.cfg.joint_pd_damping_range[0] != 0.0 or self.cfg.joint_pd_damping_range[1] != 0.0:
+            kd_noise = sample_uniform(
+                self.cfg.joint_pd_damping_range[0],
+                self.cfg.joint_pd_damping_range[1],
+                (len(ids), len(self._joint_dof_idx)),
+                self.device,
+            )
+            view.write_joint_damping_to_sim(
+                kd_noise,
+                joint_ids=self._joint_dof_idx,
+                env_ids=ids,
+            )
+
+        # 0.3 Randomize Latency and Backlash
+        self.env_latencies[env_ids] = torch.randint(
+            self.cfg.action_latency_range_steps[0],
+            self.cfg.action_latency_range_steps[1] + 1,
+            (len(env_ids),),
+            device=self.device,
+        )
+        self.env_backlash_sizes[env_ids] = sample_uniform(
+            self.cfg.motor_backlash_range[0],
+            self.cfg.motor_backlash_range[1],
+            (len(env_ids), 12),
             self.device,
         )
-        view.write_joint_damping_to_sim(
-            damping_noise,
-            joint_ids=self._joint_dof_idx,
-            env_ids=ids,
-        )
+        # Reset backlash states and action history
+        self.backlash_state[env_ids] = 0.0
+        self.action_history[env_ids] = 0.0
+        self.last_targets[env_ids] = self.desired_joint_pos[env_ids].clone()
 
         # 1. Reset Joint States (Use Default Pose + Noise on controlled joints)
         # Use full joint arrays (all joints, not just controlled ones)
@@ -704,6 +796,7 @@ class QuadrupedEnv(DirectRLEnv):
 @torch.jit.script
 def compute_rewards(
     rew_scale_alive: float,
+    rew_scale_undesired_contacts: float,
     rew_scale_track_lin_vel_xy_exp: float,
     rew_scale_track_ang_vel_z_exp: float,
     rew_scale_lin_vel_z_l2: float,
@@ -718,6 +811,8 @@ def compute_rewards(
     rew_scale_feet_air_penalty: float,
     rew_scale_feet_air_penalty_static: float,
     rew_scale_joint_vel_l2_static: float,
+    rew_scale_base_height_l2: float,
+    target_base_height: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
     commands: torch.Tensor,
@@ -737,11 +832,16 @@ def compute_rewards(
     feet_air_penalty_val: torch.Tensor,
     feet_air_penalty_static_val: torch.Tensor,
     joint_vel_l2_static_val: torch.Tensor,
+    base_height_val: torch.Tensor,
+    undesired_contacts: torch.Tensor,
     reset_terminated: torch.Tensor,
     step_dt: float,
 ):
     # 1. Alive (Optional, usually 0)
     rew_alive = rew_scale_alive * (1.0 - reset_terminated.float())
+    
+    # Undesired contacts penalty
+    rew_undesired_contacts = rew_scale_undesired_contacts * undesired_contacts
 
     # 2. Tracking Linear Velocity XY (Exponential)
     # Target is commands[:, 0:2] (x, y)
@@ -805,8 +905,12 @@ def compute_rewards(
     # 12. Foot Height Reward
     rew_foot_height = rew_scale_foot_height_exp * foot_height_reward_val
 
+    # 13. Base Height Penalty
+    rew_base_height_l2 = rew_scale_base_height_l2 * torch.square(base_height_val - target_base_height)
+
     total_reward = (
         rew_alive
+        + rew_undesired_contacts
         + rew_track_lin_vel_xy_exp
         + rew_track_ang_vel_z_exp
         + rew_lin_vel_z_l2
@@ -818,6 +922,7 @@ def compute_rewards(
         + rew_dof_pos_l2
         + rew_flat_orientation_l2
         + rew_foot_height
+        + rew_base_height_l2
         + rew_scale_feet_air_penalty * feet_air_penalty_val
         + rew_scale_feet_air_penalty_static * feet_air_penalty_static_val
         + rew_scale_joint_vel_l2_static * joint_vel_l2_static_val

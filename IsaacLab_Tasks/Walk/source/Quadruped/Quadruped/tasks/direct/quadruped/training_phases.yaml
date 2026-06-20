@@ -1,0 +1,57 @@
+# Quadruped Training Phases Configuration
+#
+# Usage: Set the QUADRUPED_TRAINING_PHASE environment variable before running train.py
+# Example: export QUADRUPED_TRAINING_PHASE=phase2
+
+default: &default
+  env:
+    terrain: rough
+    num_envs: 8192
+    action_scale: 0.25
+    observation_noise_scale: 0.05
+  domain_randomization:
+    # Zeroed out for now; available for future activation.
+    joint_friction_range: [0.0, 0.0]
+    joint_stiffness_range: [0.0, 0.0]     # Dormant (uses robot default)
+    joint_pd_damping_range: [0.0, 0.0]    # Dormant (uses robot default)
+    action_latency_range_steps: [0, 0]
+    motor_backlash_range: [0.0, 0.0]
+  events:
+    enable_pushes: false
+    push_velocity_range: [-0.5, 0.5]
+  rewards:
+    # Exact IsaacLab Go2 fast-learning reference rewards
+    rew_scale_alive: 1.0
+    rew_scale_undesired_contacts: 0.0
+    rew_scale_track_lin_vel_xy_exp: 1.5
+    rew_scale_track_ang_vel_z_exp: 0.75
+    rew_scale_feet_air_time: 0.01
+    rew_scale_foot_height_exp: 0.2
+    target_foot_height: 0.1
+    rew_scale_flat_orientation_l2: -5.0
+    rew_scale_lin_vel_z_l2: -2.0
+    rew_scale_ang_vel_xy_l2: -0.05
+    rew_scale_dof_pos_l2: -0.2
+    rew_scale_dof_torques_l2: -0.0002
+    rew_scale_dof_acc_l2: -2.5e-7
+    rew_scale_action_rate_l2: -0.01
+    rew_scale_feet_air_penalty: -0.05
+    rew_scale_feet_air_penalty_static: -5.0
+    rew_scale_joint_vel_l2_static: -0.1
+    rew_scale_base_height_l2: 0.0
+    target_base_height: 0.32
+  commands:
+    command_lin_vel_std: 0.5
+    command_ang_vel_std: 0.5
+    static_velocity_threshold: 0.1
+    zero_command_fraction: 0.25
+
+phases:
+  # Phase 1: Conservative DR, tuned for initial locomotion capability
+  phase1:
+    <<: *default
+    env:
+      terrain: flat
+      num_envs: 8192
+      action_scale: 0.25
+      observation_noise_scale: 0.05
