@@ -696,11 +696,35 @@ class QuadrupedEnv(DirectRLEnv):
         local_ids_cpu = local_ids.cpu() if local_ids is not None else env_ids_cpu
 
         masses = view.root_physx_view.get_masses().clone()
-        mass_noise = sample_uniform(-1.0, 3.0, (len(env_ids_cpu), 1), "cpu")
+        mass_noise = sample_uniform(
+            self.cfg.payload_mass_range[0],
+            self.cfg.payload_mass_range[1],
+            (len(env_ids_cpu), 1),
+            "cpu",
+        )
         masses[local_ids_cpu, 0] = (
             view.data.default_mass[local_ids_cpu, 0] + mass_noise[:, 0]
         )
         view.root_physx_view.set_masses(masses, local_ids_cpu)
+
+        # 0.5 Randomize Center of Mass (Sim2Real)
+        if self.cfg.com_displacement_range[0] != 0.0 or self.cfg.com_displacement_range[1] != 0.0:
+            coms = view.root_physx_view.get_coms().clone()
+            com_noise_x = sample_uniform(
+                self.cfg.com_displacement_range[0],
+                self.cfg.com_displacement_range[1],
+                (len(env_ids_cpu), 1),
+                "cpu",
+            )
+            com_noise_y = sample_uniform(
+                self.cfg.com_displacement_range[0],
+                self.cfg.com_displacement_range[1],
+                (len(env_ids_cpu), 1),
+                "cpu",
+            )
+            coms[local_ids_cpu, 0, 0] += com_noise_x[:, 0]
+            coms[local_ids_cpu, 0, 1] += com_noise_y[:, 0]
+            view.root_physx_view.set_coms(coms, local_ids_cpu)
 
         # Use correct ID set for shape (local_ids if heterogeneous, else env_ids)
         ids = local_ids if local_ids is not None else env_ids

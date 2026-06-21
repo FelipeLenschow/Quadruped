@@ -233,8 +233,9 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # ║  DOMAIN RANDOMIZATION                                                 ║
     # ╚════════════════════════════════════════════════════════════════════════╝
 
-    # Base mass: (-1, +3) kg — applied in _randomize_view_state (per-episode)
-    #   Go2 ref: (-1.0, 3.0) at startup
+    # Base mass and Center of Mass (CoM) Randomization
+    payload_mass_range = tuple(_phase_cfg["domain_randomization"].get("payload_mass_range", [-1.0, 3.0]))
+    com_displacement_range = tuple(_phase_cfg["domain_randomization"].get("com_displacement_range", [0.0, 0.0]))
 
     # Joint friction — viscous drag
     joint_friction_range = tuple(_phase_cfg["domain_randomization"]["joint_friction_range"])

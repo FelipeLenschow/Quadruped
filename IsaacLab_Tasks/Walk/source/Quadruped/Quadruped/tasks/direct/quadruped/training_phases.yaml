@@ -59,10 +59,18 @@ phases:
     inherits: phase1
     rewards:
       rew_scale_trot_symmetry: -0.1
+      rew_scale_feet_air_time: 0.1       # Encourage longer suspension (more bouncy)
+      rew_scale_foot_height_exp: 0.5     # Strongly reward hitting the target height
+      target_foot_height: 0.15           # Lift foot to 15cm (high-stepping)
+    env:
+      robot_cfg: RANDOM
 
   # Phase 3: Physical Perturbations - Light DR (Friction, Backlash, Pushes)
   phase3:
     inherits: phase2
+    env:
+      terrain: rough
+      max_timesteps: 100000
     domain_randomization:
       joint_friction_range: [-0.02, 0.02]
       motor_backlash_range: [-0.02, 0.02]
@@ -74,11 +82,10 @@ phases:
   phase4:
     inherits: phase3
     env:
-      terrain: rough
       observation_noise_scale: 0.1
     domain_randomization:
       joint_friction_range: [-0.04, 0.04]
-      action_latency_range_steps: [1, 3]
+      action_latency_range_steps: [0, 1]
       motor_backlash_range: [-0.04, 0.04]
     events:
       push_velocity_range: [-1.0, 1.0]
@@ -88,3 +95,8 @@ phases:
     inherits: phase4
     env:
       robot_cfg: RANDOM
+    domain_randomization:
+      joint_stiffness_range: [-5.0, 5.0]
+      joint_pd_damping_range: [-0.1, 0.1]
+      com_displacement_range: [-0.05, 0.05]
+      payload_mass_range: [-1.0, 3.0]
