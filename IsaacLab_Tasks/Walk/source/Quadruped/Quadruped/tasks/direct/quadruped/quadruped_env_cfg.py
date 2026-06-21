@@ -26,7 +26,32 @@ with open(_yaml_path, "r") as f:
 if _phase_name not in _all_phases.get("phases", {}):
     raise ValueError(f"Training phase '{_phase_name}' not found in training_phases.yaml")
 
-_phase_cfg = _all_phases["phases"][_phase_name]
+def resolve_phase(all_phases, phase_name):
+    import collections.abc
+    import copy
+    
+    def deep_update(d, u):
+        for k, v in u.items():
+            if isinstance(v, collections.abc.Mapping):
+                d[k] = deep_update(d.get(k, {}), v)
+            else:
+                d[k] = v
+        return d
+
+    phase_node = all_phases["phases"].get(phase_name, {})
+    parent_name = phase_node.get("inherits", "default")
+    
+    if parent_name and parent_name != phase_name:
+        if parent_name == "default":
+            parent_cfg = all_phases.get("default", {})
+        else:
+            parent_cfg = resolve_phase(all_phases, parent_name)
+    else:
+        parent_cfg = all_phases.get("default", {}) # Ultimate fallback
+
+    return deep_update(copy.deepcopy(parent_cfg), phase_node)
+
+_phase_cfg = resolve_phase(_all_phases, _phase_name)
 _vel_range = _phase_cfg["events"]["push_velocity_range"] if _phase_cfg["events"]["enable_pushes"] else None
 
 from isaaclab_assets.robots.unitree import (

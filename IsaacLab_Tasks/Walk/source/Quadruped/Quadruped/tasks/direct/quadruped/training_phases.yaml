@@ -48,12 +48,37 @@ default: &default
     zero_command_fraction: 0.25
 
 phases:
-  # Phase 1: Conservative DR, tuned for initial locomotion capability
+  # Phase 1: The Foundation - Zero DR, focus on pure gait stability
   phase1:
-    <<: *default
+    inherits: default
 
-  # Phase 2: Mixed multi-robot training (A1, Go1, Go2)
+  # Phase 2: Physical Perturbations - Light DR (Friction, Backlash, Pushes)
   phase2:
-    <<: *default
+    inherits: phase1
+    domain_randomization:
+      joint_friction_range: [-0.02, 0.02]
+      motor_backlash_range: [-0.02, 0.02]
+    events:
+      enable_pushes: true
+      push_velocity_range: [-0.5, 0.5]
+
+  # Phase 3: The Sim2Real Killer - Heavy DR & Latency
+  phase3:
+    inherits: phase2
+    env:
+      terrain: rough
+      num_envs: 8192
+      observation_noise_scale: 0.1
+    domain_randomization:
+      joint_friction_range: [-0.04, 0.04]
+      action_latency_range_steps: [1, 3]
+      motor_backlash_range: [-0.04, 0.04]
+    events:
+      push_velocity_range: [-1.0, 1.0]
+
+  # Phase 4: Morphological Generalization - Mixed Multi-Robot with Heavy DR
+  phase4:
+    inherits: phase3
     env:
       robot_cfg: RANDOM
+      num_envs: 6000
