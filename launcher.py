@@ -361,8 +361,6 @@ def run_cli_menu():
             available_phases = ["phase1", "phase2", "phase3"] # fallback
             default_phase_idx = "3"
             
-            import glob
-            import yaml
             yaml_files = glob.glob(os.path.join(selected_module_path, "**", "training_phases.yaml"), recursive=True)
             if yaml_files:
                 try:
