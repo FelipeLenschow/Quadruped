@@ -5,6 +5,7 @@
 
 default: &default
   env:
+    robot_cfg: GO2
     terrain: flat
     num_envs: 6000
     action_scale: 0.25
@@ -74,7 +75,6 @@ phases:
     inherits: phase3
     env:
       terrain: rough
-      num_envs: 8192
       observation_noise_scale: 0.1
     domain_randomization:
       joint_friction_range: [-0.04, 0.04]
@@ -88,4 +88,3 @@ phases:
     inherits: phase4
     env:
       robot_cfg: RANDOM
-      num_envs: 6000
