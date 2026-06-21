@@ -168,6 +168,8 @@ for variant in ROBOT_VARIANTS:
 @configclass
 class QuadrupedEnvCfg(DirectRLEnvCfg):
 
+    _yaml_rob = _phase_cfg["env"].get("robot_cfg", "")
+    _rob = _yaml_rob.upper() if _yaml_rob else os.environ.get("QUADRUPED_ROBOT", os.environ.get("FORCE_ROBOT", "RANDOM")).upper()
     robot_choice: str = _rob
 
     # ── Simulation ────────────────────────────────────────────────────────────
@@ -206,8 +208,6 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     spawn_height = 0.50
 
     # ── Scene ─────────────────────────────────────────────────────────────────
-    _yaml_rob = _phase_cfg["env"].get("robot_cfg", "")
-    _rob = _yaml_rob.upper() if _yaml_rob else os.environ.get("QUADRUPED_ROBOT", os.environ.get("FORCE_ROBOT", "RANDOM")).upper()
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
         num_envs=_phase_cfg["env"]["num_envs"], 
         env_spacing=2.5, 
