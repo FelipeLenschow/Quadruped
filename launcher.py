@@ -357,8 +357,34 @@ def run_cli_menu():
             headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
         
         if action == "train":
-            phase_choice = input("Select Training Phase [1: phase1, 2: phase2, 3: phase3] (default 3): ").strip() or "3"
-            training_phase = f"phase{phase_choice}"
+            # Dynamically extract phases from training_phases.yaml if available
+            available_phases = ["phase1", "phase2", "phase3"] # fallback
+            default_phase_idx = "3"
+            
+            import glob
+            import yaml
+            yaml_files = glob.glob(os.path.join(selected_module_path, "**", "training_phases.yaml"), recursive=True)
+            if yaml_files:
+                try:
+                    with open(yaml_files[0], 'r') as f:
+                        yaml_data = yaml.safe_load(f)
+                        if "phases" in yaml_data:
+                            extracted_phases = list(yaml_data["phases"].keys())
+                            if extracted_phases:
+                                available_phases = extracted_phases
+                                default_phase_idx = str(len(available_phases))
+                except Exception:
+                    pass
+                    
+            phase_options_str = ", ".join([f"{i+1}: {p}" for i, p in enumerate(available_phases)])
+            phase_choice = input(f"Select Training Phase [{phase_options_str}] (default {default_phase_idx}): ").strip() or default_phase_idx
+            
+            try:
+                phase_idx = int(phase_choice) - 1
+                training_phase = available_phases[phase_idx] if 0 <= phase_idx < len(available_phases) else f"phase{phase_choice}"
+            except ValueError:
+                training_phase = phase_choice
+                
             run_name = input("Enter Run Name (optional): ").strip()
             video = input("Record Video? [y/N]: ").lower().strip() == "y"
             
