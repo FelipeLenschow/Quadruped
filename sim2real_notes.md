@@ -22,10 +22,11 @@ for (int i = 0; i < 3; i++) {
 obs_tensor[9] = cmd_lin_x;
 obs_tensor[10] = cmd_lin_y;
 obs_tensor[11] = cmd_ang_z;
+obs_tensor[12] = 0.0; // 4th command (heading) is zeros in the training env
 
 for (int i = 0; i < 12; i++) {
-    obs_tensor[12 + i] = (raw_joint_pos[i] - default_joint_pos[i]); // Pos error (rad)
-    obs_tensor[24 + i] = raw_joint_vel[i];                          // Vel (rad/s)
-    obs_tensor[36 + i] = previous_actions[i];                       // Prev Action
+    obs_tensor[13 + i] = (raw_joint_pos[i] - default_joint_pos[i]); // Pos error (rad)
+    obs_tensor[25 + i] = raw_joint_vel[i];                          // Vel (rad/s)
+    obs_tensor[37 + i] = previous_actions[i];                       // Prev Action
 }
 ```
