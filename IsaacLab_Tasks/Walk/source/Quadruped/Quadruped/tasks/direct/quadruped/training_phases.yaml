@@ -5,8 +5,8 @@
 
 default: &default
   env:
-    terrain: rough
-    num_envs: 8192
+    terrain: flat
+    num_envs: 6000
     action_scale: 0.25
     observation_noise_scale: 0.05
     max_timesteps: 300000
@@ -51,8 +51,9 @@ phases:
   # Phase 1: Conservative DR, tuned for initial locomotion capability
   phase1:
     <<: *default
+
+  # Phase 2: Mixed multi-robot training (A1, Go1, Go2)
+  phase2:
+    <<: *default
     env:
-      terrain: flat
-      num_envs: 8192
-      action_scale: 0.25
-      observation_noise_scale: 0.05
+      robot_cfg: RANDOM

@@ -143,6 +143,8 @@ for variant in ROBOT_VARIANTS:
 @configclass
 class QuadrupedEnvCfg(DirectRLEnvCfg):
 
+    robot_choice: str = _rob
+
     # ── Simulation ────────────────────────────────────────────────────────────
     decimation = 4
     episode_length_s = 20.0
@@ -179,8 +181,12 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     spawn_height = 0.50
 
     # ── Scene ─────────────────────────────────────────────────────────────────
+    _yaml_rob = _phase_cfg["env"].get("robot_cfg", "")
+    _rob = _yaml_rob.upper() if _yaml_rob else os.environ.get("QUADRUPED_ROBOT", os.environ.get("FORCE_ROBOT", "RANDOM")).upper()
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
-        num_envs=_phase_cfg["env"]["num_envs"], env_spacing=2.5, replicate_physics=True,
+        num_envs=_phase_cfg["env"]["num_envs"], 
+        env_spacing=2.5, 
+        replicate_physics=(_rob != "RANDOM"),
     )
     _ter = os.environ.get("QUADRUPED_TERRAIN", _phase_cfg["env"].get("terrain", "rough"))
     scene.terrain = (
@@ -189,7 +195,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
 
     # ── Sensors ───────────────────────────────────────────────────────────────
     contact_sensor: ContactSensorCfg = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/.*",
+        prim_path="/World/envs/env_.*/Robot/(.*_foot|.*_calf|.*_thigh)",
         history_length=3,
         track_air_time=False,
     )

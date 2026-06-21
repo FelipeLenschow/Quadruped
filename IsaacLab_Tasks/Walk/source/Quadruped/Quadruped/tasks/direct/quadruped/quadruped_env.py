@@ -90,7 +90,6 @@ class QuadrupedEnv(DirectRLEnv):
             self._feet_ids, _ = self._contact_sensor.find_bodies(".*_foot")
             
         self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*_thigh|.*_calf|trunk")
-        self._base_id, _ = self._contact_sensor.find_bodies("base")
 
         self.net_contact_forces = torch.zeros(self.num_envs, 20, 3, device=self.device)
         self._joint_dof_idx, _ = self.robot.find_joints(
@@ -140,9 +139,7 @@ class QuadrupedEnv(DirectRLEnv):
         import copy
         import torch
 
-        selection = os.environ.get(
-            "QUADRUPED_ROBOT", os.environ.get("FORCE_ROBOT", "")
-        ).upper()
+        selection = self.cfg.robot_choice.upper()
         num_envs = self.scene.cfg.num_envs
         
         # Guard clause for Heterogeneous + Replicate Physics
@@ -187,7 +184,7 @@ class QuadrupedEnv(DirectRLEnv):
 
             # Update sensor paths for nested namespaces
             self.cfg.contact_sensor.prim_path = (
-                "/World/envs/env_.*/(A1|Quadruped|Go2)/Robot/.*_foot"
+                "/World/envs/env_.*/(A1|Quadruped|Go2)/Robot/(.*_foot|.*_calf|.*_thigh)"
             )
 
             # Register in scene (needed for Event Manager and base class consistency)

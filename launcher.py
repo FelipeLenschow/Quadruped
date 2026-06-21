@@ -317,7 +317,9 @@ def run_cli_menu():
     except Exception:
         pass
 
-    domain_id = input(f"Enter ROS_DOMAIN_ID (default {default_domain}): ").strip() or default_domain
+    domain_id = default_domain
+    if action not in ["train", "isaac_lab"]:
+        domain_id = input(f"Enter ROS_DOMAIN_ID (default {default_domain}): ").strip() or default_domain
     robot_cfg = "UNITREE_GO2_CFG" # Default for now
     terrain_cfg = "flat"
     num_envs = 1
@@ -334,9 +336,11 @@ def run_cli_menu():
         if action == "isaac_sim":
             robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1] (default 1): ").strip() or "1"
             robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG"}.get(robot_choice, "UNITREE_GO2_CFG")
-        else:
+        elif action == "isaac_lab":
             robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1, 4: All (Mixed)] (default 1): ").strip() or "1"
             robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG", "4": "RANDOM"}.get(robot_choice, "UNITREE_GO2_CFG")
+        else:
+            robot_cfg = "RANDOM" # Will be overridden by YAML or fallback to default
         
         if action == "isaac_lab":
             terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
@@ -344,7 +348,10 @@ def run_cli_menu():
         else:
             terrain_cfg = ""
         
-        num_envs = input("Number of Envs (default 1): ").strip() or "1"
+        if action == "train":
+            num_envs = input("Number of Envs (Enter to use YAML, or type number): ").strip() or ""
+        else:
+            num_envs = input("Number of Envs (default 1): ").strip() or "1"
         
         if not IS_ROBOT:
             headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
