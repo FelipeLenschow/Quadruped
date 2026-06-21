@@ -95,6 +95,15 @@ class QuadrupedEnv(DirectRLEnv):
         self._joint_dof_idx, _ = self.robot.find_joints(
             ".*_hip_joint|.*_thigh_joint|.*_calf_joint"
         )
+        
+        fl_idx, _ = self.robot.find_joints("FL_.*")
+        fr_idx, _ = self.robot.find_joints("FR_.*")
+        rl_idx, _ = self.robot.find_joints("RL_.*")
+        rr_idx, _ = self.robot.find_joints("RR_.*")
+        self._fl_idx = torch.tensor(fl_idx, dtype=torch.long, device=self.device)
+        self._fr_idx = torch.tensor(fr_idx, dtype=torch.long, device=self.device)
+        self._rl_idx = torch.tensor(rl_idx, dtype=torch.long, device=self.device)
+        self._rr_idx = torch.tensor(rr_idx, dtype=torch.long, device=self.device)
 
         self.actions = torch.zeros(
             self.num_envs, self.cfg.action_space, device=self.device
@@ -591,6 +600,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_feet_air_penalty_static,
             self.cfg.rew_scale_joint_vel_l2_static,
             self.cfg.rew_scale_base_height_l2,
+            self.cfg.rew_scale_trot_symmetry,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
@@ -613,6 +623,10 @@ class QuadrupedEnv(DirectRLEnv):
             self.joint_vel_l2_static_val,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
+            self._fl_idx,
+            self._fr_idx,
+            self._rl_idx,
+            self._rr_idx,
             self.reset_terminated,
             self.step_dt,
         )
@@ -812,6 +826,7 @@ def compute_rewards(
     rew_scale_feet_air_penalty_static: float,
     rew_scale_joint_vel_l2_static: float,
     rew_scale_base_height_l2: float,
+    rew_scale_trot_symmetry: float,
     target_base_height: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
@@ -834,6 +849,10 @@ def compute_rewards(
     joint_vel_l2_static_val: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
+    fl_idx: torch.Tensor,
+    fr_idx: torch.Tensor,
+    rl_idx: torch.Tensor,
+    rr_idx: torch.Tensor,
     reset_terminated: torch.Tensor,
     step_dt: float,
 ):
@@ -908,6 +927,20 @@ def compute_rewards(
     # 13. Base Height Penalty
     rew_base_height_l2 = rew_scale_base_height_l2 * torch.square(base_height_val - target_base_height)
 
+    # 14. Trot symmetry penalty (Diagonal legs should have symmetric actions)
+    # Penalize deviation differences for Thigh (idx 1) and Calf (idx 2) of the legs
+    if rew_scale_trot_symmetry != 0.0:
+        fl_actions = actions[:, fl_idx]
+        rr_actions = actions[:, rr_idx]
+        fr_actions = actions[:, fr_idx]
+        rl_actions = actions[:, rl_idx]
+        
+        trot_sym_err = torch.sum(torch.square(fl_actions[:, 1:] - rr_actions[:, 1:]), dim=1) + \
+                       torch.sum(torch.square(fr_actions[:, 1:] - rl_actions[:, 1:]), dim=1)
+        rew_trot_symmetry = rew_scale_trot_symmetry * trot_sym_err
+    else:
+        rew_trot_symmetry = torch.zeros_like(rew_alive)
+
     total_reward = (
         rew_alive
         + rew_undesired_contacts
@@ -926,5 +959,6 @@ def compute_rewards(
         + rew_scale_feet_air_penalty * feet_air_penalty_val
         + rew_scale_feet_air_penalty_static * feet_air_penalty_static_val
         + rew_scale_joint_vel_l2_static * joint_vel_l2_static_val
+        + rew_trot_symmetry
     )
     return total_reward

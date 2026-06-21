@@ -331,6 +331,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_feet_air_time = _phase_cfg["rewards"].get("rew_scale_feet_air_time", 0.125)
     rew_scale_foot_height_exp = _phase_cfg["rewards"].get("rew_scale_foot_height_exp", 0.0)
     target_foot_height = _phase_cfg["rewards"].get("target_foot_height", 0.0)
+    rew_scale_trot_symmetry = _phase_cfg["rewards"].get("rew_scale_trot_symmetry", 0.0)
 
     # Stability penalties
     rew_scale_flat_orientation_l2 = _phase_cfg["rewards"].get("rew_scale_flat_orientation_l2", -5.0)
