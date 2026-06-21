@@ -47,3 +47,9 @@ twin_*.xml
 # Telemetry Recordings
 Mcap/Recordings/
 *.mcap
+IsaacLab_Tasks/Walk/logs/
+IsaacLab_Tasks/Walk/outputs/
+IsaacLab_Tasks/Walk_GO2/outputs/
+check_collisions.py
+check_out.txt
+collisions.txt
