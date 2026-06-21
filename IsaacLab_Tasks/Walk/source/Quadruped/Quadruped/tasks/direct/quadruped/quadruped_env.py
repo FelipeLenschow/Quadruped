@@ -698,8 +698,11 @@ class QuadrupedEnv(DirectRLEnv):
             (len(ids), len(self._joint_dof_idx)),
             self.device,
         )
+        base_friction = view.data.default_joint_friction_coeff[ids][:, self._joint_dof_idx]
+        randomized_friction = torch.clamp(base_friction + friction_noise, min=0.0)
+        
         view.write_joint_friction_coefficient_to_sim(
-            friction_noise,
+            randomized_friction,
             joint_ids=self._joint_dof_idx,
             env_ids=ids,
         )
