@@ -94,9 +94,10 @@ phases:
   phase5:
     inherits: phase4
     env:
+      max_timesteps: 300000
       robot_cfg: RANDOM
     domain_randomization:
-      joint_stiffness_range: [-5.0, 5.0]
-      joint_pd_damping_range: [-0.1, 0.1]
-      com_displacement_range: [-0.02, 0.02]  # Reduced from 0.1! 10cm is physically fatal
-      payload_mass_range: [-1.0, 1.5]        # Reduced from 3.0kg to 1.5kg
+      joint_stiffness_range: [-2.0, 2.0]     # Reduced for memoryless MLP
+      joint_pd_damping_range: [-0.05, 0.05]  # Reduced for memoryless MLP
+      com_displacement_range: [-0.01, 0.01]  # 1cm offset
+      payload_mass_range: [-0.5, 0.5]        # 0.5kg max payload
