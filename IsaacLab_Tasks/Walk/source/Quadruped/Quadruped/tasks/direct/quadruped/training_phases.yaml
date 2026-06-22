@@ -98,5 +98,5 @@ phases:
     domain_randomization:
       joint_stiffness_range: [-5.0, 5.0]
       joint_pd_damping_range: [-0.1, 0.1]
-      com_displacement_range: [-0.05, 0.05]
-      payload_mass_range: [-1.0, 3.0]
+      com_displacement_range: [-0.02, 0.02]  # Reduced from 0.1! 10cm is physically fatal
+      payload_mass_range: [-1.0, 1.5]        # Reduced from 3.0kg to 1.5kg
