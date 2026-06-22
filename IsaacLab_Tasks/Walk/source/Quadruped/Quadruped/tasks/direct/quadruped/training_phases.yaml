@@ -90,14 +90,42 @@ phases:
     events:
       push_velocity_range: [-1.0, 1.0]
 
-  # Phase 5: Morphological Generalization - Mixed Multi-Robot with Heavy DR
-  phase5:
+  # --- ABLATION STUDY FOR PHASE 5 ---
+  # Run these one by one to find out which DR is killing the policy.
+
+  # 1. All heavy randomizations active (The baseline failure case)
+  phase5_all_active:
     inherits: phase4
     env:
       max_timesteps: 300000
       robot_cfg: RANDOM
     domain_randomization:
-      joint_stiffness_range: [-2.0, 2.0]     # Reduced for memoryless MLP
-      joint_pd_damping_range: [-0.05, 0.05]  # Reduced for memoryless MLP
-      com_displacement_range: [-0.01, 0.01]  # 1cm offset
-      payload_mass_range: [-0.5, 0.5]        # 0.5kg max payload
+      joint_stiffness_range: [-5.0, 5.0]
+      joint_pd_damping_range: [-0.1, 0.1]
+      com_displacement_range: [-0.05, 0.1]
+      payload_mass_range: [-1.0, 3.0]
+
+  # 2. Zero out CoM Displacement
+  phase5_no_com:
+    inherits: phase5_all_active
+    domain_randomization:
+      com_displacement_range: [0.0, 0.0]
+
+  # 3. Zero out Payload Mass
+  phase5_no_mass:
+    inherits: phase5_all_active
+    domain_randomization:
+      payload_mass_range: [0.0, 0.0]
+
+  # 4. Zero out PD Gain Noise
+  phase5_no_pd_noise:
+    inherits: phase5_all_active
+    domain_randomization:
+      joint_stiffness_range: [0.0, 0.0]
+      joint_pd_damping_range: [0.0, 0.0]
+
+  # 5. Zero out Robot Swapping (Pure Go2)
+  phase5_no_robot_swap:
+    inherits: phase5_all_active
+    env:
+      robot_cfg: GO2
