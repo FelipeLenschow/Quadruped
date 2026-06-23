@@ -710,6 +710,9 @@ class QuadrupedEnv(DirectRLEnv):
         # 0.5 Randomize Center of Mass (Sim2Real)
         if self.cfg.com_displacement_range[0] != 0.0 or self.cfg.com_displacement_range[1] != 0.0:
             coms = view.root_physx_view.get_coms().clone()
+            if not hasattr(view, "default_coms"):
+                view.default_coms = coms.clone()
+
             com_noise_x = sample_uniform(
                 self.cfg.com_displacement_range[0],
                 self.cfg.com_displacement_range[1],
@@ -722,8 +725,8 @@ class QuadrupedEnv(DirectRLEnv):
                 (len(env_ids_cpu), 1),
                 "cpu",
             )
-            coms[local_ids_cpu, 0, 0] += com_noise_x[:, 0]
-            coms[local_ids_cpu, 0, 1] += com_noise_y[:, 0]
+            coms[local_ids_cpu, 0, 0] = view.default_coms[local_ids_cpu, 0, 0] + com_noise_x[:, 0]
+            coms[local_ids_cpu, 0, 1] = view.default_coms[local_ids_cpu, 0, 1] + com_noise_y[:, 0]
             view.root_physx_view.set_coms(coms, local_ids_cpu)
 
         # Use correct ID set for shape (local_ids if heterogeneous, else env_ids)
