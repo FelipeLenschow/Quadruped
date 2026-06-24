@@ -95,6 +95,11 @@ class QuadrupedEnv(DirectRLEnv):
         self._joint_dof_idx, _ = self.robot.find_joints(
             ".*_hip_joint|.*_thigh_joint|.*_calf_joint"
         )
+        if getattr(self, "is_heterogeneous", False):
+            self._view_joint_dof_idx = []
+            for v in self.robot_views:
+                idx, _ = v.find_joints(".*_hip_joint|.*_thigh_joint|.*_calf_joint")
+                self._view_joint_dof_idx.append(torch.tensor(idx, dtype=torch.long, device=self.device))
         
         fl_idx, _ = self.robot.find_joints("FL_.*")
         fr_idx, _ = self.robot.find_joints("FR_.*")
@@ -224,11 +229,6 @@ class QuadrupedEnv(DirectRLEnv):
             ]
 
             self.is_heterogeneous = True
-            
-            self._view_joint_dof_idx = []
-            for v in self.robot_views:
-                idx, _ = v.find_joints(".*_hip_joint|.*_thigh_joint|.*_calf_joint")
-                self._view_joint_dof_idx.append(torch.tensor(idx, dtype=torch.long, device=self.device))
         else:
             # Homogeneous Mode
             self.is_heterogeneous = False
