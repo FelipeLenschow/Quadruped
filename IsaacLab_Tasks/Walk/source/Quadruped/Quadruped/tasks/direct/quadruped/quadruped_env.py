@@ -112,6 +112,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.num_envs, self.cfg.action_space, device=self.device
         )
         self.commands = torch.zeros(self.num_envs, 4, device=self.device)
+        self.target_commands = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_joint_vel = torch.zeros(self.num_envs, 12, device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_feet_contact = torch.zeros(
@@ -257,32 +258,32 @@ class QuadrupedEnv(DirectRLEnv):
     def _resample_commands(self, env_ids: Sequence[int]):
         """Resamples the velocity commands for the specified environments."""
         # Sample x velocity
-        self.commands[env_ids, 0] = sample_uniform(
+        self.target_commands[env_ids, 0] = sample_uniform(
             self.cfg.command_x_range[0],
             self.cfg.command_x_range[1],
             (len(env_ids),),
             device=self.device,
         )
         # Sample y velocity
-        self.commands[env_ids, 1] = sample_uniform(
+        self.target_commands[env_ids, 1] = sample_uniform(
             self.cfg.command_y_range[0],
             self.cfg.command_y_range[1],
             (len(env_ids),),
             device=self.device,
         )
         # Sample yaw velocity
-        self.commands[env_ids, 2] = sample_uniform(
+        self.target_commands[env_ids, 2] = sample_uniform(
             self.cfg.command_yaw_range[0],
             self.cfg.command_yaw_range[1],
             (len(env_ids),),
             device=self.device,
         )
         # Heading (unused for now, kept zero)
-        self.commands[env_ids, 3] = 0.0
+        self.target_commands[env_ids, 3] = 0.0
 
         # Zero-command case (fraction set in cfg: zero_command_fraction)
         zero_mask = torch.rand(len(env_ids), device=self.device) < self.cfg.zero_command_fraction
-        self.commands[env_ids[zero_mask], :3] = 0.0
+        self.target_commands[env_ids[zero_mask], :3] = 0.0
 
         # Reset timer
         self.command_timer[env_ids] = 0.0
@@ -307,6 +308,16 @@ class QuadrupedEnv(DirectRLEnv):
         )
         if len(resample_env_ids) > 0:
             self._resample_commands(resample_env_ids)
+
+        import os
+        if os.environ.get("QUADRUPED_TELEOP", "0") != "1":
+            # Apply 1s zero velocity standby to practice stand-to-walk transitions
+            standby_mask = self.command_timer < 1.0
+            self.commands = torch.where(
+                standby_mask.unsqueeze(1),
+                torch.zeros_like(self.target_commands),
+                self.target_commands
+            )
 
         # Teleoperation Hook via Environment Variable
         import os
