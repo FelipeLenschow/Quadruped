@@ -92,10 +92,7 @@ phases:
     events:
       push_velocity_range: [-1.0, 1.0]
 
-  # --- ABLATION STUDY FOR PHASE 5 ---
-  # Run these one by one to find out which DR is killing the policy.
-
-  # 1. All heavy randomizations active (The baseline failure case)
+  # Phase 5: Extreme Sim2Real - Max randomization and CoM displacement
   phase5:
     inherits: phase4
     env:
@@ -104,11 +101,5 @@ phases:
     domain_randomization:
       joint_stiffness_range: [-5.0, 5.0]
       joint_pd_damping_range: [-0.1, 0.1]
-      # com_displacement_range: [-0.05, 0.1]
-      payload_mass_range: [-1.0, 3.0]
-
-  # Phase 6: CoM Randomization
-  phase6:
-    inherits: phase5
-    domain_randomization:
       com_displacement_range: [-0.05, 0.1]
+      payload_mass_range: [-1.0, 3.0]
