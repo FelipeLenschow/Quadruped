@@ -612,6 +612,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_joint_vel_l2_static,
             self.cfg.rew_scale_base_height_l2,
             self.cfg.rew_scale_trot_symmetry,
+            self.cfg.rew_scale_torque_symmetry,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
@@ -865,6 +866,7 @@ def compute_rewards(
     rew_scale_joint_vel_l2_static: float,
     rew_scale_base_height_l2: float,
     rew_scale_trot_symmetry: float,
+    rew_scale_torque_symmetry: float,
     target_base_height: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
@@ -979,6 +981,19 @@ def compute_rewards(
     else:
         rew_trot_symmetry = torch.zeros_like(rew_alive)
 
+    # 15. Torque symmetry penalty (Diagonal legs should have symmetric torques)
+    if rew_scale_torque_symmetry != 0.0:
+        fl_torques = joint_torques[:, fl_idx]
+        rr_torques = joint_torques[:, rr_idx]
+        fr_torques = joint_torques[:, fr_idx]
+        rl_torques = joint_torques[:, rl_idx]
+        
+        torque_sym_err = torch.sum(torch.square(fl_torques[:, 1:] - rr_torques[:, 1:]), dim=1) + \
+                         torch.sum(torch.square(fr_torques[:, 1:] - rl_torques[:, 1:]), dim=1)
+        rew_torque_symmetry = rew_scale_torque_symmetry * torque_sym_err
+    else:
+        rew_torque_symmetry = torch.zeros_like(rew_alive)
+
     total_reward = (
         rew_alive
         + rew_undesired_contacts
@@ -998,5 +1013,6 @@ def compute_rewards(
         + rew_scale_feet_air_penalty_static * feet_air_penalty_static_val
         + rew_scale_joint_vel_l2_static * joint_vel_l2_static_val
         + rew_trot_symmetry
+        + rew_torque_symmetry
     )
     return total_reward

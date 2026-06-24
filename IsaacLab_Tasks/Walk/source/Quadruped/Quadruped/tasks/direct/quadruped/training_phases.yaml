@@ -43,6 +43,7 @@ default: &default
     rew_scale_base_height_l2: 0.0
     target_base_height: 0.32
     rew_scale_trot_symmetry: 0.0
+    rew_scale_torque_symmetry: 0.0
   commands:
     command_lin_vel_std: 0.5
     command_ang_vel_std: 0.5
@@ -59,6 +60,7 @@ phases:
     inherits: phase1
     rewards:
       rew_scale_trot_symmetry: -0.1
+      rew_scale_torque_symmetry: -0.001
       rew_scale_feet_air_time: 0.1       # Encourage longer suspension (more bouncy)
       rew_scale_foot_height_exp: 0.5     # Strongly reward hitting the target height
       target_foot_height: 0.15           # Lift foot to 15cm (high-stepping)
