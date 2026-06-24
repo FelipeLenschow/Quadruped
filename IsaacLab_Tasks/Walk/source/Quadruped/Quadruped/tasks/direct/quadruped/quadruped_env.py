@@ -341,7 +341,7 @@ class QuadrupedEnv(DirectRLEnv):
         """Called before the physics step. Here we just store the action."""
         
         # Internal Curriculum Logic
-        self.agent_steps += self.num_envs
+        self.agent_steps += 1
         if self.curriculum_phases and self.curriculum_phase_idx < len(self.curriculum_thresholds):
             if self.agent_steps >= self.curriculum_thresholds[self.curriculum_phase_idx]:
                 self._transition_to_next_phase()
