@@ -224,6 +224,11 @@ class QuadrupedEnv(DirectRLEnv):
             ]
 
             self.is_heterogeneous = True
+            
+            self._view_joint_dof_idx = []
+            for v in self.robot_views:
+                idx, _ = v.find_joints(".*_hip_joint|.*_thigh_joint|.*_calf_joint")
+                self._view_joint_dof_idx.append(torch.tensor(idx, dtype=torch.long, device=self.device))
         else:
             # Homogeneous Mode
             self.is_heterogeneous = False
@@ -474,17 +479,18 @@ class QuadrupedEnv(DirectRLEnv):
             # DISTRIBUTE to partitioned views
             for i, view in enumerate(self.robot_views):
                 indices = self.robot_view_indices[i]
-                # local_targets = targets[indices]
+                if len(indices) == 0: continue
+                v_idx = self._view_joint_dof_idx[i]
                 # Clamp per-robot (they all have same limits usually, but good practice)
-                lower = view.data.soft_joint_pos_limits[0, self._joint_dof_idx, 0]
-                upper = view.data.soft_joint_pos_limits[0, self._joint_dof_idx, 1]
+                lower = view.data.soft_joint_pos_limits[0, v_idx, 0]
+                upper = view.data.soft_joint_pos_limits[0, v_idx, 1]
                 view_targets = torch.clamp(targets[indices], lower, upper)
 
                 view.set_joint_position_target(
-                    view_targets, joint_ids=self._joint_dof_idx
+                    view_targets, joint_ids=v_idx
                 )
                 view.set_joint_velocity_target(
-                    torch.zeros_like(view_targets), joint_ids=self._joint_dof_idx
+                    torch.zeros_like(view_targets), joint_ids=v_idx
                 )
         else:
             # 2. Safety limits (Standard)
@@ -734,7 +740,7 @@ class QuadrupedEnv(DirectRLEnv):
                     )
                     view.reset(local_indices)
                     # Use existing randomization logic but point to specific view/indices
-                    self._randomize_view_state(subset_env_ids, view, local_indices)
+                    self._randomize_view_state(subset_env_ids, view, local_indices, view_idx=i)
 
             # CRITICAL: Reset the base environment buffers (which we bypassed)
             self.episode_length_buf[env_ids] = 0
@@ -752,7 +758,9 @@ class QuadrupedEnv(DirectRLEnv):
         env_ids: torch.Tensor,
         view: Articulation,
         local_ids: torch.Tensor | None = None,
+        view_idx: int | None = None,
     ):
+        v_idx = self._view_joint_dof_idx[view_idx] if view_idx is not None else self._joint_dof_idx
         # 0. Randomize Base Mass (Sim2Real)
         env_ids_cpu = env_ids.cpu()
         local_ids_cpu = local_ids.cpu() if local_ids is not None else env_ids_cpu
@@ -798,15 +806,15 @@ class QuadrupedEnv(DirectRLEnv):
         friction_noise = sample_uniform(
             self.cfg.joint_friction_range[0],
             self.cfg.joint_friction_range[1],
-            (len(ids), len(self._joint_dof_idx)),
+            (len(ids), len(v_idx)),
             self.device,
         )
-        base_friction = view.data.default_joint_friction_coeff[ids][:, self._joint_dof_idx]
+        base_friction = view.data.default_joint_friction_coeff[ids][:, v_idx]
         randomized_friction = torch.clamp(base_friction + friction_noise, min=0.0)
         
         view.write_joint_friction_coefficient_to_sim(
             randomized_friction,
-            joint_ids=self._joint_dof_idx,
+            joint_ids=v_idx,
             env_ids=ids,
         )
 
@@ -818,12 +826,12 @@ class QuadrupedEnv(DirectRLEnv):
             kp_noise = sample_uniform(
                 self.cfg.joint_stiffness_range[0],
                 self.cfg.joint_stiffness_range[1],
-                (len(ids), len(self._joint_dof_idx)),
+                (len(ids), len(v_idx)),
                 self.device,
             )
             view.write_joint_stiffness_to_sim(
                 kp_noise,
-                joint_ids=self._joint_dof_idx,
+                joint_ids=v_idx,
                 env_ids=ids,
             )
 
@@ -831,12 +839,12 @@ class QuadrupedEnv(DirectRLEnv):
             kd_noise = sample_uniform(
                 self.cfg.joint_pd_damping_range[0],
                 self.cfg.joint_pd_damping_range[1],
-                (len(ids), len(self._joint_dof_idx)),
+                (len(ids), len(v_idx)),
                 self.device,
             )
             view.write_joint_damping_to_sim(
                 kd_noise,
-                joint_ids=self._joint_dof_idx,
+                joint_ids=v_idx,
                 env_ids=ids,
             )
 
@@ -865,15 +873,15 @@ class QuadrupedEnv(DirectRLEnv):
 
         # Add small random noise to initial joint positions and velocities
         pos_noise = sample_uniform(
-            -0.2, 0.2, (len(ids), len(self._joint_dof_idx)), joint_pos.device
+            -0.2, 0.2, (len(ids), len(v_idx)), joint_pos.device
         )
         vel_noise = sample_uniform(
-            -0.5, 0.5, (len(ids), len(self._joint_dof_idx)), joint_vel.device
+            -0.5, 0.5, (len(ids), len(v_idx)), joint_vel.device
         )
 
         # Apply noise only to controlled joints
-        joint_pos[:, self._joint_dof_idx] += pos_noise
-        joint_vel[:, self._joint_dof_idx] += vel_noise
+        joint_pos[:, v_idx] += pos_noise
+        joint_vel[:, v_idx] += vel_noise
 
         # 2. Reset Base State (Position + Velocity)
         default_root_state = view.data.default_root_state[ids].clone()
