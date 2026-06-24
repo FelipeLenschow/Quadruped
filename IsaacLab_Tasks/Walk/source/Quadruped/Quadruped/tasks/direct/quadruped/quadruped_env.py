@@ -143,6 +143,18 @@ class QuadrupedEnv(DirectRLEnv):
         )
         self.last_targets = self.desired_joint_pos.clone()
 
+        # Internal Curriculum Sequence
+        self.agent_steps = 0
+        self.curriculum_phase_idx = 0
+        self.curriculum_phases = getattr(self.cfg, "curriculum_phases", [])
+        
+        self.curriculum_thresholds = []
+        if self.curriculum_phases:
+            cumulative_steps = getattr(self.cfg, "base_max_timesteps", 500000)
+            for p in self.curriculum_phases:
+                self.curriculum_thresholds.append(cumulative_steps)
+                cumulative_steps += p["max_timesteps"]
+
     def _setup_scene(self):
         import os
         from .quadruped_env_cfg import ROBOT_VARIANTS
@@ -288,8 +300,46 @@ class QuadrupedEnv(DirectRLEnv):
         # Reset timer
         self.command_timer[env_ids] = 0.0
 
+    def _transition_to_next_phase(self):
+        if self.curriculum_phase_idx >= len(self.curriculum_phases):
+            return
+            
+        next_phase = self.curriculum_phases[self.curriculum_phase_idx]
+        p_cfg = next_phase["cfg"]
+        
+        print(f"\n{'='*50}\n[Curriculum] Transitioning to Phase: {next_phase['name']}\n{'='*50}\n")
+        
+        # Update Rewards
+        r_cfg = p_cfg.get("rewards", {})
+        if r_cfg:
+            for k, v in r_cfg.items():
+                if hasattr(self.cfg, k):
+                    setattr(self.cfg, k, v)
+                    
+        # Update Domain Randomization
+        dr_cfg = p_cfg.get("domain_randomization", {})
+        if dr_cfg:
+            for k, v in dr_cfg.items():
+                if hasattr(self.cfg, k):
+                    setattr(self.cfg, k, tuple(v) if isinstance(v, list) else v)
+            
+        # Commands
+        c_cfg = p_cfg.get("commands", {})
+        if c_cfg:
+            for k, v in c_cfg.items():
+                if hasattr(self.cfg, k):
+                    setattr(self.cfg, k, v)
+            
+        self.curriculum_phase_idx += 1
+
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         """Called before the physics step. Here we just store the action."""
+        
+        # Internal Curriculum Logic
+        self.agent_steps += self.num_envs
+        if self.curriculum_phases and self.curriculum_phase_idx < len(self.curriculum_thresholds):
+            if self.agent_steps >= self.curriculum_thresholds[self.curriculum_phase_idx]:
+                self._transition_to_next_phase()
         self.previous_actions = self.actions.clone()
         self.last_joint_vel = self.joint_vel.clone()
         self.actions = actions.clone()

@@ -383,6 +383,10 @@ def run_cli_menu():
             except ValueError:
                 training_phase = phase_choice
                 
+            ans = input(f"Run as Curriculum Sequence ({training_phase} onward)? [y/N]: ").lower().strip()
+            if ans == "y":
+                training_phase = training_phase + "_onward"
+                
             run_name = input("Enter Run Name (optional): ").strip()
             video = input("Record Video? [y/N]: ").lower().strip() == "y"
             

@@ -18,7 +18,10 @@ import os
 import yaml
 
 # Load training phase configuration
-_phase_name = os.environ.get("QUADRUPED_TRAINING_PHASE", "phase3")
+_raw_phase_name = os.environ.get("QUADRUPED_TRAINING_PHASE", "phase3")
+_is_sequence = _raw_phase_name.endswith("_onward")
+_phase_name = _raw_phase_name.replace("_onward", "") if _is_sequence else _raw_phase_name
+
 _yaml_path = os.path.join(os.path.dirname(__file__), "training_phases.yaml")
 with open(_yaml_path, "r") as f:
     _all_phases = yaml.safe_load(f)
@@ -52,6 +55,20 @@ def resolve_phase(all_phases, phase_name):
     return deep_update(copy.deepcopy(parent_cfg), phase_node)
 
 _phase_cfg = resolve_phase(_all_phases, _phase_name)
+
+_curriculum_phases = []
+if _is_sequence:
+    phase_keys = list(_all_phases["phases"].keys())
+    if _phase_name in phase_keys:
+        start_idx = phase_keys.index(_phase_name)
+        for k in phase_keys[start_idx+1:]:
+            cfg = resolve_phase(_all_phases, k)
+            _curriculum_phases.append({
+                "name": k,
+                "cfg": cfg,
+                "max_timesteps": cfg["env"].get("max_timesteps", 500000)
+            })
+
 _vel_range = _phase_cfg["events"]["push_velocity_range"] if _phase_cfg["events"]["enable_pushes"] else None
 
 from isaaclab_assets.robots.unitree import (
@@ -197,7 +214,14 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     action_space = 12
     state_space = 0
     action_scale = _phase_cfg["env"]["action_scale"]
-    max_timesteps = _phase_cfg["env"].get("max_timesteps", 500000)
+    
+    base_max_timesteps = _phase_cfg["env"].get("max_timesteps", 500000)
+    _total_timesteps = base_max_timesteps
+    for p in _curriculum_phases:
+        _total_timesteps += p["cfg"]["env"].get("max_timesteps", 500000)
+    max_timesteps = _total_timesteps
+
+    curriculum_phases = _curriculum_phases
 
     # ── Robot ─────────────────────────────────────────────────────────────────
     # A1 body (minimum rigid bodies → compatible view across all variants)
