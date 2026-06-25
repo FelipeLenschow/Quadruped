@@ -1,0 +1,11 @@
+cp5 - the best one
+
+cp7 - has weird back leg movements
+
+All_phase2_gait - Was trained with symetric reward. Looks like its leaning on the front 
+legs only, steping too quicklly and weird gait phase
+
+phase2_equal_torque - It's limping
+
+3onward_equal_torque - it squats when forward vel is applied. Its bad on the rest
+

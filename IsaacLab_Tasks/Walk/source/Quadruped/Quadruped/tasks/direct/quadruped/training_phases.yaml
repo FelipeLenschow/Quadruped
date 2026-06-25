@@ -96,7 +96,6 @@ phases:
   phase5:
     inherits: phase4
     env:
-      max_timesteps: 300000
       robot_cfg: RANDOM
     domain_randomization:
       joint_stiffness_range: [-5.0, 5.0]
