@@ -132,8 +132,25 @@ class QuadrupedEnv(DirectRLEnv):
             (self.num_envs,), 100.0, device=self.device
         )  # Force immediate resample
 
+        # Internal Curriculum Sequence
+        self.agent_steps = 0
+        self.curriculum_phase_idx = 0
+        self.curriculum_phases = getattr(self.cfg, "curriculum_phases", [])
+        
+        self.curriculum_thresholds = []
+        if self.curriculum_phases:
+            cumulative_steps = getattr(self.cfg, "base_max_timesteps", 500000)
+            for p in self.curriculum_phases:
+                self.curriculum_thresholds.append(cumulative_steps)
+                cumulative_steps += p["max_timesteps"]
+
         # Domain Randomization Buffers
         max_delay = self.cfg.action_latency_range_steps[1]
+        for p in self.curriculum_phases:
+            dr_cfg = p["cfg"].get("domain_randomization", {})
+            if "action_latency_range_steps" in dr_cfg:
+                max_delay = max(max_delay, dr_cfg["action_latency_range_steps"][1])
+                
         self.action_history = torch.zeros(
             (self.num_envs, max_delay + 1, self.cfg.action_space), device=self.device
         )
@@ -147,18 +164,6 @@ class QuadrupedEnv(DirectRLEnv):
             (self.num_envs, 12), device=self.device
         )
         self.last_targets = self.desired_joint_pos.clone()
-
-        # Internal Curriculum Sequence
-        self.agent_steps = 0
-        self.curriculum_phase_idx = 0
-        self.curriculum_phases = getattr(self.cfg, "curriculum_phases", [])
-        
-        self.curriculum_thresholds = []
-        if self.curriculum_phases:
-            cumulative_steps = getattr(self.cfg, "base_max_timesteps", 500000)
-            for p in self.curriculum_phases:
-                self.curriculum_thresholds.append(cumulative_steps)
-                cumulative_steps += p["max_timesteps"]
 
     def _setup_scene(self):
         import os
