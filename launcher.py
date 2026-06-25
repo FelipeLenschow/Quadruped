@@ -305,6 +305,30 @@ def run_cli_menu():
                 selected_ckpt = all_ckpts[0] if all_ckpts else None
 
     if selected_ckpt:
+        ckpt_dir = os.path.dirname(selected_ckpt)
+        other_ckpts = glob.glob(os.path.join(ckpt_dir, "*.pt"))
+        if len(other_ckpts) > 1:
+            print(f"\nSelect Specific Checkpoint from this Run:")
+            
+            def extract_step(filepath):
+                base = os.path.basename(filepath)
+                if base == "best_agent.pt": return float('inf')
+                try:
+                    return int(''.join(filter(str.isdigit, base)))
+                except ValueError:
+                    return -1
+                    
+            other_ckpts.sort(key=extract_step, reverse=True)
+            
+            for i, p in enumerate(other_ckpts):
+                print(f"  [{i+1}] {os.path.basename(p)}")
+                
+            sub_choice = input(f"Enter choice [1-{len(other_ckpts)}] (default 1): ").strip() or "1"
+            try:
+                selected_ckpt = other_ckpts[int(sub_choice) - 1]
+            except (ValueError, IndexError):
+                selected_ckpt = other_ckpts[0]
+                
         print(f"[Launcher] Selected agent: {selected_ckpt}")
 
     # 4. Environment & Options
