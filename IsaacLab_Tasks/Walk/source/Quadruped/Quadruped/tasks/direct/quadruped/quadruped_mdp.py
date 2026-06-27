@@ -16,7 +16,7 @@ def push_robot_heterogeneous(env, env_ids, asset_cfg, velocity_range):
 
     # Fallback for homogeneous mode where env.robot_view_indices isn't set
     if not getattr(env, "is_heterogeneous", False):
-        return mdp.push_by_setting_velocity(env, env_ids, asset_cfg, velocity_range)
+        return mdp.push_by_setting_velocity(env, env_ids, velocity_range, asset_cfg)
 
     # Resolve global indices for the requested asset
     # Indices are: 0 -> A1, 1 -> Quadruped, 2 -> Go2
@@ -30,7 +30,7 @@ def push_robot_heterogeneous(env, env_ids, asset_cfg, velocity_range):
         view_global_indices = indices_list[2]
     else:
         # Fallback to default behavior if asset name doesn't match
-        return mdp.push_by_setting_velocity(env, env_ids, asset_cfg, velocity_range)
+        return mdp.push_by_setting_velocity(env, env_ids, velocity_range, asset_cfg)
 
     # Filter global env_ids to those present in this view
     mask = torch.isin(env_ids, view_global_indices)

@@ -1,0 +1,4 @@
+Stand still when zero velocity, but stepping when necessary
+Have a beutifull gait
+Similar GRF in all legs
+Base stability

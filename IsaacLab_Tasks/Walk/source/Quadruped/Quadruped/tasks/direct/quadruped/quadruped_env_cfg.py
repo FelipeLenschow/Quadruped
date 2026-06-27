@@ -18,7 +18,7 @@ import os
 import yaml
 
 # Load training phase configuration
-_raw_phase_name = os.environ.get("QUADRUPED_TRAINING_PHASE", "phase3")
+_raw_phase_name = os.environ.get("QUADRUPED_TRAINING_PHASE", "phase1")
 _is_sequence = _raw_phase_name.endswith("_onward")
 _phase_name = _raw_phase_name.replace("_onward", "") if _is_sequence else _raw_phase_name
 
@@ -358,6 +358,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     target_foot_height = _phase_cfg["rewards"].get("target_foot_height", 0.0)
     rew_scale_trot_symmetry = _phase_cfg["rewards"].get("rew_scale_trot_symmetry", 0.0)
     rew_scale_torque_symmetry = _phase_cfg["rewards"].get("rew_scale_torque_symmetry", 0.0)
+    rew_scale_grf_balance = _phase_cfg["rewards"].get("rew_scale_grf_balance", 0.0)
 
     # Stability penalties
     rew_scale_flat_orientation_l2 = _phase_cfg["rewards"].get("rew_scale_flat_orientation_l2", -5.0)

@@ -128,6 +128,7 @@ class QuadrupedEnv(DirectRLEnv):
         self.feet_air_penalty_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_static_val = torch.zeros(self.num_envs, device=self.device)
         self.joint_vel_l2_static_val = torch.zeros(self.num_envs, device=self.device)
+        self.grf_balance_val = torch.zeros(self.num_envs, device=self.device)
         self.command_timer = torch.full(
             (self.num_envs,), 100.0, device=self.device
         )  # Force immediate resample
@@ -371,13 +372,17 @@ class QuadrupedEnv(DirectRLEnv):
 
         import os
         if os.environ.get("QUADRUPED_TELEOP", "0") != "1":
-            # Apply 1s zero velocity standby to practice stand-to-walk transitions
-            standby_mask = self.command_timer < 1.0
-            self.commands = torch.where(
-                standby_mask.unsqueeze(1),
-                torch.zeros_like(self.target_commands),
-                self.target_commands
-            )
+            if self.cfg.zero_command_fraction > 0.0:
+                # Apply 0.5s zero velocity standby to practice stand-to-walk transitions
+                standby_mask = self.command_timer < 0.5
+                self.commands = torch.where(
+                    standby_mask.unsqueeze(1),
+                    torch.zeros_like(self.target_commands),
+                    self.target_commands
+                )
+            else:
+                # No standby — forward commands directly
+                self.commands = self.target_commands.clone()
 
         # Teleoperation Hook via Environment Variable
         import os
@@ -620,6 +625,15 @@ class QuadrupedEnv(DirectRLEnv):
             torch.sum(torch.square(self.joint_vel), dim=1) * static_mask
         )
 
+        # GRF balance: penalize uneven force distribution among contacting feet
+        feet_forces = torch.norm(self.net_contact_forces[:, self._feet_ids, :], dim=-1)  # (N, 4)
+        contact_float = contact.float()
+        n_contact = contact_float.sum(dim=1).clamp(min=1.0)
+        mean_force = (feet_forces * contact_float).sum(dim=1) / n_contact
+        # Coefficient of variation squared (dimensionless, 0 = perfect balance)
+        force_var = ((feet_forces - mean_force.unsqueeze(1)).square() * contact_float).sum(dim=1) / n_contact
+        self.grf_balance_val = force_var / mean_force.square().clamp(min=1.0)
+
         # Reset air time for feet in contact
         self.feet_air_time[contact] = 0.0
         self.last_feet_contact = contact
@@ -674,6 +688,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_base_height_l2,
             self.cfg.rew_scale_trot_symmetry,
             self.cfg.rew_scale_torque_symmetry,
+            self.cfg.rew_scale_grf_balance,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
@@ -694,6 +709,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.feet_air_penalty_val,
             self.feet_air_penalty_static_val,
             self.joint_vel_l2_static_val,
+            self.grf_balance_val,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
             self._fl_idx,
@@ -930,6 +946,7 @@ def compute_rewards(
     rew_scale_base_height_l2: float,
     rew_scale_trot_symmetry: float,
     rew_scale_torque_symmetry: float,
+    rew_scale_grf_balance: float,
     target_base_height: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
@@ -950,6 +967,7 @@ def compute_rewards(
     feet_air_penalty_val: torch.Tensor,
     feet_air_penalty_static_val: torch.Tensor,
     joint_vel_l2_static_val: torch.Tensor,
+    grf_balance_val: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
     fl_idx: torch.Tensor,
@@ -1077,5 +1095,6 @@ def compute_rewards(
         + rew_scale_joint_vel_l2_static * joint_vel_l2_static_val
         + rew_trot_symmetry
         + rew_torque_symmetry
+        + rew_scale_grf_balance * grf_balance_val
     )
     return total_reward
