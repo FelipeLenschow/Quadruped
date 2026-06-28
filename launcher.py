@@ -386,6 +386,7 @@ def run_cli_menu():
             default_phase_idx = "3"
             
             yaml_files = glob.glob(os.path.join(selected_module_path, "**", "training_phases.yaml"), recursive=True)
+            yaml_data = {}
             if yaml_files:
                 try:
                     with open(yaml_files[0], 'r') as f:
@@ -407,9 +408,55 @@ def run_cli_menu():
             except ValueError:
                 training_phase = phase_choice
                 
-            ans = input(f"Run as Curriculum Sequence ({training_phase} onward)? [y/N]: ").lower().strip()
-            if ans == "y":
-                training_phase = training_phase + "_onward"
+            # Curriculum sequence logic
+            furthest_phase = training_phase
+            if yaml_data and "phases" in yaml_data and training_phase in available_phases:
+                def resolve_phase_launcher(all_phases, phase_name):
+                    import collections.abc
+                    import copy
+                    
+                    def deep_update(d, u):
+                        for k, v in u.items():
+                            if isinstance(v, collections.abc.Mapping):
+                                d[k] = deep_update(d.get(k, {}), v)
+                            else:
+                                d[k] = v
+                        return d
+
+                    phase_node = all_phases.get("phases", {}).get(phase_name, {})
+                    parent_name = phase_node.get("inherits", "default")
+                    
+                    if parent_name and parent_name != phase_name:
+                        if parent_name == "default":
+                            parent_cfg = all_phases.get("default", {})
+                        else:
+                            parent_cfg = resolve_phase_launcher(all_phases, parent_name)
+                    else:
+                        parent_cfg = all_phases.get("default", {})
+
+                    return deep_update(copy.deepcopy(parent_cfg), phase_node)
+                    
+                start_idx = available_phases.index(training_phase)
+                start_cfg = resolve_phase_launcher(yaml_data, training_phase)
+                start_env = start_cfg.get("env", {})
+                start_robot = start_env.get("robot_cfg", "")
+                start_terrain = start_env.get("terrain", "rough")
+                
+                for k in available_phases[start_idx+1:]:
+                    curr_cfg = resolve_phase_launcher(yaml_data, k)
+                    curr_env = curr_cfg.get("env", {})
+                    curr_robot = curr_env.get("robot_cfg", "")
+                    curr_terrain = curr_env.get("terrain", "rough")
+                    
+                    if curr_robot == start_robot and curr_terrain == start_terrain:
+                        furthest_phase = k
+                    else:
+                        break
+                        
+            if furthest_phase != training_phase:
+                ans = input(f"Run as Curriculum Sequence ({training_phase} up to {furthest_phase})? [y/N]: ").lower().strip()
+                if ans == "y":
+                    training_phase = f"{training_phase}_to_{furthest_phase}"
                 
             run_name = input("Enter Run Name (optional): ").strip()
             video = input("Record Video? [y/N]: ").lower().strip() == "y"

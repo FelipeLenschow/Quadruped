@@ -19,8 +19,12 @@ import yaml
 
 # Load training phase configuration
 _raw_phase_name = os.environ.get("QUADRUPED_TRAINING_PHASE", "phase1")
-_is_sequence = _raw_phase_name.endswith("_onward")
-_phase_name = _raw_phase_name.replace("_onward", "") if _is_sequence else _raw_phase_name
+_is_sequence = "_to_" in _raw_phase_name or _raw_phase_name.endswith("_onward")
+if "_to_" in _raw_phase_name:
+    _phase_name, _end_phase = _raw_phase_name.split("_to_")
+else:
+    _phase_name = _raw_phase_name.replace("_onward", "") if _is_sequence else _raw_phase_name
+    _end_phase = None
 
 _yaml_path = os.path.join(os.path.dirname(__file__), "training_phases.yaml")
 with open(_yaml_path, "r") as f:
@@ -61,7 +65,8 @@ if _is_sequence:
     phase_keys = list(_all_phases["phases"].keys())
     if _phase_name in phase_keys:
         start_idx = phase_keys.index(_phase_name)
-        for k in phase_keys[start_idx+1:]:
+        end_idx = phase_keys.index(_end_phase) if _end_phase and _end_phase in phase_keys else len(phase_keys) - 1
+        for k in phase_keys[start_idx+1:end_idx+1]:
             cfg = resolve_phase(_all_phases, k)
             _curriculum_phases.append({
                 "name": k,

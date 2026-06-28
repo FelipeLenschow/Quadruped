@@ -373,8 +373,8 @@ class QuadrupedEnv(DirectRLEnv):
         import os
         if os.environ.get("QUADRUPED_TELEOP", "0") != "1":
             if self.cfg.zero_command_fraction > 0.0:
-                # Apply 0.5s zero velocity standby to practice stand-to-walk transitions
-                standby_mask = self.command_timer < 0.5
+                # Apply 0.5s zero velocity standby ONLY at the start of the episode.
+                standby_mask = (self.episode_length_buf * self.step_dt) < 0.5
                 self.commands = torch.where(
                     standby_mask.unsqueeze(1),
                     torch.zeros_like(self.target_commands),
@@ -1049,15 +1049,23 @@ def compute_rewards(
     rew_base_height_l2 = rew_scale_base_height_l2 * torch.square(base_height_val - target_base_height)
 
     # 14. Trot symmetry penalty (Diagonal legs should have symmetric actions)
-    # Penalize deviation differences for Thigh (idx 1) and Calf (idx 2) of the legs
+    # Hip (idx 0) needs sign flip: Go2 uses opposite signs for L/R hips
+    #   (default: L_hip=+0.1, R_hip=-0.1 for same outward abduction)
+    # Thigh/calf (idx 1:) use same sign convention across sides.
     if rew_scale_trot_symmetry != 0.0:
         fl_actions = actions[:, fl_idx]
         rr_actions = actions[:, rr_idx]
         fr_actions = actions[:, fr_idx]
         rl_actions = actions[:, rl_idx]
         
-        trot_sym_err = torch.sum(torch.square(fl_actions[:, 1:] - rr_actions[:, 1:]), dim=1) + \
-                       torch.sum(torch.square(fr_actions[:, 1:] - rl_actions[:, 1:]), dim=1)
+        # Hip: FL_hip ≈ -RR_hip (opposite sides = opposite signs)
+        hip_sym_err = torch.square(fl_actions[:, 0] + rr_actions[:, 0]) + \
+                      torch.square(fr_actions[:, 0] + rl_actions[:, 0])
+        # Thigh + Calf: FL ≈ RR (same sign)
+        leg_sym_err = torch.sum(torch.square(fl_actions[:, 1:] - rr_actions[:, 1:]), dim=1) + \
+                      torch.sum(torch.square(fr_actions[:, 1:] - rl_actions[:, 1:]), dim=1)
+        
+        trot_sym_err = hip_sym_err + leg_sym_err
         rew_trot_symmetry = rew_scale_trot_symmetry * trot_sym_err
     else:
         rew_trot_symmetry = torch.zeros_like(rew_alive)
