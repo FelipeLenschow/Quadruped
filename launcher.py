@@ -385,7 +385,9 @@ def run_cli_menu():
             available_phases = ["phase1", "phase2", "phase3"] # fallback
             default_phase_idx = "3"
             
-            yaml_files = glob.glob(os.path.join(selected_module_path, "**", "training_phases.yaml"), recursive=True)
+            # Search only in the source directory to avoid picking up backups in logs/
+            source_dir = os.path.join(selected_module_path, "source")
+            yaml_files = glob.glob(os.path.join(source_dir, "**", "training_phases.yaml"), recursive=True)
             yaml_data = {}
             if yaml_files:
                 try:

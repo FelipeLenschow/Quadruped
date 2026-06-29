@@ -689,6 +689,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_trot_symmetry,
             self.cfg.rew_scale_torque_symmetry,
             self.cfg.rew_scale_grf_balance,
+            self.cfg.rew_scale_max_air_feet,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
@@ -947,6 +948,7 @@ def compute_rewards(
     rew_scale_trot_symmetry: float,
     rew_scale_torque_symmetry: float,
     rew_scale_grf_balance: float,
+    rew_scale_max_air_feet: float,
     target_base_height: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
@@ -1028,6 +1030,9 @@ def compute_rewards(
         torch.square(actions - previous_actions), dim=1
     )
 
+    # Max Air Feet Penalty (Penalize 3 or 4 feet in the air at once)
+    rew_max_air_feet = rew_scale_max_air_feet * (feet_air_penalty_val >= 3.0).float()
+
     # 9. Feet Air Time Reward
     # Computed in _get_observations
     rew_feet_air_time = rew_scale_feet_air_time * feet_air_time_reward_val
@@ -1093,6 +1098,7 @@ def compute_rewards(
         + rew_dof_torques_l2
         + rew_dof_acc_l2
         + rew_action_rate_l2
+        + rew_max_air_feet
         + rew_feet_air_time
         + rew_dof_pos_l2
         + rew_flat_orientation_l2
