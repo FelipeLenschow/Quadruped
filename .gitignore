@@ -27,7 +27,7 @@ share/python-wheels/
 !**/logs/**/
 **/logs/**/*.mp4
 **/logs/**/*.tfevents*
-**/logs/**/*.pt
+!**/Walk/logs/**/*.pt
 !**/logs/**/best_agent.pt
 !**/logs/**/*.yaml
 *.jit
