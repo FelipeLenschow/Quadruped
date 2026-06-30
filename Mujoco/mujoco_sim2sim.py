@@ -195,13 +195,10 @@ def main():
     isaac_identity = np.arange(12)
     
     # Match IsaacLab ground sliding friction (1.0) and prevent bouncing
-    FOOT_GEOMS = {20, 32, 44, 56}
     for i in range(model.ngeom):
         name = model.geom(i).name
         if name and ("floor" in name or "ground" in name):
             model.geom_friction[i, 0] = 1.0  # sliding friction
-            model.geom_solref[i, 1] = 2.0    # over-damp to prevent bouncing
-
 
 
     pos_err_hist = np.zeros((3, 12), dtype=np.float32)

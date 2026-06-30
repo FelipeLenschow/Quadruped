@@ -173,7 +173,14 @@ def main():
 
     # Launch Gazebo
     root = os.path.dirname(os.path.abspath(__file__))
-    world_path = os.path.join(root, "scene.sdf")
+    base_world_path = os.path.join(root, "scene.sdf")
+    with open(base_world_path, "r") as f:
+        scene_xml = f.read()
+    scene_xml = scene_xml.replace("go2_description", f"{args.robot}_description")
+    scene_xml = scene_xml.replace("<name>go2</name>", f"<name>{args.robot}</name>")
+    world_path = f"/tmp/gazebo_scene_{args.robot}_{os.getpid()}.sdf"
+    with open(world_path, "w") as f:
+        f.write(scene_xml)
 
     # Make sure resources are found
     os.environ["GZ_SIM_RESOURCE_PATH"] = (
@@ -182,6 +189,10 @@ def main():
         + os.path.join(root, "models")
         + os.pathsep
         + os.path.abspath(os.path.join(root, "..", "Unitree_Go2", "models"))
+        + os.pathsep
+        + os.path.abspath(os.path.join(root, "..", "Unitree_Go1", "models"))
+        + os.pathsep
+        + os.path.abspath(os.path.join(root, "..", "Unitree_A1", "models"))
         + os.pathsep
         + os.environ.get("GZ_SIM_RESOURCE_PATH", "")
     )

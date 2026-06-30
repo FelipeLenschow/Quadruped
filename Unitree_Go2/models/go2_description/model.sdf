@@ -169,7 +169,7 @@
         <xyz>0 1 0</xyz>
         <limit>
           <lower>-2.7227000000000001</lower>
-          <upper>-0.83775999999999995</upper>
+          <upper>0.05</upper>
           <effort>45.43</effort>
           <velocity>15.699999999999999</velocity>
         </limit>
@@ -372,7 +372,7 @@
         <xyz>0 1 0</xyz>
         <limit>
           <lower>-2.7227000000000001</lower>
-          <upper>-0.83775999999999995</upper>
+          <upper>0.05</upper>
           <effort>45.43</effort>
           <velocity>15.699999999999999</velocity>
         </limit>
@@ -575,7 +575,7 @@
         <xyz>0 1 0</xyz>
         <limit>
           <lower>-2.7227000000000001</lower>
-          <upper>-0.83775999999999995</upper>
+          <upper>0.05</upper>
           <effort>45.43</effort>
           <velocity>15.699999999999999</velocity>
         </limit>
@@ -778,7 +778,7 @@
         <xyz>0 1 0</xyz>
         <limit>
           <lower>-2.7227000000000001</lower>
-          <upper>-0.83775999999999995</upper>
+          <upper>0.05</upper>
           <effort>45.43</effort>
           <velocity>15.699999999999999</velocity>
         </limit>

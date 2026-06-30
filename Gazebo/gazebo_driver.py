@@ -55,9 +55,7 @@ JOINT_NAMES = [
     "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
 
-# Removed HAA_SIGN since both Gazebo and MuJoCo models use 1 0 0 for both hips.
-
-
+# Gazebo and MuJoCo models use 1 0 0 for both hips.
 class Ros2GazeboDriver(Node):
     def __init__(
         self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49,
@@ -127,15 +125,20 @@ class Ros2GazeboDriver(Node):
 
         self.new_data_event = threading.Event()
         self._stop = threading.Event()
-        self.world_path = os.path.abspath(
+        base_world_path = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "scene.sdf")
         )
+        with open(base_world_path, "r") as f:
+            scene_xml = f.read()
+        scene_xml = scene_xml.replace("go2_description", f"{self.robot_type}_description")
+        scene_xml = scene_xml.replace("<name>go2</name>", f"<name>{self.robot_type}</name>")
+        self.world_path = f"/tmp/gazebo_scene_{self.robot_type}_{os.getpid()}.sdf"
+        with open(self.world_path, "w") as f:
+            f.write(scene_xml)
 
         # 4. Starting Threads
         self.physics_thread = threading.Thread(target=self._physics_loop, daemon=True)
-        self.repeater_thread = threading.Thread(target=self._repeater_loop, daemon=True)
         self.physics_thread.start()
-        self.repeater_thread.start()
 
         print(
             f"[GazeboDriver] Initialized for {robot_type.upper()}. Physics at 500Hz (Slave)."
@@ -225,20 +228,7 @@ class Ros2GazeboDriver(Node):
                 end="", flush=True,
             )
 
-    def _repeater_loop(self):
-        """
-        Background thread to repeat the latest torques at 2000Hz.
-        Gazebo Harmonic's ApplyJointForce clears forces every step; this ensures 
-        the robot stays powered and prevents chatter from missed steps.
-        """
-        while not self._stop.is_set():
-            if hasattr(self, "joint_pubs") and len(self.joint_pubs) == 12:
-                torch_torques = self.latest_torques.copy()
-                for i, torque in enumerate(torch_torques):
-                    msg = double_pb2.Double()
-                    msg.data = float(torque)
-                    self.joint_pubs[i].publish(msg)
-            time.sleep(0.0005)
+
 
     def _physics_loop(self):
         # 1. Load ActuatorNet
@@ -270,6 +260,10 @@ class Ros2GazeboDriver(Node):
             + os.path.join(root_dir, "models")
             + os.pathsep
             + os.path.abspath(os.path.join(root_dir, "..", "Unitree_Go2", "models"))
+            + os.pathsep
+            + os.path.abspath(os.path.join(root_dir, "..", "Unitree_Go1", "models"))
+            + os.pathsep
+            + os.path.abspath(os.path.join(root_dir, "..", "Unitree_A1", "models"))
             + os.pathsep
             + env.get("GZ_SIM_RESOURCE_PATH", "")
         )
@@ -343,36 +337,43 @@ class Ros2GazeboDriver(Node):
         count = 0
         pos_err_hist = np.zeros((6, 12), dtype=np.float32)
         vel_hist = np.zeros((6, 12), dtype=np.float32)
+        last_pd_time = self.sim_time
+        physics_tick = 0
 
         while not self._stop.is_set():
-            self.new_data_event.wait(timeout=0.1)
+            # Event-driven sync: Block until Gazebo sends a new joint state message.
+            # This releases the Python GIL, allowing ROS 2 executor callbacks to run freely
+            # and completely eliminates stale-data history corruption in the NN policy.
+            if not self.new_data_event.wait(timeout=0.1):
+                continue
             self.new_data_event.clear()
+            
+            physics_tick += 1
 
             # Check if console was opened before this pipeline
             if hasattr(self, "_startup_console_check") and self._startup_console_check:
                 if not hasattr(self, "_startup_ticks"):
                     self._startup_ticks = 0
                 self._startup_ticks += 1
-                if self._startup_ticks >= 40: # 200ms at 200Hz loop rate
+                if self._startup_ticks >= 200: # 200ms at 1000Hz loop rate
                     self._startup_console_check = False
                     if self.count_publishers("/safety/heartbeat") > 0:
                         self.get_logger().error("[Safety] Console was detected running before driver! Exiting bridge for safety.")
                         import sys
                         sys.exit(0)
-
-            # We process a new PD/NN step every time we get a joint state callback (200 Hz).
-            # Do NOT skip steps based on sim_time, as it can cause massive latency
-            # if timestamps are coarse or not updated fast enough.
             
             # Calculate heuristic contacts using kinematics
             contact = [0.0, 0.0, 0.0, 0.0]
             R = rot_from_quat(self.base_quat)
             for leg_idx in range(4):
-                sl = slice(leg_idx * 3, leg_idx * 3 + 3)
-                q_leg = self.q[sl]
+                q_leg = np.array([
+                    self.q[leg_idx],       # hip
+                    self.q[leg_idx + 4],   # thigh
+                    self.q[leg_idx + 8]    # calf
+                ])
                 r_foot_b = self.kinematics.foot_position_body(leg_idx, q_leg)
                 r_foot_w = self.base_pos + R @ r_foot_b
-                if r_foot_w[2] < 0.03:  # 3cm threshold
+                if r_foot_w[2] < 0.04:  # 4cm threshold (foot radius is 2.2cm)
                     contact[leg_idx] = 1.0
 
             raw_data = {
@@ -408,20 +409,28 @@ class Ros2GazeboDriver(Node):
                 kp = 0.0
                 kd = 0.0
             
-            pos_err = targets - self.q
-            raw_torques = kp * pos_err - kd * self.dq
-            
-            vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
-            v_clamp = np.clip(self.dq, -vel_at_lim, vel_at_lim)
-            t_top = effort_limit * (1.0 - v_clamp / vel_lim)
-            t_bot = effort_limit * (-1.0 - v_clamp / vel_lim)
-            
-            pd_torques = np.clip(
-                raw_torques, np.minimum(t_bot, -effort_limit), np.minimum(t_top, effort_limit)
-            )
+            if physics_tick % 5 == 0:
+                pos_err = targets - self.q
+                raw_torques = kp * pos_err - kd * self.dq
+                
+                vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
+                v_clamp = np.clip(self.dq, -vel_at_lim, vel_at_lim)
+                t_top = effort_limit * (1.0 - v_clamp / vel_lim)
+                t_bot = effort_limit * (-1.0 - v_clamp / vel_lim)
+                
+                pd_torques = np.clip(
+                    raw_torques, np.maximum(t_bot, -effort_limit), np.minimum(t_top, effort_limit)
+                )
 
-            # Convert torques from Isaac convention back to Gazebo convention
-            self.latest_torques[:] = pd_torques
+                # Convert torques from Isaac convention back to Gazebo convention
+                self.latest_torques[:] = pd_torques
+
+                # Publish directly to Gazebo at 200Hz
+                if hasattr(self, "joint_pubs") and len(self.joint_pubs) == 12:
+                    for i, torque in enumerate(pd_torques):
+                        msg = double_pb2.Double()
+                        msg.data = float(torque)
+                        self.joint_pubs[i].publish(msg)
 
             # LOGGING FOR DIAGNOSIS (every 100 physics steps ~ 0.2s)
             # Silenced debug print to keep terminal clean
@@ -440,7 +449,7 @@ class Ros2GazeboDriver(Node):
                 torque_norm = np.linalg.norm(pd_torques)
                 
                 print(
-                    f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} err={err_norm:.3f} tq={torque_norm:.1f} | inf={inf_ms:4.1f}ms   ",
+                    f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} err={err_norm:.3f} c={sum(contact)} tq={torque_norm:.1f} | inf={inf_ms:4.1f}ms   ",
                     end="",
                     flush=True,
                 )

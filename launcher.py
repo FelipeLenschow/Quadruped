@@ -356,8 +356,8 @@ def run_cli_menu():
     use_estimator = False
     training_phase = ""
 
-    if action in ["train", "isaac_lab", "isaac_sim", "mujoco"]:
-        if action in ["isaac_sim", "mujoco"]:
+    if action in ["train", "isaac_lab", "isaac_sim", "mujoco", "gazebo"]:
+        if action in ["isaac_sim", "mujoco", "gazebo"]:
             robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1] (default 1): ").strip() or "1"
             robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG"}.get(robot_choice, "UNITREE_GO2_CFG")
         elif action == "isaac_lab":

@@ -155,12 +155,6 @@ class Ros2MujocoDriver(Node):
                 self.model.dof_damping[self.model.jnt_dofadr[i]] = 0.0
                 self.model.dof_frictionloss[self.model.jnt_dofadr[i]] = 0.01
 
-        # Fix physical bouncing by over-damping the floor contact
-        for i in range(self.model.ngeom):
-            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, i)
-            if name and ("floor" in name or "ground" in name):
-                self.model.geom_solref[i, 1] = 2.0 # Damping ratio > 1 prevents bouncing
-
         # History for PD deriv
         self.pos_err_hist = np.zeros((1, 12), dtype=np.float32)
         self.vel_hist = np.zeros((1, 12), dtype=np.float32)
