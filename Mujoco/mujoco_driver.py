@@ -40,14 +40,17 @@ class Ros2MujocoDriver(Node):
         self.kp = float(self.ctrl_cfg.get("kp", 0.0))
         self.kd = float(self.ctrl_cfg.get("kd", 0.0))
 
-        # 1. Load Go2 MuJoCo Scene
+
+
+        # 1. Load MuJoCo Scene
+        robot_folder = f"unitree_{self.robot_type.lower()}"
         mjcf_path = os.path.join(
-            os.path.dirname(__file__), "mujoco_menagerie", "unitree_go2", "scene.xml"
+            os.path.dirname(__file__), "mujoco_menagerie", robot_folder, "scene.xml"
         )
         if not os.path.exists(mjcf_path):
             mjcf_path = os.path.join(os.path.dirname(__file__), "scene.xml")
 
-        print(f"[MujocoDriver] Initializing for Go2. Model: {mjcf_path}")
+        print(f"[MujocoDriver] Initializing for {self.robot_type.upper()}. Model: {mjcf_path}")
         self.model = mujoco.MjModel.from_xml_path(mjcf_path)
         self.data = mujoco.MjData(self.model)
         self.model.opt.timestep = 0.001
@@ -139,11 +142,24 @@ class Ros2MujocoDriver(Node):
         # Buffer for smooth targets
         self.current_targets = self.desired_qpos.copy()
 
+        # Convert position actuators into pure torque motors (Go1/A1 use position tags in their XML)
+        for i in range(self.model.nu):
+            self.model.actuator_gainprm[i, 0] = 1.0
+            self.model.actuator_biasprm[i, 1] = 0.0
+            self.model.actuator_biastype[i] = mujoco.mjtBias.mjBIAS_NONE
+            self.model.actuator_ctrllimited[i] = 0
+
         # Match training damping (KD=0.5, we apply via PD loop, so set dof_damping to 0)
         for i in range(self.model.njnt):
             if self.model.jnt_type[i] != mujoco.mjtJoint.mjJNT_FREE:
                 self.model.dof_damping[self.model.jnt_dofadr[i]] = 0.0
                 self.model.dof_frictionloss[self.model.jnt_dofadr[i]] = 0.01
+
+        # Fix physical bouncing by over-damping the floor contact
+        for i in range(self.model.ngeom):
+            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, i)
+            if name and ("floor" in name or "ground" in name):
+                self.model.geom_solref[i, 1] = 2.0 # Damping ratio > 1 prevents bouncing
 
         # History for PD deriv
         self.pos_err_hist = np.zeros((1, 12), dtype=np.float32)
@@ -248,7 +264,13 @@ class Ros2MujocoDriver(Node):
         
         # Override with safety watchdog torque
         effort_limit = self.pipeline.safety_processor.active_max_torque
-        sat_effort, vel_lim = 23.5, 30.0
+        
+        if self.robot_type.lower() == "a1":
+            sat_effort, vel_lim = 33.5, 21.0
+        elif self.robot_type.lower() == "go1":
+            sat_effort, vel_lim = 23.7, 30.0
+        else: # go2
+            sat_effort, vel_lim = 23.5, 30.0
         
         if effort_limit <= 0.1:
             # Go limp

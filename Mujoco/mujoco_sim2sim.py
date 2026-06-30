@@ -42,10 +42,10 @@ ISAAC_JOINT_NAMES = [
 
 ASSETS_DIR = Path(__file__).parent / "mujoco_menagerie"
 MENAGERIE_URL = "https://github.com/google-deepmind/mujoco_menagerie/archive/refs/heads/main.zip"
-ROBOT_DIRS = {"go2": "unitree_go2"}
+ROBOT_DIRS = {"go2": "unitree_go2", "go1": "unitree_go1", "a1": "unitree_a1"}
 
 def ensure_mjcf(robot: str = "go2") -> Path:
-    robot_dir = ASSETS_DIR / "unitree_go2"
+    robot_dir = ASSETS_DIR / ROBOT_DIRS.get(robot, "unitree_go2")
     scene_xml = robot_dir / "scene.xml"
     if scene_xml.exists(): return scene_xml
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
@@ -101,13 +101,14 @@ def resolve_joint_order(model) -> dict:
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--robot", type=str, default="go2", help="Robot type (go2, go1, a1)")
     parser.add_argument("--checkpoint", required=True, help="Path to best_agent.pt")
     parser.add_argument("--duration", type=float, default=0.0)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--vx", type=float, default=0.0)
     args = parser.parse_args()
 
-    robot = "go2"
+    robot = args.robot
     scene_xml = ensure_mjcf(robot)
     model = mujoco.MjModel.from_xml_path(str(scene_xml))
     data = mujoco.MjData(model)
@@ -193,12 +194,13 @@ def main():
     # Identity mapping: MockUDP.Recv() already returns Isaac-ordered motor states
     isaac_identity = np.arange(12)
     
-    # Match IsaacLab ground sliding friction (1.0)
+    # Match IsaacLab ground sliding friction (1.0) and prevent bouncing
     FOOT_GEOMS = {20, 32, 44, 56}
     for i in range(model.ngeom):
         name = model.geom(i).name
-        if "floor" in name or "ground" in name:
+        if name and ("floor" in name or "ground" in name):
             model.geom_friction[i, 0] = 1.0  # sliding friction
+            model.geom_solref[i, 1] = 2.0    # over-damp to prevent bouncing
 
 
 
@@ -225,13 +227,20 @@ def main():
                 pos_err = qpos_isaac - targets
                 pos_err_hist = np.roll(pos_err_hist, 1, 0); pos_err_hist[0] = pos_err
                 vel_hist = np.roll(vel_hist, 1, 0); vel_hist[0] = qvel_isaac
-                # Aligned with IsaacLab Go2 DCMotor: stiffness=25.0, damping=0.5
-                torques = -25.0 * pos_err_hist[0] - 0.5 * vel_hist[0]
+                kp, kd = 25.0, 0.5
+                if robot == "a1":
+                    effort_limit, saturation_effort = 33.5, 33.5
+                    vel_limit = 21.0
+                elif robot == "go1":
+                    effort_limit, saturation_effort = 23.7, 23.7
+                    vel_limit = 30.0
+                else: # go2
+                    effort_limit, saturation_effort = 23.5, 23.5
+                    vel_limit = 30.0
+
+                torques = -kp * pos_err_hist[0] - kd * vel_hist[0]
                 
                 # DCMotor velocity-dependent saturation (four-quadrant model)
-                effort_limit = 23.5
-                saturation_effort = 23.5
-                vel_limit = 30.0
                 vel_at_limit = vel_limit * (1 + effort_limit / saturation_effort)
                 vel_clamped = np.clip(vel_hist[0], -vel_at_limit, vel_at_limit)
                 t_top = saturation_effort * (1.0 - vel_clamped / vel_limit)
