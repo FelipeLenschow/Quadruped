@@ -350,46 +350,48 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     #   action_rate_l2                -0.01    -0.01    -0.03     ↑ smoother = less jerky
 
     # Alive and Undesired Contacts
-    rew_scale_alive = _phase_cfg["rewards"].get("rew_scale_alive", 0.0)
-    rew_scale_undesired_contacts = _phase_cfg["rewards"].get("rew_scale_undesired_contacts", -1.0)
+    rew_scale_alive = _phase_cfg["rewards"]["rew_scale_alive"]
+    rew_scale_undesired_contacts = _phase_cfg["rewards"]["rew_scale_undesired_contacts"]
 
     # Velocity tracking
-    rew_scale_track_lin_vel_xy_exp = _phase_cfg["rewards"].get("rew_scale_track_lin_vel_xy_exp", 1.0)
-    rew_scale_track_ang_vel_z_exp = _phase_cfg["rewards"].get("rew_scale_track_ang_vel_z_exp", 0.5)
+    rew_scale_track_lin_vel_xy_exp = _phase_cfg["rewards"]["rew_scale_track_lin_vel_xy_exp"]
+    rew_scale_track_ang_vel_z_exp = _phase_cfg["rewards"]["rew_scale_track_ang_vel_z_exp"]
 
     # Gait shaping
-    rew_scale_feet_air_time = _phase_cfg["rewards"].get("rew_scale_feet_air_time", 0.125)
-    rew_scale_foot_height_exp = _phase_cfg["rewards"].get("rew_scale_foot_height_exp", 0.0)
-    target_foot_height = _phase_cfg["rewards"].get("target_foot_height", 0.0)
-    rew_scale_trot_symmetry = _phase_cfg["rewards"].get("rew_scale_trot_symmetry", 0.0)
-    rew_scale_torque_symmetry = _phase_cfg["rewards"].get("rew_scale_torque_symmetry", 0.0)
-    rew_scale_grf_balance = _phase_cfg["rewards"].get("rew_scale_grf_balance", 0.0)
-    rew_scale_max_air_feet = _phase_cfg["rewards"].get("rew_scale_max_air_feet", 0.0)
+    rew_scale_feet_air_time = _phase_cfg["rewards"]["rew_scale_feet_air_time"]
+    target_feet_air_time = _phase_cfg["rewards"]["target_feet_air_time"]
+    rew_scale_foot_height_exp = _phase_cfg["rewards"]["rew_scale_foot_height_exp"]
+    target_foot_height = _phase_cfg["rewards"]["target_foot_height"]
+    rew_scale_trot_symmetry = _phase_cfg["rewards"]["rew_scale_trot_symmetry"]
+    hip_sym_multiplier = _phase_cfg["rewards"]["hip_sym_multiplier"]
+    rew_scale_torque_symmetry = _phase_cfg["rewards"]["rew_scale_torque_symmetry"]
+    rew_scale_grf_balance = _phase_cfg["rewards"]["rew_scale_grf_balance"]
+    rew_scale_max_air_feet = _phase_cfg["rewards"]["rew_scale_max_air_feet"]
 
     # Stability penalties
-    rew_scale_flat_orientation_l2 = _phase_cfg["rewards"].get("rew_scale_flat_orientation_l2", -5.0)
-    rew_scale_lin_vel_z_l2 = _phase_cfg["rewards"].get("rew_scale_lin_vel_z_l2", -4.0)
-    rew_scale_ang_vel_xy_l2 = _phase_cfg["rewards"].get("rew_scale_ang_vel_xy_l2", -0.5)
-    rew_scale_dof_pos_l2 = _phase_cfg["rewards"].get("rew_scale_dof_pos_l2", -0.05)
+    rew_scale_flat_orientation_l2 = _phase_cfg["rewards"]["rew_scale_flat_orientation_l2"]
+    rew_scale_lin_vel_z_l2 = _phase_cfg["rewards"]["rew_scale_lin_vel_z_l2"]
+    rew_scale_ang_vel_xy_l2 = _phase_cfg["rewards"]["rew_scale_ang_vel_xy_l2"]
+    rew_scale_dof_pos_l2 = _phase_cfg["rewards"]["rew_scale_dof_pos_l2"]
 
     # Smoothness / efficiency
-    rew_scale_dof_torques_l2 = _phase_cfg["rewards"].get("rew_scale_dof_torques_l2", -0.0002)
-    rew_scale_dof_acc_l2 = _phase_cfg["rewards"].get("rew_scale_dof_acc_l2", -2.5e-7)
-    rew_scale_action_rate_l2 = _phase_cfg["rewards"].get("rew_scale_action_rate_l2", -0.03)
+    rew_scale_dof_torques_l2 = _phase_cfg["rewards"]["rew_scale_dof_torques_l2"]
+    rew_scale_dof_acc_l2 = _phase_cfg["rewards"]["rew_scale_dof_acc_l2"]
+    rew_scale_action_rate_l2 = _phase_cfg["rewards"]["rew_scale_action_rate_l2"]
 
     # Disabled (kept for interface compatibility)
-    rew_scale_feet_air_penalty = _phase_cfg["rewards"].get("rew_scale_feet_air_penalty", 0.0)
-    rew_scale_feet_air_penalty_static = _phase_cfg["rewards"].get("rew_scale_feet_air_penalty_static", 0.0)
-    rew_scale_joint_vel_l2_static = _phase_cfg["rewards"].get("rew_scale_joint_vel_l2_static", 0.0)
-    rew_scale_base_height_l2 = _phase_cfg["rewards"].get("rew_scale_base_height_l2", 0.0)
-    target_base_height = _phase_cfg["rewards"].get("target_base_height", 0.0)
+    rew_scale_feet_air_penalty = _phase_cfg["rewards"]["rew_scale_feet_air_penalty"]
+    rew_scale_feet_air_penalty_static = _phase_cfg["rewards"]["rew_scale_feet_air_penalty_static"]
+    rew_scale_joint_vel_l2_static = _phase_cfg["rewards"]["rew_scale_joint_vel_l2_static"]
+    rew_scale_base_height_l2 = _phase_cfg["rewards"]["rew_scale_base_height_l2"]
+    target_base_height = _phase_cfg["rewards"]["target_base_height"]
 
     # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  COMMANDS                                                             ║
     # ╚════════════════════════════════════════════════════════════════════════╝
 
-    command_lin_vel_std = _phase_cfg["commands"].get("command_lin_vel_std", 0.5)
-    command_ang_vel_std = _phase_cfg["commands"].get("command_ang_vel_std", 0.5)
+    command_lin_vel_std = _phase_cfg["commands"]["command_lin_vel_std"]
+    command_ang_vel_std = _phase_cfg["commands"]["command_ang_vel_std"]
 
     command_x_range = (-1.0, 1.0)              # [m/s]
     command_y_range = (-1.0, 1.0)              # [m/s]

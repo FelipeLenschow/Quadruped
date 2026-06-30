@@ -572,19 +572,10 @@ class QuadrupedEnv(DirectRLEnv):
         # Increment air time
         self.feet_air_time += self.step_dt
         # Calculate reward for feet that just landed: (air_time - threshold) * first_contact
-        # Threshold from config is 0.5 (based on reference params), but commonly 0.5s or similar.
-        # Reference: params={"threshold": 0.5}.
+        # A normal trot has a swing time of ~0.15 to 0.25 seconds. 
+        # Using configurable threshold (default 0.2s) so it rewards a healthy step height without requiring gazelle jumps.
         rew_air_time = torch.sum(
-            (self.feet_air_time - 0.5) * first_contact.float(), dim=1
-        )
-        # Clip negative rewards? Usually we only reward > threshold.
-        # But (0.1 - 0.5) is negative. The reward usually is (air_time - threshold).clamp(min=0) OR just raw.
-        # Reference implementation `feet_air_time` usually clips or guards.
-        # "RewTerm(func=mdp.feet_air_time... threshold=0.5)"
-        # Let's assume we want to reward simply if > 0.5.
-        # Safe implementation: mask with command norm to avoid farming air time while standing still
-        rew_air_time = torch.sum(
-            (self.feet_air_time - 0.5).clamp(min=0.0) * first_contact.float(), dim=1
+            (self.feet_air_time - self.cfg.target_feet_air_time).clamp(min=0.0) * first_contact.float(), dim=1
         ) * (torch.norm(self.commands[:, :2], dim=1) > self.cfg.static_velocity_threshold)
         self.feet_air_time_reward_val = rew_air_time
 
@@ -687,6 +678,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_joint_vel_l2_static,
             self.cfg.rew_scale_base_height_l2,
             self.cfg.rew_scale_trot_symmetry,
+            self.cfg.hip_sym_multiplier,
             self.cfg.rew_scale_torque_symmetry,
             self.cfg.rew_scale_grf_balance,
             self.cfg.rew_scale_max_air_feet,
@@ -946,6 +938,7 @@ def compute_rewards(
     rew_scale_joint_vel_l2_static: float,
     rew_scale_base_height_l2: float,
     rew_scale_trot_symmetry: float,
+    hip_sym_multiplier: float,
     rew_scale_torque_symmetry: float,
     rew_scale_grf_balance: float,
     rew_scale_max_air_feet: float,
@@ -1070,7 +1063,9 @@ def compute_rewards(
         leg_sym_err = torch.sum(torch.square(fl_actions[:, 1:] - rr_actions[:, 1:]), dim=1) + \
                       torch.sum(torch.square(fr_actions[:, 1:] - rl_actions[:, 1:]), dim=1)
         
-        trot_sym_err = hip_sym_err + leg_sym_err
+        # Multiply hip error by hip_sym_multiplier to make the HAA penalty stronger 
+        # than the thigh/calf penalty, enforcing strict lateral symmetry.
+        trot_sym_err = (hip_sym_multiplier * hip_sym_err) + leg_sym_err
         rew_trot_symmetry = rew_scale_trot_symmetry * trot_sym_err
     else:
         rew_trot_symmetry = torch.zeros_like(rew_alive)
