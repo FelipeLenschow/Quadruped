@@ -366,6 +366,9 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     hip_sym_multiplier = _phase_cfg["rewards"]["hip_sym_multiplier"]
     rew_scale_torque_symmetry = _phase_cfg["rewards"]["rew_scale_torque_symmetry"]
     rew_scale_grf_balance = _phase_cfg["rewards"]["rew_scale_grf_balance"]
+    rew_scale_grf_target = _phase_cfg["rewards"].get("rew_scale_grf_target", 0.0)
+    rew_scale_max_contact_force = _phase_cfg["rewards"].get("rew_scale_max_contact_force", 0.0)
+    max_contact_force_threshold = _phase_cfg["rewards"].get("max_contact_force_threshold", 100.0)
     rew_scale_max_air_feet = _phase_cfg["rewards"]["rew_scale_max_air_feet"]
 
     # Stability penalties
@@ -401,8 +404,12 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # Gait reward masking: feet_air_time only counted when ‖cmd‖ > this
     static_velocity_threshold = _phase_cfg["commands"]["static_velocity_threshold"]
 
-    # Zero-command fraction
+    # Zero-command fraction and single-axis fractions
     zero_command_fraction = _phase_cfg["commands"]["zero_command_fraction"]
+    standby_duration_s = _phase_cfg["commands"].get("standby_duration_s", 0.5)
+    x_only_command_fraction = _phase_cfg["commands"].get("x_only_command_fraction", 0.0)
+    y_only_command_fraction = _phase_cfg["commands"].get("y_only_command_fraction", 0.0)
+    yaw_only_command_fraction = _phase_cfg["commands"].get("yaw_only_command_fraction", 0.0)
 
     # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  TERMINATION                                                          ║

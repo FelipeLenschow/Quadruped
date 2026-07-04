@@ -57,6 +57,9 @@ default: &default
     hip_sym_multiplier: 3.0
     rew_scale_torque_symmetry: 0.0
     rew_scale_grf_balance: 0.0
+    rew_scale_grf_target: 0.0
+    rew_scale_max_contact_force: 0.0
+    max_contact_force_threshold: 100.0
   commands:
     command_lin_vel_std: 0.5
     command_ang_vel_std: 0.5
@@ -74,6 +77,7 @@ phases:
     rewards:
       rew_scale_trot_symmetry: -0.1       # Bootstrap diagonal coordination, prevent pace
       rew_scale_grf_balance: -0.5          # Penalize uneven force distribution to prevent dragging
+      rew_scale_grf_target: -0.0           # Penalize deviation from mg/n weight share
 
   # Phase 2: Hardening — drop symmetry constraint, add DR + pushes
   phase2:

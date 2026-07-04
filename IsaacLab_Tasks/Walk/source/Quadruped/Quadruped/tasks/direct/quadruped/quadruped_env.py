@@ -129,6 +129,9 @@ class QuadrupedEnv(DirectRLEnv):
         self.feet_air_penalty_static_val = torch.zeros(self.num_envs, device=self.device)
         self.joint_vel_l2_static_val = torch.zeros(self.num_envs, device=self.device)
         self.grf_balance_val = torch.zeros(self.num_envs, device=self.device)
+        self.grf_target_val = torch.zeros(self.num_envs, device=self.device)
+        self.max_contact_force_val = torch.zeros(self.num_envs, device=self.device)
+        self.robot_total_weight = torch.zeros(self.num_envs, device=self.device)  # mg per env, updated on reset
         self.command_timer = torch.full(
             (self.num_envs,), 100.0, device=self.device
         )  # Force immediate resample
@@ -304,9 +307,32 @@ class QuadrupedEnv(DirectRLEnv):
         # Heading (unused for now, kept zero)
         self.target_commands[env_ids, 3] = 0.0
 
-        # Zero-command case (fraction set in cfg: zero_command_fraction)
-        zero_mask = torch.rand(len(env_ids), device=self.device) < self.cfg.zero_command_fraction
+        # Apply special command modes: zero, x-only, y-only, yaw-only
+        n_envs = len(env_ids)
+        rand_vals = torch.rand(n_envs, device=self.device)
+
+        # Cumulative thresholds for mutually exclusive assignment
+        p_zero = self.cfg.zero_command_fraction
+        p_x = p_zero + getattr(self.cfg, "x_only_command_fraction", 0.0)
+        p_y = p_x + getattr(self.cfg, "y_only_command_fraction", 0.0)
+        p_yaw = p_y + getattr(self.cfg, "yaw_only_command_fraction", 0.0)
+
+        # Zero-command case
+        zero_mask = rand_vals < p_zero
         self.target_commands[env_ids[zero_mask], :3] = 0.0
+
+        # X-only command case
+        x_only_mask = (rand_vals >= p_zero) & (rand_vals < p_x)
+        self.target_commands[env_ids[x_only_mask], 1:3] = 0.0
+
+        # Y-only command case
+        y_only_mask = (rand_vals >= p_x) & (rand_vals < p_y)
+        self.target_commands[env_ids[y_only_mask], 0] = 0.0
+        self.target_commands[env_ids[y_only_mask], 2] = 0.0
+
+        # Yaw-only command case
+        yaw_only_mask = (rand_vals >= p_y) & (rand_vals < p_yaw)
+        self.target_commands[env_ids[yaw_only_mask], 0:2] = 0.0
 
         # Reset timer
         self.command_timer[env_ids] = 0.0
@@ -372,9 +398,10 @@ class QuadrupedEnv(DirectRLEnv):
 
         import os
         if os.environ.get("QUADRUPED_TELEOP", "0") != "1":
-            if self.cfg.zero_command_fraction > 0.0:
-                # Apply 0.5s zero velocity standby ONLY at the start of the episode.
-                standby_mask = (self.episode_length_buf * self.step_dt) < 0.5
+            standby_duration = getattr(self.cfg, "standby_duration_s", 0.5)
+            if standby_duration > 0.0:
+                # Apply zero velocity standby ONLY at the start of the episode to allow stable standing.
+                standby_mask = (self.episode_length_buf * self.step_dt) < standby_duration
                 self.commands = torch.where(
                     standby_mask.unsqueeze(1),
                     torch.zeros_like(self.target_commands),
@@ -576,7 +603,7 @@ class QuadrupedEnv(DirectRLEnv):
         # Using configurable threshold (default 0.2s) so it rewards a healthy step height without requiring gazelle jumps.
         rew_air_time = torch.sum(
             (self.feet_air_time - self.cfg.target_feet_air_time).clamp(min=0.0) * first_contact.float(), dim=1
-        ) * (torch.norm(self.commands[:, :2], dim=1) > self.cfg.static_velocity_threshold)
+        ) * (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold)
         self.feet_air_time_reward_val = rew_air_time
 
         # -- Update foot height reward logic --
@@ -616,14 +643,27 @@ class QuadrupedEnv(DirectRLEnv):
             torch.sum(torch.square(self.joint_vel), dim=1) * static_mask
         )
 
-        # GRF balance: penalize uneven force distribution among contacting feet
-        feet_forces = torch.norm(self.net_contact_forces[:, self._feet_ids, :], dim=-1)  # (N, 4)
+        # GRF computations: two separate penalties
+        feet_forces_z = self.net_contact_forces[:, self._feet_ids, 2].abs()  # (N, 4)
         contact_float = contact.float()
         n_contact = contact_float.sum(dim=1).clamp(min=1.0)
-        mean_force = (feet_forces * contact_float).sum(dim=1) / n_contact
-        # Coefficient of variation squared (dimensionless, 0 = perfect balance)
-        force_var = ((feet_forces - mean_force.unsqueeze(1)).square() * contact_float).sum(dim=1) / n_contact
+
+        # 1) GRF balance (CV²): penalize relative unevenness among contacting feet
+        mean_force = (feet_forces_z * contact_float).sum(dim=1) / n_contact
+        force_var = ((feet_forces_z - mean_force.unsqueeze(1)).square() * contact_float).sum(dim=1) / n_contact
         self.grf_balance_val = force_var / mean_force.square().clamp(min=1.0)
+
+        # 2) GRF target (mg/n): penalize deviation from physics-based weight share
+        # Uses cached robot weight so force spikes can't inflate their own target.
+        target_force_per_foot = (self.robot_total_weight / n_contact).unsqueeze(1)  # mg/n
+        force_deviation = ((feet_forces_z - target_force_per_foot).square() * contact_float).sum(dim=1) / n_contact
+        self.grf_target_val = force_deviation / target_force_per_foot.squeeze(1).square().clamp(min=1.0)
+
+        # Max contact force penalty: penalize forces above threshold (default 100.0 N)
+        max_force_thresh = getattr(self.cfg, "max_contact_force_threshold", 100.0)
+        self.max_contact_force_val = torch.sum(
+            torch.square((feet_forces_z - max_force_thresh).clamp(min=0.0)), dim=1
+        )
 
         # Reset air time for feet in contact
         self.feet_air_time[contact] = 0.0
@@ -681,6 +721,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.hip_sym_multiplier,
             self.cfg.rew_scale_torque_symmetry,
             self.cfg.rew_scale_grf_balance,
+            self.cfg.rew_scale_grf_target,
+            self.cfg.rew_scale_max_contact_force,
             self.cfg.rew_scale_max_air_feet,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
@@ -703,6 +745,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.feet_air_penalty_static_val,
             self.joint_vel_l2_static_val,
             self.grf_balance_val,
+            self.grf_target_val,
+            self.max_contact_force_val,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
             self._fl_idx,
@@ -790,6 +834,10 @@ class QuadrupedEnv(DirectRLEnv):
             view.data.default_mass[local_ids_cpu, 0] + mass_noise[:, 0]
         )
         view.root_physx_view.set_masses(masses, local_ids_cpu)
+
+        # Cache total robot weight (mg) for physics-based GRF penalty
+        total_mass_per_env = masses[local_ids_cpu].sum(dim=1)  # sum all body masses
+        self.robot_total_weight[env_ids] = total_mass_per_env.to(self.device) * 9.81
 
         # 0.5 Randomize Center of Mass (Sim2Real)
         if self.cfg.com_displacement_range[0] != 0.0 or self.cfg.com_displacement_range[1] != 0.0:
@@ -941,6 +989,8 @@ def compute_rewards(
     hip_sym_multiplier: float,
     rew_scale_torque_symmetry: float,
     rew_scale_grf_balance: float,
+    rew_scale_grf_target: float,
+    rew_scale_max_contact_force: float,
     rew_scale_max_air_feet: float,
     target_base_height: float,
     command_lin_vel_std: float,
@@ -963,6 +1013,8 @@ def compute_rewards(
     feet_air_penalty_static_val: torch.Tensor,
     joint_vel_l2_static_val: torch.Tensor,
     grf_balance_val: torch.Tensor,
+    grf_target_val: torch.Tensor,
+    max_contact_force_val: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
     fl_idx: torch.Tensor,
@@ -1105,5 +1157,7 @@ def compute_rewards(
         + rew_trot_symmetry
         + rew_torque_symmetry
         + rew_scale_grf_balance * grf_balance_val
+        + rew_scale_grf_target * grf_target_val
+        + rew_scale_max_contact_force * max_contact_force_val
     )
     return total_reward
