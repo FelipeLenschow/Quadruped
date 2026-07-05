@@ -368,7 +368,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_grf_balance = _phase_cfg["rewards"]["rew_scale_grf_balance"]
     rew_scale_grf_target = _phase_cfg["rewards"].get("rew_scale_grf_target", 0.0)
     rew_scale_max_contact_force = _phase_cfg["rewards"].get("rew_scale_max_contact_force", 0.0)
-    max_contact_force_threshold = _phase_cfg["rewards"].get("max_contact_force_threshold", 100.0)
+    max_contact_force_pct = _phase_cfg["rewards"].get("max_contact_force_pct", 0.75)
     rew_scale_max_air_feet = _phase_cfg["rewards"]["rew_scale_max_air_feet"]
 
     # Stability penalties

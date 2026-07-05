@@ -659,11 +659,13 @@ class QuadrupedEnv(DirectRLEnv):
         force_deviation = ((feet_forces_z - target_force_per_foot).square() * contact_float).sum(dim=1) / n_contact
         self.grf_target_val = force_deviation / target_force_per_foot.squeeze(1).square().clamp(min=1.0)
 
-        # Max contact force penalty: penalize forces above threshold (default 100.0 N)
-        max_force_thresh = getattr(self.cfg, "max_contact_force_threshold", 100.0)
-        self.max_contact_force_val = torch.sum(
-            torch.square((feet_forces_z - max_force_thresh).clamp(min=0.0)), dim=1
-        )
+        # Max contact force penalty: penalize per-foot forces exceeding a fraction of robot weight
+        # Threshold = robot_total_weight * max_contact_force_pct (e.g., 0.75 = 75% of mg)
+        max_force_pct = getattr(self.cfg, "max_contact_force_pct", 0.75)
+        per_foot_thresh = self.robot_total_weight * max_force_pct  # (N,)
+        excess = (feet_forces_z - per_foot_thresh.unsqueeze(1)).clamp(min=0.0)  # (N, 4)
+        # Normalize by mg² to make dimensionless (scale-invariant across robot masses)
+        self.max_contact_force_val = torch.sum(excess.square(), dim=1) / self.robot_total_weight.square().clamp(min=1.0)
 
         # Reset air time for feet in contact
         self.feet_air_time[contact] = 0.0
