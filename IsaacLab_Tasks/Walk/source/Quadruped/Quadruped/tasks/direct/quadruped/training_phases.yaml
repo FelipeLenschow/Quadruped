@@ -52,7 +52,7 @@ default: &default
     # ── Disabled ──
     rew_scale_undesired_contacts: 0.0
     rew_scale_base_height_l2: 0.0
-    target_base_height: 0.32
+    target_base_height: 0.28
     rew_scale_trot_symmetry: 0.0
     hip_sym_multiplier: 3.0
     rew_scale_torque_symmetry: 0.0
@@ -60,10 +60,18 @@ default: &default
     rew_scale_grf_target: 0.0
     rew_scale_max_contact_force: 0.0
     max_contact_force_pct: 0.75
+    rew_scale_pos_deviation_l1: -1.5
+    max_pos_leash: 0.5
+    rew_scale_stall: -3.0
   commands:
-    command_lin_vel_std: 0.5
-    command_ang_vel_std: 0.5
-    static_velocity_threshold: 0.1
+    command_lin_vel_std: 0.3
+    command_ang_vel_std: 0.3
+    command_x_range: [-0.5, 0.75]
+    command_y_range: [-0.4, 0.4]
+    command_yaw_range: [-0.8, 0.8]
+    command_resampling_time: 10.0
+    static_velocity_threshold: 1.0e-6
+    stall_velocity_threshold: 0.05
     zero_command_fraction: 0.0
     standby_duration_s: 0.0
     x_only_command_fraction: 0.05
@@ -89,7 +97,7 @@ phases:
       joint_friction_range: [0.03, 0.3]
     events:
       enable_pushes: true
-      push_velocity_range: [-0.4, 0.4]
+      push_velocity_range: [-0.2, 0.2]
     rewards:
       rew_scale_trot_symmetry: -0.03         # Reduced but kept — maintains diagonal coordination
       rew_scale_grf_balance: -0.2
@@ -106,7 +114,7 @@ phases:
     domain_randomization:
       motor_backlash_range: [-0.02, 0.02]
     events:
-      push_velocity_range: [-0.8, 0.8]
+      push_velocity_range: [-0.4, 0.4]
 
   # Phase 4: Heavy DR + Multi-Robot
   phase4:
@@ -118,7 +126,7 @@ phases:
       action_latency_range_steps: [0, 1]
       motor_backlash_range: [-0.04, 0.04]
     events:
-      push_velocity_range: [-1.0, 1.0]
+      push_velocity_range: [-0.6, 0.6]
 
   # Phase 5: Sim2Real — Max randomization
   phase5:
@@ -132,6 +140,12 @@ phases:
   # Phase 6: Stabilization
   phase6:
     inherits: phase5
+    rewards:
+      rew_scale_pos_deviation_l1: -2.0
+      rew_scale_stall: -4.0
+    events:
+      enable_pushes: false
+      push_velocity_range: [0.0, 0.0]
     env:
-      max_timesteps: 100000
+      max_timesteps: 400000
     

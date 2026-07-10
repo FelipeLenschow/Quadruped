@@ -115,6 +115,7 @@ _TERRAIN_VISUAL_MATERIAL = sim_utils.MdlFileCfg(
     texture_scale=(0.25, 0.25),
 )
 
+
 TC_FLAT = TerrainImporterCfg(
     prim_path="/World/ground",
     terrain_type="plane",
@@ -356,6 +357,9 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # Velocity tracking
     rew_scale_track_lin_vel_xy_exp = _phase_cfg["rewards"]["rew_scale_track_lin_vel_xy_exp"]
     rew_scale_track_ang_vel_z_exp = _phase_cfg["rewards"]["rew_scale_track_ang_vel_z_exp"]
+    rew_scale_pos_deviation_l1 = _phase_cfg["rewards"].get("rew_scale_pos_deviation_l1", 0.0)
+    rew_scale_stall = _phase_cfg["rewards"].get("rew_scale_stall", 0.0)
+    max_pos_leash = _phase_cfg["rewards"].get("max_pos_leash", 0.4)
 
     # Gait shaping
     rew_scale_feet_air_time = _phase_cfg["rewards"]["rew_scale_feet_air_time"]
@@ -396,13 +400,14 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     command_lin_vel_std = _phase_cfg["commands"]["command_lin_vel_std"]
     command_ang_vel_std = _phase_cfg["commands"]["command_ang_vel_std"]
 
-    command_x_range = (-1.0, 1.0)              # [m/s]
-    command_y_range = (-1.0, 1.0)              # [m/s]
-    command_yaw_range = (-1.0, 1.0)            # [rad/s]
-    command_resampling_time = 10.0              # [s]
+    command_x_range = tuple(_phase_cfg["commands"]["command_x_range"])      # [m/s]
+    command_y_range = tuple(_phase_cfg["commands"]["command_y_range"])      # [m/s]
+    command_yaw_range = tuple(_phase_cfg["commands"]["command_yaw_range"])    # [rad/s]
+    command_resampling_time = _phase_cfg["commands"]["command_resampling_time"] # [s]
 
     # Gait reward masking: feet_air_time only counted when ‖cmd‖ > this
     static_velocity_threshold = _phase_cfg["commands"]["static_velocity_threshold"]
+    stall_velocity_threshold = _phase_cfg["commands"]["stall_velocity_threshold"]
 
     # Zero-command fraction and single-axis fractions
     zero_command_fraction = _phase_cfg["commands"]["zero_command_fraction"]
