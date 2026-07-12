@@ -1129,8 +1129,8 @@ def compute_rewards(
         torch.square(actions - previous_actions), dim=1
     )
 
-    # Max Air Feet Penalty (Penalize 3 or 4 feet in the air at once)
-    rew_max_air_feet = rew_scale_max_air_feet * (feet_air_penalty_val >= 3.0).float()
+    # 3-Leg Grounded Support Gait Penalty (Penalize having > 1 foot in the air at any time)
+    rew_max_air_feet = rew_scale_max_air_feet * torch.clamp(feet_air_penalty_val - 1.0, min=0.0)
 
     # 9. Feet Air Time Reward
     # Computed in _get_observations
