@@ -38,9 +38,18 @@ def resolve_phase(all_phases, phase_name):
     import copy
     
     def deep_update(d, u):
+        if not isinstance(d, collections.abc.Mapping):
+            d = {}
+        if not isinstance(u, collections.abc.Mapping):
+            return d
         for k, v in u.items():
+            if v is None:
+                continue
             if isinstance(v, collections.abc.Mapping):
-                d[k] = deep_update(d.get(k, {}), v)
+                target = d.get(k, {})
+                if not isinstance(target, collections.abc.Mapping):
+                    target = {}
+                d[k] = deep_update(target, v)
             else:
                 d[k] = v
         return d
