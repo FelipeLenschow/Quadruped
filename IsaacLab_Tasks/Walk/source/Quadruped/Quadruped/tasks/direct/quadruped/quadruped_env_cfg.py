@@ -215,8 +215,8 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     )
 
     # ── Observation / Action spaces ───────────────────────────────────────────
-    observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 49))
-    # obs = [lin_vel(3) + ang_vel(3) + gravity(3) + cmd(4) + jpos(12) + jvel(12) + actions(12)] = 49
+    observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 51))
+    # obs = [lin_vel(3) + ang_vel(3) + gravity(3) + cmd(4) + jpos(12) + jvel(12) + actions(12) + gait_clock(2)] = 51
     action_space = 12
     state_space = 0
     action_scale = _phase_cfg["env"]["action_scale"]
@@ -360,6 +360,9 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_pos_deviation_l1 = _phase_cfg["rewards"].get("rew_scale_pos_deviation_l1", 0.0)
     rew_scale_stall = _phase_cfg["rewards"].get("rew_scale_stall", 0.0)
     max_pos_leash = _phase_cfg["rewards"].get("max_pos_leash", 0.4)
+    rew_scale_gait_phase = _phase_cfg["rewards"].get("rew_scale_gait_phase", 0.0)
+    gait_stride_length = _phase_cfg["rewards"].get("gait_stride_length", 0.12)
+    gait_swing_sigma = _phase_cfg["rewards"].get("gait_swing_sigma", 0.1)
 
     # Gait shaping
     rew_scale_feet_air_time = _phase_cfg["rewards"]["rew_scale_feet_air_time"]

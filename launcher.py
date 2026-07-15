@@ -654,7 +654,7 @@ def main():
 
     # Final Command Assembly
     abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
-    obs_dim = env.get("QUADRUPED_OBS_DIM", "49")
+    obs_dim = env.get("QUADRUPED_OBS_DIM", "51")
 
     def get_robot_key(cfg):
         return {

@@ -135,6 +135,12 @@ class QuadrupedEnv(DirectRLEnv):
         self.ref_yaw = torch.zeros((self.num_envs,), device=self.device)
         self.pos_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.stall_val = torch.zeros(self.num_envs, device=self.device)
+        self.gait_phase = torch.zeros(self.num_envs, device=self.device)  # φ ∈ [0, 1)
+        self.gait_phase_reward_val = torch.zeros(self.num_envs, device=self.device)
+        # Walk gait phase offsets: FL → RR → FR → RL, each leg 0.25 apart
+        self.swing_phase_offsets = torch.tensor(
+            [0.0, 0.5, 0.75, 0.25], device=self.device  # FL, FR, RL, RR
+        )
         self.robot_total_weight = torch.zeros(self.num_envs, device=self.device)  # mg per env, updated on reset
         self.command_timer = torch.full(
             (self.num_envs,), 100.0, device=self.device
@@ -510,6 +516,12 @@ class QuadrupedEnv(DirectRLEnv):
         self.ref_pos_xy[:, 0] += vx_world * self.step_dt
         self.ref_pos_xy[:, 1] += vy_world * self.step_dt
 
+        # Advance gait phase clock — frequency proportional to commanded speed
+        stride_length = getattr(self.cfg, "gait_stride_length", 0.12)
+        cmd_speed = torch.norm(self.commands[:, :2], dim=1)
+        gait_freq = cmd_speed / max(stride_length, 1e-6)  # Hz
+        self.gait_phase = (self.gait_phase + gait_freq * self.step_dt) % 1.0
+
     def _apply_action(self) -> None:
         """
         Applies the neural network action to the robot joints.
@@ -714,7 +726,25 @@ class QuadrupedEnv(DirectRLEnv):
         stall_mask = (cmd_speed > stall_thresh).float()
         self.stall_val = stall_mask * torch.clamp(cmd_speed - robot_speed, min=0.0)
 
+        # Gait phase clock reward: reward each foot for being airborne during its swing window
+        swing_sigma = getattr(self.cfg, "gait_swing_sigma", 0.1)
+        # Circular distance from current phase to each leg's swing center
+        # swing_phase_offsets: [FL, FR, RL, RR] — matches contact sensor foot order
+        phase_diff = self.gait_phase.unsqueeze(1) - self.swing_phase_offsets.unsqueeze(0)  # (N, 4)
+        phase_dist = torch.min(torch.abs(phase_diff), 1.0 - torch.abs(phase_diff))  # circular
+        swing_window = torch.exp(-phase_dist.square() / (swing_sigma ** 2))  # (N, 4)
+        # Reward: foot in air during its swing window
+        gait_match = swing_window * (~contact).float()  # (N, 4)
+        # Mask by commanded speed — no gait reward when standing still
+        gait_cmd_mask = (cmd_speed > getattr(self.cfg, "stall_velocity_threshold", 0.05)).float()
+        self.gait_phase_reward_val = torch.sum(gait_match, dim=1) * gait_cmd_mask
+
         # Observations (unscaled)
+        # Gait phase clock encoded as sin/cos (2 extra dims)
+        two_pi_phase = 2.0 * 3.141592653589793 * self.gait_phase
+        gait_sin = torch.sin(two_pi_phase).unsqueeze(1)  # (N, 1)
+        gait_cos = torch.cos(two_pi_phase).unsqueeze(1)  # (N, 1)
+
         obs = torch.cat(
             (
                 self.base_lin_vel,
@@ -724,6 +754,8 @@ class QuadrupedEnv(DirectRLEnv):
                 self.joint_pos - self.desired_joint_pos,
                 self.joint_vel,
                 self.actions,
+                gait_sin,
+                gait_cos,
             ),
             dim=-1,
         )
@@ -770,6 +802,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_max_air_feet,
             self.cfg.rew_scale_pos_deviation_l1,
             self.cfg.rew_scale_stall,
+            self.cfg.rew_scale_gait_phase,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
@@ -795,6 +828,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.max_contact_force_val,
             self.pos_deviation_val,
             self.stall_val,
+            self.gait_phase_reward_val,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
             self._fl_idx,
@@ -854,6 +888,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.feet_air_time[env_ids] = 0.0
             self.last_joint_vel[env_ids] = 0.0
             self.previous_actions[env_ids] = 0.0
+            self.gait_phase[env_ids] = 0.0
         else:
             super()._reset_idx(env_ids)
             # Standard Mass/Friction/State randomization
@@ -1009,6 +1044,7 @@ class QuadrupedEnv(DirectRLEnv):
 
         # 4. Reset Action Buffer
         self.actions[env_ids] = 0.0
+        self.gait_phase[env_ids] = 0.0
         self.root_pos_w[env_ids] = default_root_state[:, :3]
         self.root_quat_w[env_ids] = default_root_state[:, 3:7]
 
@@ -1044,6 +1080,7 @@ def compute_rewards(
     rew_scale_max_air_feet: float,
     rew_scale_pos_deviation_l1: float,
     rew_scale_stall: float,
+    rew_scale_gait_phase: float,
     target_base_height: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
@@ -1069,6 +1106,7 @@ def compute_rewards(
     max_contact_force_val: torch.Tensor,
     pos_deviation_val: torch.Tensor,
     stall_val: torch.Tensor,
+    gait_phase_reward_val: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
     fl_idx: torch.Tensor,
@@ -1195,6 +1233,9 @@ def compute_rewards(
     # 17. Linear Speed Deficit (Stall) Penalty
     rew_stall = rew_scale_stall * stall_val
 
+    # 18. Gait Phase Clock Reward (foot-in-air during swing window)
+    rew_gait_phase = rew_scale_gait_phase * gait_phase_reward_val
+
     total_reward = (
         rew_alive
         + rew_undesired_contacts
@@ -1221,5 +1262,6 @@ def compute_rewards(
         + rew_scale_max_contact_force * max_contact_force_val
         + rew_pos_deviation
         + rew_stall
+        + rew_gait_phase
     )
     return total_reward

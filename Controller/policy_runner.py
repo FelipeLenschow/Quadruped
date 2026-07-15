@@ -86,7 +86,12 @@ class PolicyRunner:
         # Joint mapping: Identity by default (matches our standardized drivers)
         self.mapping = list(range(12))
 
-        self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 49))
+        self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 51))
+
+        # Gait phase clock state (for obs_dim == 51)
+        self.gait_phase = 0.0  # φ ∈ [0, 1)
+        self.gait_stride_length = 0.12  # meters per full gait cycle
+        self._last_infer_time = None
         self.is_jit = checkpoint_path.endswith(".jit") or (
             checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path)
         )
@@ -136,7 +141,7 @@ class PolicyRunner:
     def _detect_jit_obs_dim(self, model):
         # Infer obs_dim from the model's forward signature or weight shape if possible
         # For now, we rely on the environment variable or common defaults
-        return int(os.environ.get("QUADRUPED_OBS_DIM", 49))
+        return int(os.environ.get("QUADRUPED_OBS_DIM", 51))
 
     def _inspect_checkpoint(self, path):
         """Detect obs_dim and layer sizes from checkpoint keys and shapes."""
@@ -237,7 +242,12 @@ class PolicyRunner:
             last_actions,
         ]
 
-        if self.obs_dim == 54:
+        if self.obs_dim == 51:
+            # Gait phase clock: sin(2πφ) and cos(2πφ)
+            two_pi_phase = 2.0 * np.pi * self.gait_phase
+            gait_clock = np.array([np.sin(two_pi_phase), np.cos(two_pi_phase)], dtype=np.float32)
+            obs_parts.append(gait_clock)
+        elif self.obs_dim == 54:
             f_contact = np.array(state.feet_contact, dtype=np.float32) if hasattr(state, "feet_contact") else np.zeros(4, dtype=np.float32)
             b_height = np.array([state.base_pos[2]], dtype=np.float32) if hasattr(state, "base_pos") else np.array([0.35], dtype=np.float32)
             obs_parts.append(f_contact)
@@ -288,6 +298,16 @@ class PolicyRunner:
         inf_time = t_end - t_start
         self.inf_times.append(inf_time)
         self.last_actions[:] = actions
+
+        # Advance gait phase clock based on commanded speed
+        if self.obs_dim == 51:
+            cmd_speed = np.sqrt(commands[0]**2 + commands[1]**2)
+            gait_freq = cmd_speed / max(self.gait_stride_length, 1e-6)
+            dt = inf_time  # use actual elapsed time
+            if self._last_infer_time is not None:
+                dt = t_start - self._last_infer_time
+            self._last_infer_time = t_start
+            self.gait_phase = (self.gait_phase + gait_freq * dt) % 1.0
 
         if show_stats and len(self.inf_times) >= 100:
             # Stats are now handled by the caller to avoid terminal spam
