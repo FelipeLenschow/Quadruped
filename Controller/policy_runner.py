@@ -90,7 +90,6 @@ class PolicyRunner:
 
         # Gait phase clock state (for obs_dim == 51)
         self.gait_phase = 0.0  # φ ∈ [0, 1)
-        self.gait_stride_length = 0.12  # meters per full gait cycle
         self._last_infer_time = None
         self.is_jit = checkpoint_path.endswith(".jit") or (
             checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path)
@@ -301,8 +300,9 @@ class PolicyRunner:
 
         # Advance gait phase clock based on commanded speed
         if self.obs_dim == 51:
-            cmd_speed = np.sqrt(commands[0]**2 + commands[1]**2)
-            gait_freq = cmd_speed / max(self.gait_stride_length, 1e-6)
+            cmd_speed = np.sqrt(commands[0]**2 + commands[1]**2) + 0.25 * abs(commands[2])
+            # f(x) = 2(1 - e^(-4x)) + 0.5x, x = effective cmd speed
+            gait_freq = 2.0 * (1.0 - np.exp(-4.0 * cmd_speed)) + 0.5 * cmd_speed
             dt = inf_time  # use actual elapsed time
             if self._last_infer_time is not None:
                 dt = t_start - self._last_infer_time

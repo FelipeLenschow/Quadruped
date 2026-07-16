@@ -80,7 +80,7 @@ if _is_sequence:
             _curriculum_phases.append({
                 "name": k,
                 "cfg": cfg,
-                "max_timesteps": cfg["env"].get("max_timesteps", 500000)
+                "max_timesteps": cfg["env"]["max_timesteps"]
             })
 
 _vel_range = _phase_cfg["events"]["push_velocity_range"] if _phase_cfg["events"]["enable_pushes"] else None
@@ -230,10 +230,10 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     state_space = 0
     action_scale = _phase_cfg["env"]["action_scale"]
     
-    base_max_timesteps = _phase_cfg["env"].get("max_timesteps", 500000)
+    base_max_timesteps = _phase_cfg["env"]["max_timesteps"]
     _total_timesteps = base_max_timesteps
     for p in _curriculum_phases:
-        _total_timesteps += p["cfg"]["env"].get("max_timesteps", 500000)
+        _total_timesteps += p["cfg"]["env"]["max_timesteps"]
     max_timesteps = _total_timesteps
 
     curriculum_phases = _curriculum_phases
@@ -252,7 +252,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
         env_spacing=2.5, 
         replicate_physics=(_rob != "RANDOM"),
     )
-    _ter = os.environ.get("QUADRUPED_TERRAIN", _phase_cfg["env"].get("terrain", "rough"))
+    _ter = os.environ.get("QUADRUPED_TERRAIN", _phase_cfg["env"]["terrain"])
     scene.terrain = (
         TC_ROUGH if _ter == "rough" else (TC_FLAT if _ter == "flat" else TC_ALL)
     )
@@ -273,8 +273,8 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # ╚════════════════════════════════════════════════════════════════════════╝
 
     # Base mass and Center of Mass (CoM) Randomization
-    payload_mass_range = tuple(_phase_cfg["domain_randomization"].get("payload_mass_range", [-1.0, 3.0]))
-    com_displacement_range = tuple(_phase_cfg["domain_randomization"].get("com_displacement_range", [0.0, 0.0]))
+    payload_mass_range = tuple(_phase_cfg["domain_randomization"]["payload_mass_range"])
+    com_displacement_range = tuple(_phase_cfg["domain_randomization"]["com_displacement_range"])
 
     # Joint friction — viscous drag
     joint_friction_range = tuple(_phase_cfg["domain_randomization"]["joint_friction_range"])
@@ -366,12 +366,12 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # Velocity tracking
     rew_scale_track_lin_vel_xy_exp = _phase_cfg["rewards"]["rew_scale_track_lin_vel_xy_exp"]
     rew_scale_track_ang_vel_z_exp = _phase_cfg["rewards"]["rew_scale_track_ang_vel_z_exp"]
-    rew_scale_pos_deviation_l1 = _phase_cfg["rewards"].get("rew_scale_pos_deviation_l1", 0.0)
-    rew_scale_stall = _phase_cfg["rewards"].get("rew_scale_stall", 0.0)
-    max_pos_leash = _phase_cfg["rewards"].get("max_pos_leash", 0.4)
-    rew_scale_gait_phase = _phase_cfg["rewards"].get("rew_scale_gait_phase", 0.0)
-    gait_stride_length = _phase_cfg["rewards"].get("gait_stride_length", 0.12)
-    gait_swing_sigma = _phase_cfg["rewards"].get("gait_swing_sigma", 0.1)
+    rew_scale_pos_deviation_l1 = _phase_cfg["rewards"]["rew_scale_pos_deviation_l1"]
+    rew_scale_stall = _phase_cfg["rewards"]["rew_scale_stall"]
+    max_pos_leash = _phase_cfg["rewards"]["max_pos_leash"]
+    rew_scale_gait_phase = _phase_cfg["rewards"]["rew_scale_gait_phase"]
+    rew_scale_gait_phase_l1 = _phase_cfg["rewards"]["rew_scale_gait_phase_l1"]
+    gait_swing_sigma = _phase_cfg["rewards"]["gait_swing_sigma"]
 
     # Gait shaping
     rew_scale_feet_air_time = _phase_cfg["rewards"]["rew_scale_feet_air_time"]
@@ -382,9 +382,9 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     hip_sym_multiplier = _phase_cfg["rewards"]["hip_sym_multiplier"]
     rew_scale_torque_symmetry = _phase_cfg["rewards"]["rew_scale_torque_symmetry"]
     rew_scale_grf_balance = _phase_cfg["rewards"]["rew_scale_grf_balance"]
-    rew_scale_grf_target = _phase_cfg["rewards"].get("rew_scale_grf_target", 0.0)
-    rew_scale_max_contact_force = _phase_cfg["rewards"].get("rew_scale_max_contact_force", 0.0)
-    max_contact_force_pct = _phase_cfg["rewards"].get("max_contact_force_pct", 0.75)
+    rew_scale_grf_target = _phase_cfg["rewards"]["rew_scale_grf_target"]
+    rew_scale_max_contact_force = _phase_cfg["rewards"]["rew_scale_max_contact_force"]
+    max_contact_force_pct = _phase_cfg["rewards"]["max_contact_force_pct"]
     rew_scale_max_air_feet = _phase_cfg["rewards"]["rew_scale_max_air_feet"]
 
     # Stability penalties
@@ -423,10 +423,10 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
 
     # Zero-command fraction and single-axis fractions
     zero_command_fraction = _phase_cfg["commands"]["zero_command_fraction"]
-    standby_duration_s = _phase_cfg["commands"].get("standby_duration_s", 0.5)
-    x_only_command_fraction = _phase_cfg["commands"].get("x_only_command_fraction", 0.0)
-    y_only_command_fraction = _phase_cfg["commands"].get("y_only_command_fraction", 0.0)
-    yaw_only_command_fraction = _phase_cfg["commands"].get("yaw_only_command_fraction", 0.0)
+    standby_duration_s = _phase_cfg["commands"]["standby_duration_s"]
+    x_only_command_fraction = _phase_cfg["commands"]["x_only_command_fraction"]
+    y_only_command_fraction = _phase_cfg["commands"]["y_only_command_fraction"]
+    yaw_only_command_fraction = _phase_cfg["commands"]["yaw_only_command_fraction"]
 
     # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  TERMINATION                                                          ║
