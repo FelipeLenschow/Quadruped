@@ -138,9 +138,15 @@ class QuadrupedEnv(DirectRLEnv):
         self.gait_phase = torch.zeros(self.num_envs, device=self.device)  # φ ∈ [0, 1)
         self.gait_phase_reward_val = torch.zeros(self.num_envs, device=self.device)
         self.gait_phase_l1_penalty_val = torch.zeros(self.num_envs, device=self.device)
-        # Walk gait phase offsets: FL → RR → FR → RL, each leg 0.25 apart
-        self.swing_phase_offsets = torch.tensor(
-            [0.0, 0.5, 0.75, 0.25], device=self.device  # FL, FR, RL, RR
+        self.max_air_feet_allowed = torch.ones(self.num_envs, device=self.device)  # 1=walk, 2=trot
+        # Gait phase offsets: two patterns blended by commanded speed
+        # Walk (4-beat cadence): FL, FR, RL, RR each 0.25 apart
+        # Trot (diagonal pairs): FL+RR swing together, FR+RL swing together
+        self.swing_phase_offsets_walk = torch.tensor(
+            self.cfg.gait_walk_offsets, device=self.device  # FL, FR, RL, RR
+        )
+        self.swing_phase_offsets_trot = torch.tensor(
+            self.cfg.gait_trot_offsets, device=self.device  # FL, FR, RL, RR
         )
         self.robot_total_weight = torch.zeros(self.num_envs, device=self.device)  # mg per env, updated on reset
         self.command_timer = torch.full(
@@ -728,11 +734,21 @@ class QuadrupedEnv(DirectRLEnv):
         stall_mask = (cmd_speed > stall_thresh).float()
         self.stall_val = stall_mask * torch.clamp(cmd_speed - robot_speed, min=0.0)
 
-        # Gait phase clock reward: reward each foot for being airborne during its swing window
+        # Gait phase clock reward: reward each foot for being airborne during its swing window.
+        # Phase offsets blend smoothly from walk (low-speed) to trot (high-speed) via sigmoid.
         swing_sigma = self.cfg.gait_swing_sigma
-        # Circular distance from current phase to each leg's swing center
-        # swing_phase_offsets: [FL, FR, RL, RR] — matches contact sensor foot order
-        phase_diff = self.gait_phase.unsqueeze(1) - self.swing_phase_offsets.unsqueeze(0)  # (N, 4)
+        # Per-env blend weight: 0 = pure walk, 1 = pure trot
+        trot_thresh = self.cfg.gait_trot_speed_threshold
+        trot_sharp  = self.cfg.gait_trot_blend_sharpness
+        trot_blend  = torch.sigmoid((cmd_speed - trot_thresh) * trot_sharp).unsqueeze(1)  # (N, 1)
+        # Allowed airborne feet scales from 1 (walk) to 2 (trot)
+        self.max_air_feet_allowed = 1.0 + trot_blend.squeeze(1)  # (N,)
+        active_offsets = (
+            (1.0 - trot_blend) * self.swing_phase_offsets_walk.unsqueeze(0)
+            + trot_blend        * self.swing_phase_offsets_trot.unsqueeze(0)
+        )  # (N, 4)
+        # Circular distance from current phase to each leg's blended swing center
+        phase_diff = self.gait_phase.unsqueeze(1) - active_offsets  # (N, 4)
         phase_dist = torch.min(torch.abs(phase_diff), 1.0 - torch.abs(phase_diff))  # circular
         swing_window = torch.exp(-phase_dist.square() / (swing_sigma ** 2))  # (N, 4)
         # Reward: foot in air during its swing window
@@ -837,6 +853,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.stall_val,
             self.gait_phase_reward_val,
             self.gait_phase_l1_penalty_val,
+            self.max_air_feet_allowed,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
             self._fl_idx,
@@ -1117,6 +1134,7 @@ def compute_rewards(
     stall_val: torch.Tensor,
     gait_phase_reward_val: torch.Tensor,
     gait_phase_l1_penalty_val: torch.Tensor,
+    max_air_feet_allowed: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
     fl_idx: torch.Tensor,
@@ -1177,8 +1195,11 @@ def compute_rewards(
         torch.square(actions - previous_actions), dim=1
     )
 
-    # 3-Leg Grounded Support Gait Penalty (Penalize having > 1 foot in the air at any time)
-    rew_max_air_feet = rew_scale_max_air_feet * torch.clamp(feet_air_penalty_val - 1.0, min=0.0)
+    # 3-Leg / 2-Leg Grounded Support Penalty
+    # Walk expects ≤1 foot in the air; trot expects ≤2. Threshold blends per env via max_air_feet_allowed.
+    rew_max_air_feet = rew_scale_max_air_feet * torch.clamp(
+        feet_air_penalty_val - max_air_feet_allowed, min=0.0
+    )
 
     # 9. Feet Air Time Reward
     # Computed in _get_observations
