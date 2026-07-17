@@ -65,7 +65,11 @@ class QuadrupedEnv(DirectRLEnv):
                     self.robot_feet_ids.append(f_ids)
 
             # Contact sensor mapping (relative to sensor matched bodies)
-            self._feet_ids, _ = self._contact_sensor.find_bodies(".*_foot")
+            c_feet_ids, _ = self._contact_sensor.find_bodies(".*_foot")
+            if len(c_feet_ids) >= 4:
+                self._feet_ids = [c_feet_ids[2], c_feet_ids[3], c_feet_ids[0], c_feet_ids[1]]
+            else:
+                self._feet_ids = c_feet_ids
         else:
             self.joint_pos = self.robot.data.joint_pos
             self.joint_vel = self.robot.data.joint_vel
@@ -87,7 +91,11 @@ class QuadrupedEnv(DirectRLEnv):
                 feet_ids[1],
             ]
             # Contact sensor mapping
-            self._feet_ids, _ = self._contact_sensor.find_bodies(".*_foot")
+            c_feet_ids, _ = self._contact_sensor.find_bodies(".*_foot")
+            if len(c_feet_ids) >= 4:
+                self._feet_ids = [c_feet_ids[2], c_feet_ids[3], c_feet_ids[0], c_feet_ids[1]]
+            else:
+                self._feet_ids = c_feet_ids
             
         self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*_thigh|.*_calf|trunk")
 

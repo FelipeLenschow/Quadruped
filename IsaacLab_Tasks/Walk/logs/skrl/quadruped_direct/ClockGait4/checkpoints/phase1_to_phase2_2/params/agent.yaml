@@ -60,7 +60,7 @@ agent:
   time_limit_bootstrap: false
   experiment:
     directory: /home/05680435969@corp.udesc.br/Quadruped/IsaacLab_Tasks/Walk/logs/skrl/quadruped_direct
-    experiment_name: 2026-07-17_01-08-26_ppo_torch_phase1_to_phase2
+    experiment_name: 2026-07-17_11-52-27_ppo_torch_phase1_to_phase2
     write_interval: auto
     checkpoint_interval: auto
 trainer:
