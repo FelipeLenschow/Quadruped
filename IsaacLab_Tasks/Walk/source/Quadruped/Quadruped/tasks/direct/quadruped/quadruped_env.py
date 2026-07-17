@@ -138,15 +138,10 @@ class QuadrupedEnv(DirectRLEnv):
         self.gait_phase = torch.zeros(self.num_envs, device=self.device)  # φ ∈ [0, 1)
         self.gait_phase_reward_val = torch.zeros(self.num_envs, device=self.device)
         self.gait_phase_l1_penalty_val = torch.zeros(self.num_envs, device=self.device)
-        self.max_air_feet_allowed = torch.ones(self.num_envs, device=self.device)  # 1=walk, 2=trot
-        # Gait phase offsets: two patterns blended by commanded speed
-        # Walk (4-beat cadence): FL, FR, RL, RR each 0.25 apart
-        # Trot (diagonal pairs): FL+RR swing together, FR+RL swing together
-        self.swing_phase_offsets_walk = torch.tensor(
-            self.cfg.gait_walk_offsets, device=self.device  # FL, FR, RL, RR
-        )
-        self.swing_phase_offsets_trot = torch.tensor(
-            self.cfg.gait_trot_offsets, device=self.device  # FL, FR, RL, RR
+        self.max_air_feet_allowed = torch.full((self.num_envs,), 2.0, device=self.device)  # 2 for trot
+        # Gait phase offsets
+        self.swing_phase_offsets = torch.tensor(
+            self.cfg.gait_offsets, device=self.device  # FL, FR, RL, RR
         )
         self.robot_total_weight = torch.zeros(self.num_envs, device=self.device)  # mg per env, updated on reset
         self.command_timer = torch.full(
@@ -523,11 +518,11 @@ class QuadrupedEnv(DirectRLEnv):
         self.ref_pos_xy[:, 0] += vx_world * self.step_dt
         self.ref_pos_xy[:, 1] += vy_world * self.step_dt
 
-        # Advance gait phase clock — f(x) = 2(1 - e^(-4x)) + 0.5x, x = effective cmd speed
+        # Advance gait phase clock — f(x) = 0.3(1 - e^(-7.5x)) + 1.3x, x = effective cmd speed
         lin_speed = torch.norm(self.commands[:, :2], dim=1)
         yaw_speed = 0.25 * torch.abs(self.commands[:, 2])  # effective foot speed at ~0.25m radius
         cmd_speed = lin_speed + yaw_speed
-        gait_freq = 2.0 * (1.0 - torch.exp(-4.0 * cmd_speed)) + 0.5 * cmd_speed  # Hz
+        gait_freq = 0.3 * (1.0 - torch.exp(-7.5 * cmd_speed)) + 1.3 * cmd_speed  # Hz
         self.gait_phase = (self.gait_phase + gait_freq * self.step_dt) % 1.0
 
     def _apply_action(self) -> None:
@@ -735,19 +730,10 @@ class QuadrupedEnv(DirectRLEnv):
         self.stall_val = stall_mask * torch.clamp(cmd_speed - robot_speed, min=0.0)
 
         # Gait phase clock reward: reward each foot for being airborne during its swing window.
-        # Phase offsets blend smoothly from walk (low-speed) to trot (high-speed) via sigmoid.
         swing_sigma = self.cfg.gait_swing_sigma
-        # Per-env blend weight: 0 = pure walk, 1 = pure trot
-        trot_thresh = self.cfg.gait_trot_speed_threshold
-        trot_sharp  = self.cfg.gait_trot_blend_sharpness
-        trot_blend  = torch.sigmoid((cmd_speed - trot_thresh) * trot_sharp).unsqueeze(1)  # (N, 1)
-        # Allowed airborne feet scales from 1 (walk) to 2 (trot)
-        self.max_air_feet_allowed = 1.0 + trot_blend.squeeze(1)  # (N,)
-        active_offsets = (
-            (1.0 - trot_blend) * self.swing_phase_offsets_walk.unsqueeze(0)
-            + trot_blend        * self.swing_phase_offsets_trot.unsqueeze(0)
-        )  # (N, 4)
-        # Circular distance from current phase to each leg's blended swing center
+        
+        active_offsets = self.swing_phase_offsets.unsqueeze(0)  # (1, 4)
+        # Circular distance from current phase to each leg's swing center
         phase_diff = self.gait_phase.unsqueeze(1) - active_offsets  # (N, 4)
         phase_dist = torch.min(torch.abs(phase_diff), 1.0 - torch.abs(phase_diff))  # circular
         swing_window = torch.exp(-phase_dist.square() / (swing_sigma ** 2))  # (N, 4)
@@ -756,7 +742,12 @@ class QuadrupedEnv(DirectRLEnv):
         # Mask by commanded speed — no gait reward/penalty when standing still (includes yaw speed)
         gait_cmd_speed = cmd_speed + 0.25 * torch.abs(self.commands[:, 2])
         gait_cmd_mask = (gait_cmd_speed > getattr(self.cfg, "stall_velocity_threshold", 0.05)).float()
-        self.gait_phase_reward_val = torch.sum(gait_match, dim=1) * gait_cmd_mask
+        # Normalize by expected simultaneous airborne legs so walk (1 leg/window) and
+        # trot (2 legs/window) yield equal per-step reward when executed correctly.
+        # Without this, trot earns 2× the gait reward at every timestep and dominates at all speeds.
+        self.gait_phase_reward_val = (
+            torch.sum(gait_match, dim=1) / self.max_air_feet_allowed
+        ) * gait_cmd_mask
         # L1 penalty: foot in air when outside its designated swing window (airborne distance past sigma)
         gait_l1_error = torch.clamp(phase_dist - swing_sigma, min=0.0) * (~contact).float()  # (N, 4)
         self.gait_phase_l1_penalty_val = torch.sum(gait_l1_error, dim=1) * gait_cmd_mask

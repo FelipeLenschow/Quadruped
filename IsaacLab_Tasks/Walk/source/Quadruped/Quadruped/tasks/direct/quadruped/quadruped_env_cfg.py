@@ -372,11 +372,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_gait_phase = _phase_cfg["rewards"]["rew_scale_gait_phase"]
     rew_scale_gait_phase_l1 = _phase_cfg["rewards"]["rew_scale_gait_phase_l1"]
     gait_swing_sigma = _phase_cfg["rewards"]["gait_swing_sigma"]
-    # Gait pattern blending (walk → trot above threshold)
-    gait_walk_offsets: list = list(_phase_cfg["rewards"]["gait_walk_offsets"])
-    gait_trot_offsets: list = list(_phase_cfg["rewards"]["gait_trot_offsets"])
-    gait_trot_speed_threshold: float = float(_phase_cfg["rewards"]["gait_trot_speed_threshold"])
-    gait_trot_blend_sharpness: float = float(_phase_cfg["rewards"]["gait_trot_blend_sharpness"])
+    gait_offsets: list = list(_phase_cfg["rewards"]["gait_offsets"])
 
     # Gait shaping
     rew_scale_feet_air_time = _phase_cfg["rewards"]["rew_scale_feet_air_time"]

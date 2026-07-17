@@ -301,8 +301,8 @@ class PolicyRunner:
         # Advance gait phase clock based on commanded speed
         if self.obs_dim == 51:
             cmd_speed = np.sqrt(commands[0]**2 + commands[1]**2) + 0.25 * abs(commands[2])
-            # f(x) = 2(1 - e^(-4x)) + 0.5x, x = effective cmd speed
-            gait_freq = 2.0 * (1.0 - np.exp(-4.0 * cmd_speed)) + 0.5 * cmd_speed
+            # f(x) = 0.3(1 - e^(-7.5x)) + 1.3x, x = effective cmd speed
+            gait_freq = 0.3 * (1.0 - np.exp(-7.5 * cmd_speed)) + 1.3 * cmd_speed
             dt = inf_time  # use actual elapsed time
             if self._last_infer_time is not None:
                 dt = t_start - self._last_infer_time
