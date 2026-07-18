@@ -38,13 +38,14 @@ We anneal and adjust reward weights across training phases to guide the policy f
 | `rew_scale_gait_phase` | `1.0` | `1.0` | `1.0` | `1.0` | `1.0` |
 | `rew_scale_gait_phase_l1` | `-0.5` | `-0.5` | `-0.5` | `-0.5` | `-0.5` |
 | `rew_scale_foot_height_exp` | `0.1` | `0.1` | `0.1` | `0.1` | `0.1` |
-| `rew_scale_flat_orientation_l2` | `-3.0` | `-3.0` | `-3.0` | `-3.0` | `-3.0` |
+| `rew_scale_flat_orientation_l2` | `-6.0` | `-6.0` | `-6.0` | `-6.0` | `-6.0` |
 | `rew_scale_lin_vel_z_l2` | `-2.0` | `-2.0` | `-2.0` | `-2.0` | `-2.0` |
 | `rew_scale_ang_vel_xy_l2` | `-0.05` | `-0.05` | `-0.05` | `-0.05` | `-0.05` |
 | `rew_scale_dof_pos_l2` | `-0.2` | `-0.2` | `-0.2` | `-0.2` | `-0.2` |
 | `rew_scale_dof_torques_l2` | `-0.0002` | `-0.0002` | `-0.0002` | `-0.0002` | `-0.0002` |
 | `rew_scale_dof_acc_l2` | `-2.5e-7` | `-2.5e-7` | `-2.5e-7` | `-2.5e-7` | `-2.5e-7` |
 | `rew_scale_action_rate_l2` | `-0.01` | `-0.01` | `-0.01` | `-0.01` | `-0.01` |
+| `rew_scale_base_acc_l2` | `-0.0002` | `-0.0002` | `-0.0002` | `-0.0002` | `-0.0002` |
 | `rew_scale_feet_air_penalty` | `-0.005` | `-0.005` | `-0.005` | `-0.005` | `-0.005` |
 | `rew_scale_feet_air_penalty_static` | `-5.0` | `-5.0` | `-5.0` | `-5.0` | `-5.0` |
 | `rew_scale_joint_vel_l2_static` | `-1.0e-5` | `-1.0e-5` | `-1.0e-5` | `-1.0e-5` | `-1.0e-5` |
@@ -52,8 +53,8 @@ We anneal and adjust reward weights across training phases to guide the policy f
 | `rew_scale_grf_target` | `0.0` | **`-0.15`** | `-0.15` | `-0.15` | `-0.15` |
 | `rew_scale_max_contact_force` | `0.0` | **`-5.0e-4`** | `-5.0e-4` | `-5.0e-4` | `-5.0e-4` |
 | `rew_scale_base_height_l2` | `0.0` | `0.0` | **`-0.5`** | `-0.5` | `-0.5` |
-| `rew_scale_pos_deviation_l1` | `-1.5` | `-1.5` | `-1.5` | `-1.5` | **`-2.0`** |
-| `rew_scale_stall` | `-3.0` | `-3.0` | `-3.0` | `-3.0` | **`-4.0`** |
+| `rew_scale_pos_deviation_l1` | `0.0` | `0.0` | `0.0` | `0.0` | `0.0` |
+| `rew_scale_stall` | `0.0` | `0.0` | `0.0` | `0.0` | `0.0` |
 
 ---
 
@@ -103,6 +104,7 @@ The gait frequency and phase offsets scale smoothly with effective command speed
 | **Max Contact Force** | `-\sum \max(F_{z, i} - 0.75mg, 0)^2 / (mg)^2` | `-5e-4` *(Phase 1+)* | Scale-invariant penalty for impact spikes exceeding $75\%$ of robot total weight ($mg$). |
 | **Joint Torques L2** | `-\sum \tau^2` | `-0.0002` | Energy efficiency penalty on applied joint torques. |
 | **Joint Acceleration L2** | `-\sum \ddot{q}^2` | `-2.5e-7` | High-frequency noise suppression on motor accelerations. |
+| **Base Acceleration L2** | `-\sum \left(\frac{v_t - v_{t-1}}{\Delta t}\right)^2` | `-0.0002` | Penalizes high-frequency shaking, jitter, or jerky changes in base linear velocity. |
 | **Action Smoothness** | `-\sum (a_t - a_{t-1})^2` | `-0.01` | Penalizes sharp step-to-step changes in neural network action output. |
 
 ---

@@ -127,6 +127,7 @@ class QuadrupedEnv(DirectRLEnv):
         self.commands = torch.zeros(self.num_envs, 4, device=self.device)
         self.target_commands = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_joint_vel = torch.zeros(self.num_envs, 12, device=self.device)
+        self.last_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_feet_contact = torch.zeros(
             self.num_envs, 4, dtype=torch.bool, device=self.device
@@ -408,6 +409,7 @@ class QuadrupedEnv(DirectRLEnv):
                 self._transition_to_next_phase()
         self.previous_actions = self.actions.clone()
         self.last_joint_vel = self.joint_vel.clone()
+        self.last_base_lin_vel = self.base_lin_vel.clone()
         self.actions = actions.clone()
 
         # Update action history for latency simulation
@@ -807,6 +809,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_dof_torques_l2,
             self.cfg.rew_scale_dof_acc_l2,
             self.cfg.rew_scale_action_rate_l2,
+            self.cfg.rew_scale_base_acc_l2,
             self.cfg.rew_scale_feet_air_time,
             self.cfg.rew_scale_flat_orientation_l2,
             self.cfg.rew_scale_foot_height_exp,
@@ -830,6 +833,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.command_ang_vel_std,
             self.commands,
             self.base_lin_vel,
+            self.last_base_lin_vel,
             self.base_ang_vel,
             self.projected_gravity,
             self.joint_pos,
@@ -911,6 +915,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.reset_buf[env_ids] = 0
             self.feet_air_time[env_ids] = 0.0
             self.last_joint_vel[env_ids] = 0.0
+            self.last_base_lin_vel[env_ids] = 0.0
             self.previous_actions[env_ids] = 0.0
             self.gait_phase[env_ids] = 0.0
         else:
@@ -1069,6 +1074,7 @@ class QuadrupedEnv(DirectRLEnv):
         # 4. Reset Action Buffer
         self.actions[env_ids] = 0.0
         self.gait_phase[env_ids] = 0.0
+        self.last_base_lin_vel[env_ids] = 0.0
         self.root_pos_w[env_ids] = default_root_state[:, :3]
         self.root_quat_w[env_ids] = default_root_state[:, 3:7]
 
@@ -1088,6 +1094,7 @@ def compute_rewards(
     rew_scale_dof_torques_l2: float,
     rew_scale_dof_acc_l2: float,
     rew_scale_action_rate_l2: float,
+    rew_scale_base_acc_l2: float,
     rew_scale_feet_air_time: float,
     rew_scale_flat_orientation_l2: float,
     rew_scale_foot_height_exp: float,
@@ -1111,6 +1118,7 @@ def compute_rewards(
     command_ang_vel_std: float,
     commands: torch.Tensor,
     base_lin_vel: torch.Tensor,
+    last_base_lin_vel: torch.Tensor,
     base_ang_vel: torch.Tensor,
     projected_gravity: torch.Tensor,
     joint_pos: torch.Tensor,
@@ -1192,6 +1200,11 @@ def compute_rewards(
     # Penalize large changes in action
     rew_action_rate_l2 = rew_scale_action_rate_l2 * torch.sum(
         torch.square(actions - previous_actions), dim=1
+    )
+
+    # Base Linear Acceleration L2 (Penalty)
+    rew_base_acc_l2 = rew_scale_base_acc_l2 * torch.sum(
+        torch.square((base_lin_vel - last_base_lin_vel) / step_dt), dim=1
     )
 
     # 3-Leg / 2-Leg Grounded Support Penalty
@@ -1277,6 +1290,7 @@ def compute_rewards(
         + rew_dof_torques_l2
         + rew_dof_acc_l2
         + rew_action_rate_l2
+        + rew_base_acc_l2
         + rew_max_air_feet
         + rew_feet_air_time
         + rew_dof_pos_l2

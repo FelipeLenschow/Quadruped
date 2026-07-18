@@ -398,6 +398,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_dof_torques_l2 = _phase_cfg["rewards"]["rew_scale_dof_torques_l2"]
     rew_scale_dof_acc_l2 = _phase_cfg["rewards"]["rew_scale_dof_acc_l2"]
     rew_scale_action_rate_l2 = _phase_cfg["rewards"]["rew_scale_action_rate_l2"]
+    rew_scale_base_acc_l2 = _phase_cfg["rewards"]["rew_scale_base_acc_l2"]
 
     # Disabled (kept for interface compatibility)
     rew_scale_feet_air_penalty = _phase_cfg["rewards"]["rew_scale_feet_air_penalty"]
