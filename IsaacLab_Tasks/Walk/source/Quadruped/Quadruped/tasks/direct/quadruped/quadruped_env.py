@@ -140,10 +140,10 @@ class QuadrupedEnv(DirectRLEnv):
         self.grf_balance_val = torch.zeros(self.num_envs, device=self.device)
         self.grf_target_val = torch.zeros(self.num_envs, device=self.device)
         self.max_contact_force_val = torch.zeros(self.num_envs, device=self.device)
+        self.gait_missed_lift_val = torch.zeros(self.num_envs, device=self.device)
         self.ref_pos_xy = torch.zeros((self.num_envs, 2), device=self.device)
         self.ref_yaw = torch.zeros((self.num_envs,), device=self.device)
         self.pos_deviation_val = torch.zeros(self.num_envs, device=self.device)
-        self.stall_val = torch.zeros(self.num_envs, device=self.device)
         self.gait_phase = torch.zeros(self.num_envs, device=self.device)  # φ ∈ [0, 1)
         self.gait_phase_reward_val = torch.zeros(self.num_envs, device=self.device)
         self.gait_phase_l1_penalty_val = torch.zeros(self.num_envs, device=self.device)
@@ -653,39 +653,54 @@ class QuadrupedEnv(DirectRLEnv):
         ) * (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold)
         self.feet_air_time_reward_val = rew_air_time
 
+        # ── Gait phase clock (computed early so swing_window gates other rewards) ──────────────
+        swing_sigma = self.cfg.gait_swing_sigma
+        active_offsets = self.swing_phase_offsets.unsqueeze(0)  # (1, 4)
+        phase_diff = self.gait_phase.unsqueeze(1) - active_offsets  # (N, 4)
+        phase_dist = torch.min(torch.abs(phase_diff), 1.0 - torch.abs(phase_diff))  # circular
+        swing_window = torch.exp(-phase_dist.square() / (swing_sigma ** 2))  # (N, 4) ∈ (0,1]
+        # Gait command mask — no gait signals when truly standing still
+        gait_cmd_speed = torch.norm(self.commands[:, :2], dim=1) + 0.25 * torch.abs(self.commands[:, 2])
+        gait_cmd_mask = (gait_cmd_speed > self.cfg.static_velocity_threshold).float()  # (N,)
+
         # -- Update foot height reward logic --
         if getattr(self, "is_heterogeneous", False):
             # Multi-robot foot height aggregation
             all_feet_heights = torch.zeros((self.num_envs, 4), device=self.device)
             for i, view in enumerate(self.robot_views):
                 indices = self.robot_view_indices[i]
-                feet_ids = self.robot_feet_ids[
-                    i
-                ]  # Relative to Articulation (FL, FR, RL, RR order)
+                feet_ids = self.robot_feet_ids[i]  # Relative to Articulation (FL, FR, RL, RR order)
                 all_feet_heights[indices] = view.data.body_pos_w[:, feet_ids, 2]
             feet_heights = all_feet_heights
         else:
             # Homogeneous case
             feet_heights = self.body_pos_w[:, self._feet_ids_articulation, 2]
 
-        # Reward for reaching target height during swing
-        # (exp(-square(height - target) / sigma) * ~contact)
-        # Masked by command norm to avoid lifting feet when standing still
+        # Foot height reward — only counts when foot is airborne AND in its swing window.
+        # Gating by swing_window ensures the policy learns to lift at the RIGHT time,
+        # not just to lift feet randomly for easy height reward.
         rew_foot_height = torch.sum(
             torch.exp(-torch.square(feet_heights - self.cfg.target_foot_height) / 0.005)
-            * (~contact).float(),
+            * (~contact).float()
+            * swing_window,          # ← gait-phase gate
             dim=1,
-        )
-        # Apply command mask (x, y, yaw commands)
-        rew_foot_height *= (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold).float()
-
+        ) * gait_cmd_mask            # ← only when moving
         self.foot_height_reward_val = rew_foot_height
 
-        # Penalty for each foot in the air (constant per-step)
-        self.feet_air_penalty_val = torch.sum((~contact).float(), dim=1)
-        # Extra penalty when standing still (commands == 0)
+        # Air penalty — only for feet airborne OUTSIDE their swing window.
+        # Feet in their correct swing phase should NOT be penalized for being airborne.
+        # Use (1 - swing_window) as a soft mask: penalty is zero at peak of swing,
+        # full at stance phase. This directly complements the gait phase reward.
+        out_of_swing_air = (~contact).float() * (1.0 - swing_window)  # (N, 4)
+        self.feet_air_penalty_val = torch.sum(out_of_swing_air, dim=1) * gait_cmd_mask
+        # When no movement commanded, fall back to original behavior (penalize any airborne foot)
         static_mask = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.static_velocity_threshold).float()
-        self.feet_air_penalty_static_val = self.feet_air_penalty_val * static_mask
+        air_penalty_static = torch.sum((~contact).float(), dim=1)
+        self.feet_air_penalty_val = (
+            self.feet_air_penalty_val * (1.0 - static_mask)
+            + air_penalty_static * static_mask
+        )
+        self.feet_air_penalty_static_val = air_penalty_static * static_mask
         self.joint_vel_l2_static_val = (
             torch.sum(torch.square(self.joint_vel), dim=1) * static_mask
         )
@@ -708,7 +723,7 @@ class QuadrupedEnv(DirectRLEnv):
 
         # Max contact force penalty: penalize per-foot forces exceeding a fraction of robot weight
         # Threshold = robot_total_weight * max_contact_force_pct (e.g., 0.75 = 75% of mg)
-        max_force_pct = getattr(self.cfg, "max_contact_force_pct", 0.75)
+        max_force_pct = self.cfg.max_contact_force_pct
         per_foot_thresh = self.robot_total_weight * max_force_pct  # (N,)
         excess = (feet_forces_z - per_foot_thresh.unsqueeze(1)).clamp(min=0.0)  # (N, 4)
         # Normalize by mg² to make dimensionless (scale-invariant across robot masses)
@@ -721,7 +736,7 @@ class QuadrupedEnv(DirectRLEnv):
         # Compute leashed virtual reference position deviation
         pos_error = self.ref_pos_xy - self.root_pos_w[:, :2]
         error_dist = torch.norm(pos_error, dim=1)
-        max_leash = getattr(self.cfg, "max_pos_leash", 0.4)
+        max_leash = self.cfg.max_pos_leash
         exceeds_leash = error_dist > max_leash
         if exceeds_leash.any():
             scale = max_leash / error_dist[exceeds_leash]
@@ -731,36 +746,23 @@ class QuadrupedEnv(DirectRLEnv):
             )
             error_dist[exceeds_leash] = max_leash
         self.pos_deviation_val = error_dist
-
-        # Compute linear speed deficit (stall penalty) when commanded above stall_velocity_threshold
-        stall_thresh = getattr(self.cfg, "stall_velocity_threshold", 0.05)
-        cmd_speed = torch.norm(self.commands[:, :2], dim=1)
-        robot_speed = torch.norm(self.base_lin_vel[:, :2], dim=1)
-        stall_mask = (cmd_speed > stall_thresh).float()
-        self.stall_val = stall_mask * torch.clamp(cmd_speed - robot_speed, min=0.0)
-
-        # Gait phase clock reward: reward each foot for being airborne during its swing window.
-        swing_sigma = self.cfg.gait_swing_sigma
-        
-        active_offsets = self.swing_phase_offsets.unsqueeze(0)  # (1, 4)
-        # Circular distance from current phase to each leg's swing center
-        phase_diff = self.gait_phase.unsqueeze(1) - active_offsets  # (N, 4)
-        phase_dist = torch.min(torch.abs(phase_diff), 1.0 - torch.abs(phase_diff))  # circular
-        swing_window = torch.exp(-phase_dist.square() / (swing_sigma ** 2))  # (N, 4)
+        # Gait phase clock reward/penalties (swing_window already computed above)
         # Reward: foot in air during its swing window
         gait_match = swing_window * (~contact).float()  # (N, 4)
-        # Mask by commanded speed — no gait reward/penalty when standing still (includes yaw speed)
-        gait_cmd_speed = cmd_speed + 0.25 * torch.abs(self.commands[:, 2])
-        gait_cmd_mask = (gait_cmd_speed > getattr(self.cfg, "stall_velocity_threshold", 0.05)).float()
         # Normalize by expected simultaneous airborne legs so walk (1 leg/window) and
         # trot (2 legs/window) yield equal per-step reward when executed correctly.
-        # Without this, trot earns 2× the gait reward at every timestep and dominates at all speeds.
         self.gait_phase_reward_val = (
             torch.sum(gait_match, dim=1) / self.max_air_feet_allowed
         ) * gait_cmd_mask
         # L1 penalty: foot in air when outside its designated swing window (airborne distance past sigma)
         gait_l1_error = torch.clamp(phase_dist - swing_sigma, min=0.0) * (~contact).float()  # (N, 4)
         self.gait_phase_l1_penalty_val = torch.sum(gait_l1_error, dim=1) * gait_cmd_mask
+        # Missed-lift penalty: foot is inside its swing window but still grounded.
+        # Complementary to the gait reward — fires when the clock says "lift" but foot stays down.
+        missed_lift = swing_window * contact.float()  # (N, 4) — high when in window but grounded
+        self.gait_missed_lift_val = (
+            torch.sum(missed_lift, dim=1) / self.max_air_feet_allowed
+        ) * gait_cmd_mask
 
         # Observations (unscaled)
         # Gait phase clock encoded as sin/cos (2 extra dims)
@@ -825,9 +827,9 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_max_contact_force,
             self.cfg.rew_scale_max_air_feet,
             self.cfg.rew_scale_pos_deviation_l1,
-            self.cfg.rew_scale_stall,
             self.cfg.rew_scale_gait_phase,
             self.cfg.rew_scale_gait_phase_l1,
+            self.cfg.rew_scale_gait_missed_lift,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
@@ -853,9 +855,9 @@ class QuadrupedEnv(DirectRLEnv):
             self.grf_target_val,
             self.max_contact_force_val,
             self.pos_deviation_val,
-            self.stall_val,
             self.gait_phase_reward_val,
             self.gait_phase_l1_penalty_val,
+            self.gait_missed_lift_val,
             self.max_air_feet_allowed,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
@@ -1110,9 +1112,9 @@ def compute_rewards(
     rew_scale_max_contact_force: float,
     rew_scale_max_air_feet: float,
     rew_scale_pos_deviation_l1: float,
-    rew_scale_stall: float,
     rew_scale_gait_phase: float,
     rew_scale_gait_phase_l1: float,
+    rew_scale_gait_missed_lift: float,
     target_base_height: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
@@ -1138,9 +1140,9 @@ def compute_rewards(
     grf_target_val: torch.Tensor,
     max_contact_force_val: torch.Tensor,
     pos_deviation_val: torch.Tensor,
-    stall_val: torch.Tensor,
     gait_phase_reward_val: torch.Tensor,
     gait_phase_l1_penalty_val: torch.Tensor,
+    gait_missed_lift_val: torch.Tensor,
     max_air_feet_allowed: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
@@ -1273,12 +1275,15 @@ def compute_rewards(
     # 16. Integrated Position Deviation L1 Penalty
     rew_pos_deviation = rew_scale_pos_deviation_l1 * pos_deviation_val
 
-    # 17. Linear Speed Deficit (Stall) Penalty
-    rew_stall = rew_scale_stall * stall_val
-
     # 18. Gait Phase Clock Reward & L1 Penalty
     rew_gait_phase = rew_scale_gait_phase * gait_phase_reward_val
     rew_gait_phase_l1 = rew_scale_gait_phase_l1 * gait_phase_l1_penalty_val
+
+    # 19. Missed-Lift Penalty
+    # Fires when the gait clock says a foot should be airborne but it stays grounded.
+    # Symmetric counterpart to the gait phase reward: same scale shape (0–1 normalized),
+    # so rew_scale_gait_missed_lift should be negative (penalty).
+    rew_gait_missed_lift = rew_scale_gait_missed_lift * gait_missed_lift_val
 
     total_reward = (
         rew_alive
@@ -1306,8 +1311,8 @@ def compute_rewards(
         + rew_scale_grf_target * grf_target_val
         + rew_scale_max_contact_force * max_contact_force_val
         + rew_pos_deviation
-        + rew_stall
         + rew_gait_phase
         + rew_gait_phase_l1
+        + rew_gait_missed_lift
     )
     return total_reward

@@ -35,7 +35,7 @@ default: &default
     rew_scale_track_ang_vel_z_exp: 2.5
     rew_scale_feet_air_time: 0.0
     target_feet_air_time: 0.2
-    rew_scale_foot_height_exp: 0.5
+    rew_scale_foot_height_exp: 0.1
     target_foot_height: 0.1
     # ── Stability penalties ──
     rew_scale_flat_orientation_l2: -10.0
@@ -65,11 +65,11 @@ default: &default
     max_contact_force_pct: 0.75
     rew_scale_pos_deviation_l1: 0.0
     max_pos_leash: 0.5
+    rew_scale_stall: 0.0
     # ── Gait phase clock ──
     rew_scale_gait_phase: 1.0            # Reward for lifting feet in sync with phase clock
     gait_swing_sigma: 0.1                # Swing window width as fraction of cycle
     rew_scale_gait_phase_l1: -0.5        # L1 penalty for lifting feet outside designated swing window
-    rew_scale_gait_missed_lift: 0.0      # Penalty for staying grounded during swing window (symmetric to gait reward)
     # gait frequency: f(x) = 0.3(1 - e^(-7.5x)) + 1.3x, x = effective cmd speed (m/s)
     # Gait pattern offsets: [FL, FR, RL, RR] as fraction of cycle [0, 1)
     #   Trot (diagonal pairs): FL+RR vs FR+RL  → [0.0, 0.5, 0.5, 0.0]
@@ -82,7 +82,8 @@ default: &default
     command_y_range: [-0.5, 0.5]
     command_yaw_range: [-0.8, 0.8]
     command_resampling_time: 10.0
-    static_velocity_threshold: 0.05
+    static_velocity_threshold: 1.0e-6
+    stall_velocity_threshold: 0.05
     zero_command_fraction: 0.0
     standby_duration_s: 0.0
     x_only_command_fraction: 0.05
@@ -98,7 +99,6 @@ phases:
       rew_scale_grf_balance: -0.4          # Penalize uneven force distribution to prevent dragging
       rew_scale_grf_target: -0.15           # Penalize deviation from mg/n weight share
       rew_scale_max_contact_force: -1.0
-      rew_scale_gait_missed_lift: -0.5     # Penalize staying grounded when clock says lift
 
   # Phase 2: Hardening — drop symmetry constraint, add DR + pushes
   phase2:

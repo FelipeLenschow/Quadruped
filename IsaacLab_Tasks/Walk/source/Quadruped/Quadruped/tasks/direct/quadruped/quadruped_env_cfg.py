@@ -367,10 +367,10 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_track_lin_vel_xy_exp = _phase_cfg["rewards"]["rew_scale_track_lin_vel_xy_exp"]
     rew_scale_track_ang_vel_z_exp = _phase_cfg["rewards"]["rew_scale_track_ang_vel_z_exp"]
     rew_scale_pos_deviation_l1 = _phase_cfg["rewards"]["rew_scale_pos_deviation_l1"]
-    rew_scale_stall = _phase_cfg["rewards"]["rew_scale_stall"]
     max_pos_leash = _phase_cfg["rewards"]["max_pos_leash"]
     rew_scale_gait_phase = _phase_cfg["rewards"]["rew_scale_gait_phase"]
     rew_scale_gait_phase_l1 = _phase_cfg["rewards"]["rew_scale_gait_phase_l1"]
+    rew_scale_gait_missed_lift = _phase_cfg["rewards"]["rew_scale_gait_missed_lift"]
     gait_swing_sigma = _phase_cfg["rewards"]["gait_swing_sigma"]
     gait_offsets: list = list(_phase_cfg["rewards"]["gait_offsets"])
 
@@ -419,9 +419,8 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     command_yaw_range = tuple(_phase_cfg["commands"]["command_yaw_range"])    # [rad/s]
     command_resampling_time = _phase_cfg["commands"]["command_resampling_time"] # [s]
 
-    # Gait reward masking: feet_air_time only counted when ‖cmd‖ > this
+    # Single threshold: below this = static mode (all-feet-grounded); above = gait mode
     static_velocity_threshold = _phase_cfg["commands"]["static_velocity_threshold"]
-    stall_velocity_threshold = _phase_cfg["commands"]["stall_velocity_threshold"]
 
     # Zero-command fraction and single-axis fractions
     zero_command_fraction = _phase_cfg["commands"]["zero_command_fraction"]
