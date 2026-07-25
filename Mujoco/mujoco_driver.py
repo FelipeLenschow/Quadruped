@@ -37,6 +37,7 @@ class Ros2MujocoDriver(Node):
         # 0. Load Central Config
         self.config = load_config()
         self.ctrl_cfg = self.config.get("control", {})
+        self.motor_cfg = self.config.get("motor", {})
         self.kp = float(self.ctrl_cfg.get("kp", 0.0))
         self.kd = float(self.ctrl_cfg.get("kd", 0.0))
 
@@ -64,7 +65,8 @@ class Ros2MujocoDriver(Node):
             checkpoint=checkpoint,
             obs_dim=obs_dim,
             use_estimator=use_estimator,
-            joint_names=self.isaac_names
+            joint_names=self.isaac_names,
+            sim_dt=0.001
         )
 
         # 3. Subscriptions
@@ -264,7 +266,8 @@ class Ros2MujocoDriver(Node):
         elif self.robot_type.lower() == "go1":
             sat_effort, vel_lim = 23.7, 30.0
         else: # go2
-            sat_effort, vel_lim = 23.5, 30.0
+            sat_effort = float(self.motor_cfg.get("max_torque", 45.0))
+            vel_lim = float(self.motor_cfg.get("max_velocity", 30.0))
         
         if effort_limit <= 0.1:
             # Go limp
@@ -361,10 +364,11 @@ class Ros2MujocoDriver(Node):
                 if self.step_counter % 200 == 0:
                     inf_ms = 0.0
                     runner = self.pipeline.policy_manager.policies.get("main")
-                    if runner and hasattr(runner, "inf_times") and runner.inf_times:
-                        inf_ms = runner.inf_times[-1] * 1000
+                    if runner:
+                        if hasattr(runner, "inf_times") and runner.inf_times:
+                            inf_ms = runner.inf_times[-1] * 1000
                     print(
-                        f"\r[Bridge] t={self.data.time:7.2f} h={raw_data['pos'][2]:.2f} vx={raw_data['vel'][0]:+5.2f} | inf={inf_ms:4.1f}ms   ",
+                        f"\r[Bridge] t={self.data.time:7.2f} h={raw_data['pos'][2]:.2f} vx={raw_data['vel'][0]:+5.2f} vy={raw_data['vel'][1]:+5.2f} wz={raw_data['gyro'][2]:+5.2f} | inf={inf_ms:4.1f}ms   ",
                         end="",
                         flush=True,
                     )

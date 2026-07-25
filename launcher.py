@@ -41,6 +41,160 @@ def load_last_command():
             pass
     return None
 
+def resolve_phase_launcher(all_phases, phase_name):
+    import collections.abc
+    import copy
+    
+    def deep_update(d, u):
+        if not isinstance(d, collections.abc.Mapping):
+            d = {}
+        if not isinstance(u, collections.abc.Mapping):
+            return d
+        for k, v in u.items():
+            if v is None:
+                continue
+            if isinstance(v, collections.abc.Mapping):
+                target = d.get(k, {})
+                if not isinstance(target, collections.abc.Mapping):
+                    target = {}
+                d[k] = deep_update(target, v)
+            else:
+                d[k] = v
+        return d
+
+    phase_node = all_phases.get("phases", {}).get(phase_name, {})
+    parent_name = phase_node.get("inherits", "default")
+    
+    if parent_name and parent_name != phase_name:
+        if parent_name == "default":
+            parent_cfg = all_phases.get("default", {})
+        else:
+            parent_cfg = resolve_phase_launcher(all_phases, parent_name)
+    else:
+        parent_cfg = all_phases.get("default", {})
+
+    return deep_update(copy.deepcopy(parent_cfg), phase_node)
+
+def compute_all_curriculum_segments(yaml_data, available_phases, start_phase):
+    if not yaml_data or "phases" not in yaml_data or start_phase not in available_phases:
+        return [start_phase]
+    
+    start_idx = available_phases.index(start_phase)
+    phases_to_check = available_phases[start_idx:]
+    
+    segments = []
+    curr_seg_start = phases_to_check[0]
+    curr_seg_end = phases_to_check[0]
+    
+    start_cfg = resolve_phase_launcher(yaml_data, curr_seg_start)
+    start_env = start_cfg.get("env", {})
+    curr_robot = start_env.get("robot_cfg", "")
+    curr_terrain = start_env.get("terrain", "rough")
+    
+    for k in phases_to_check[1:]:
+        cfg = resolve_phase_launcher(yaml_data, k)
+        env = cfg.get("env", {})
+        robot = env.get("robot_cfg", "")
+        terrain = env.get("terrain", "rough")
+        
+        if robot == curr_robot and terrain == curr_terrain:
+            curr_seg_end = k
+        else:
+            if curr_seg_start != curr_seg_end:
+                segments.append(f"{curr_seg_start}_to_{curr_seg_end}")
+            else:
+                segments.append(curr_seg_start)
+            curr_seg_start = k
+            curr_seg_end = k
+            curr_robot = robot
+            curr_terrain = terrain
+            
+    if curr_seg_start != curr_seg_end:
+        segments.append(f"{curr_seg_start}_to_{curr_seg_end}")
+    else:
+        segments.append(curr_seg_start)
+        
+    return segments
+
+def rename_latest_run_dir(log_root, start_timestamp, target_name, existing_dirs=None):
+    if not os.path.exists(log_root):
+        return None
+    
+    candidates = []
+    for d in os.listdir(log_root):
+        if existing_dirs is not None and d in existing_dirs:
+            continue
+        full_path = os.path.join(log_root, d)
+        if os.path.isdir(full_path):
+            try:
+                mtime = os.path.getmtime(full_path)
+                ctime = os.path.getctime(full_path)
+                if existing_dirs is not None or max(mtime, ctime) >= start_timestamp:
+                    candidates.append((max(mtime, ctime), d, full_path))
+            except Exception:
+                pass
+                
+    if not candidates:
+        return None
+        
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    latest_dir_name, latest_full_path = candidates[0][1], candidates[0][2]
+    
+    if not target_name or latest_dir_name == target_name:
+        return os.path.abspath(latest_full_path)
+        
+    dest_path = os.path.join(log_root, target_name)
+    if dest_path == latest_full_path:
+        return os.path.abspath(dest_path)
+        
+    if os.path.exists(dest_path):
+        idx = 2
+        while os.path.exists(f"{dest_path}_{idx}"):
+            idx += 1
+        dest_path = f"{dest_path}_{idx}"
+        
+    try:
+        os.rename(latest_full_path, dest_path)
+        print(f"[Launcher] Renamed run directory from '{latest_dir_name}' to '{os.path.basename(dest_path)}'")
+        return os.path.abspath(dest_path)
+    except Exception as e:
+        print(f"[WARNING] Could not rename '{latest_dir_name}' to '{os.path.basename(dest_path)}': {e}")
+        return os.path.abspath(latest_full_path)
+
+def find_highest_step_checkpoint(run_dir):
+    if not run_dir or not os.path.exists(run_dir):
+        return None
+        
+    search_pattern = os.path.join(run_dir, "**", "*.pt")
+    all_pts = glob.glob(search_pattern, recursive=True)
+    
+    if not all_pts:
+        return None
+        
+    numbered_ckpts = []
+    for pt in all_pts:
+        base = os.path.basename(pt)
+        if base.startswith("agent_") and base.endswith(".pt") and base != "best_agent.pt":
+            num_str = ''.join(filter(str.isdigit, base))
+            if num_str:
+                try:
+                    numbered_ckpts.append((int(num_str), pt))
+                except ValueError:
+                    pass
+                    
+    if numbered_ckpts:
+        numbered_ckpts.sort(key=lambda x: x[0], reverse=True)
+        max_step, best_path = numbered_ckpts[0]
+        print(f"[Launcher] Found latest curriculum checkpoint: {os.path.basename(best_path)} (step {max_step})")
+        return os.path.abspath(best_path)
+        
+    best_agents = [p for p in all_pts if os.path.basename(p) == "best_agent.pt"]
+    if best_agents:
+        print(f"[Launcher] No numbered checkpoint found, falling back to: {os.path.basename(best_agents[0])}")
+        return os.path.abspath(best_agents[0])
+        
+    return os.path.abspath(all_pts[0]) if all_pts else None
+
 def run_cli_menu():
     is_isaac = "env_isaacsim" in os.environ.get("VIRTUAL_ENV", "") or "env_isaacsim" in sys.executable
     is_robot = IS_ROBOT
@@ -411,54 +565,21 @@ def run_cli_menu():
                 training_phase = phase_choice
                 
             # Curriculum sequence logic
-            furthest_phase = training_phase
-            if yaml_data and "phases" in yaml_data and training_phase in available_phases:
-                def resolve_phase_launcher(all_phases, phase_name):
-                    import collections.abc
-                    import copy
-                    
-                    def deep_update(d, u):
-                        for k, v in u.items():
-                            if isinstance(v, collections.abc.Mapping):
-                                d[k] = deep_update(d.get(k, {}), v)
-                            else:
-                                d[k] = v
-                        return d
-
-                    phase_node = all_phases.get("phases", {}).get(phase_name, {})
-                    parent_name = phase_node.get("inherits", "default")
-                    
-                    if parent_name and parent_name != phase_name:
-                        if parent_name == "default":
-                            parent_cfg = all_phases.get("default", {})
-                        else:
-                            parent_cfg = resolve_phase_launcher(all_phases, parent_name)
-                    else:
-                        parent_cfg = all_phases.get("default", {})
-
-                    return deep_update(copy.deepcopy(parent_cfg), phase_node)
-                    
-                start_idx = available_phases.index(training_phase)
-                start_cfg = resolve_phase_launcher(yaml_data, training_phase)
-                start_env = start_cfg.get("env", {})
-                start_robot = start_env.get("robot_cfg", "")
-                start_terrain = start_env.get("terrain", "rough")
-                
-                for k in available_phases[start_idx+1:]:
-                    curr_cfg = resolve_phase_launcher(yaml_data, k)
-                    curr_env = curr_cfg.get("env", {})
-                    curr_robot = curr_env.get("robot_cfg", "")
-                    curr_terrain = curr_env.get("terrain", "rough")
-                    
-                    if curr_robot == start_robot and curr_terrain == start_terrain:
-                        furthest_phase = k
-                    else:
-                        break
-                        
-            if furthest_phase != training_phase:
-                ans = input(f"Run as Curriculum Sequence ({training_phase} up to {furthest_phase})? [y/N]: ").lower().strip()
+            all_segments = compute_all_curriculum_segments(yaml_data, available_phases, training_phase)
+            first_segment = all_segments[0] if all_segments else training_phase
+            
+            if first_segment != training_phase:
+                ans = input(f"Run as Curriculum Sequence ({training_phase} up to {first_segment.split('_to_')[-1]})? [y/N]: ").lower().strip()
                 if ans == "y":
-                    training_phase = f"{training_phase}_to_{furthest_phase}"
+                    training_phase = first_segment
+                
+            training_segments = [training_phase]
+            if len(all_segments) > 1 and training_phase == first_segment:
+                next_segments_str = ", ".join(all_segments[1:])
+                ans_chain = input(f"Auto-launch remaining curriculum segments sequentially ({next_segments_str})? [Y/n]: ").lower().strip()
+                if ans_chain != "n":
+                    training_segments = all_segments
+                    training_phase = training_segments
                 
             run_name = input("Enter Run Name (optional): ").strip()
             video = input("Record Video? [y/N]: ").lower().strip() == "y"
@@ -596,7 +717,8 @@ def main():
         print(f"Terrain:  {terrain_cfg}")
     print(f"Domain ID: {domain_id}")
     if training_phase:
-        print(f"Phase:    {training_phase}")
+        display_phase = ", ".join(training_phase) if isinstance(training_phase, list) else str(training_phase)
+        print(f"Phase:    {display_phase}")
     if ckpt:
         print(f"Checkpoint: {ckpt_display_name(ckpt)}")
     print(f"Teleop:   {teleop}")
@@ -610,7 +732,7 @@ def main():
     if teleop:
         env["QUADRUPED_TELEOP"] = "1"
     if training_phase:
-        env["QUADRUPED_TRAINING_PHASE"] = training_phase
+        env["QUADRUPED_TRAINING_PHASE"] = ", ".join(training_phase) if isinstance(training_phase, list) else str(training_phase)
     
     # Search for OBS_DIM in the same folder as the checkpoint
     if ckpt:
@@ -654,7 +776,7 @@ def main():
 
     # Final Command Assembly
     abs_ckpt = os.path.abspath(ckpt) if ckpt else ""
-    obs_dim = env.get("QUADRUPED_OBS_DIM", "49")
+    obs_dim = env.get("QUADRUPED_OBS_DIM", "51")
 
     def get_robot_key(cfg):
         return {
@@ -667,18 +789,69 @@ def main():
 
     if action == "train":
         script_path = os.path.join("scripts", "skrl", "train.py")
-        cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
-        if num_envs:
-            cmd.append(f"--num_envs={num_envs}")
-        if ckpt:
-            cmd.append(f"--checkpoint={abs_ckpt}")
-        if headless:
-            cmd.append("--headless")
-        if video:
-            cmd.append("--video")
-            cmd.append("--video_length=200")
-            cmd.append("--video_interval=5000")
-        subprocess.run(cmd, env=env, cwd=module_path)
+        log_root = os.path.join(module_path, "logs", "skrl", "quadruped_direct")
+        
+        if isinstance(training_phase, list):
+            segments = training_phase
+        else:
+            segments = [training_phase] if training_phase else [""]
+            
+        current_ckpt = abs_ckpt
+        
+        for seg_idx, segment in enumerate(segments):
+            if len(segments) > 1:
+                print("\n" + "=" * 50)
+                print(f"Executing Curriculum Segment {seg_idx + 1}/{len(segments)}: {segment}")
+                print("=" * 50 + "\n")
+                
+            seg_env = env.copy()
+            if segment:
+                seg_env["QUADRUPED_TRAINING_PHASE"] = segment
+                
+            cmd = [sys.executable, script_path, "--task=Template-Quadruped-Direct-v0"]
+            if num_envs:
+                cmd.append(f"--num_envs={num_envs}")
+            if current_ckpt:
+                cmd.append(f"--checkpoint={current_ckpt}")
+            if headless:
+                cmd.append("--headless")
+            if video:
+                cmd.append("--video")
+                cmd.append("--video_length=200")
+                cmd.append("--video_interval=5000")
+                
+            target_run_name = run_name
+            if len(segments) > 1 and run_name:
+                target_run_name = f"{run_name}_{segment}"
+            elif len(segments) > 1 and not run_name and segment:
+                target_run_name = segment
+                
+            if target_run_name:
+                cmd.append(f"agent.agent.experiment.experiment_name={target_run_name}")
+                
+            start_ts = time.time()
+            existing_dirs = set(os.listdir(log_root)) if os.path.exists(log_root) else set()
+            try:
+                res = subprocess.run(cmd, env=seg_env, cwd=module_path)
+            except KeyboardInterrupt:
+                print("\n[Launcher] Training interrupted by user.")
+                break
+                
+            renamed_path = rename_latest_run_dir(log_root, start_ts, target_run_name, existing_dirs=existing_dirs)
+            next_ckpt = find_highest_step_checkpoint(renamed_path) if renamed_path else None
+            
+            if res.returncode != 0:
+                if not next_ckpt:
+                    print(f"\n[Launcher] Training segment '{segment}' exited with return code {res.returncode} without generating valid checkpoints. Aborting chain.")
+                    break
+                else:
+                    print(f"\n[WARNING] Training segment '{segment}' exited with return code {res.returncode} (likely during Isaac Sim/carb shutdown cleanup), but successfully saved checkpoints ({os.path.basename(next_ckpt)}). Continuing chain...")
+            
+            if seg_idx < len(segments) - 1:
+                if not next_ckpt:
+                    print(f"[ERROR] Could not find any valid checkpoint in '{renamed_path}' to continue curriculum. Aborting chain.")
+                    break
+                current_ckpt = os.path.abspath(next_ckpt)
 
     elif action == "isaac_lab":
         script_path = os.path.join("scripts", "skrl", "play.py")

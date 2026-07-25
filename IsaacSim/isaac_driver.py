@@ -156,8 +156,11 @@ class Ros2IsaacDriver(Node):
             checkpoint=checkpoint,
             obs_dim=obs_dim,
             use_estimator=use_estimator,
-            joint_names=self.joint_names
+            joint_names=self.joint_names,
+            sim_dt=0.005
         )
+        self.pipeline.decimation = 4  # 200 Hz physics / 4 = 50 Hz policy
+        self.pipeline.policy_dt = self.pipeline.decimation * self.pipeline.sim_dt
 
         self.cmd_echo_pub = self.create_publisher(
             JointState, "/commands/joint_commands", 10
@@ -357,7 +360,7 @@ def main():
         if count % 100 == 0:
             pos = robot.data.root_pos_w[0]
             print(
-                f"\r[IsaacDriver] Sim Time Step: {count} | Robot Height: {pos[2]:.3f}m | T: {sim_context.current_time:.2f}s\n",
+                f"\r[IsaacDriver] Sim Time Step: {count} | Robot Height: {pos[2]:.3f}m vx={robot.data.root_lin_vel_b[0, 0]:+5.2f} vy={robot.data.root_lin_vel_b[0, 1]:+5.2f} wz={robot.data.root_ang_vel_b[0, 2]:+5.2f} | T: {sim_context.current_time:.2f}s\n",
                 end="",
                 flush=True,
             )

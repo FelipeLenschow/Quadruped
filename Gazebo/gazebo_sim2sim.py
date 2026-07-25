@@ -327,7 +327,7 @@ def main():
             if step_count % 50 == 0:
                 inf_ms = latest_inf_time * 1000
                 print(
-                    f"\r[Step {step_count:6d}] t={bridge.sim_time:7.2f} h={state.base_pos[2]:.3f} vx={state.base_lin_vel[0]:+5.2f} | inf={inf_ms:4.1f}ms   ",
+                    f"\r[Step {step_count:6d}] t={bridge.sim_time:7.2f} h={state.base_pos[2]:.3f} vx={state.base_lin_vel[0]:+5.2f} vy={state.base_lin_vel[1]:+5.2f} wz={state.imu.gyroscope[2]:+5.2f} | inf={inf_ms:4.1f}ms   ",
                     end="",
                     flush=True,
                 )

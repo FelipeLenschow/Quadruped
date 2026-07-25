@@ -86,7 +86,11 @@ class PolicyRunner:
         # Joint mapping: Identity by default (matches our standardized drivers)
         self.mapping = list(range(12))
 
-        self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 49))
+        self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 490))
+
+        self._last_infer_time = None
+        self._episode_start = True  # Fill all history with first real obs on first step
+
         self.is_jit = checkpoint_path.endswith(".jit") or (
             checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path)
         )
@@ -117,6 +121,16 @@ class PolicyRunner:
             )
 
             self._load_checkpoint(checkpoint_path)
+
+        # Detect single-step dim based on environment variable (default 49)
+        self._obs_dim_single = int(os.environ.get("QUADRUPED_OBS_DIM_SINGLE", 49))
+        if self.obs_dim % self._obs_dim_single != 0:
+            print(f"[PolicyRunner] WARNING: Total obs_dim {self.obs_dim} is not a multiple of single-step dim {self._obs_dim_single}.")
+
+        self._obs_history_len = max(1, self.obs_dim // self._obs_dim_single)
+        self._obs_history = np.zeros(
+            (self._obs_history_len, self._obs_dim_single), dtype=np.float32
+        )  # [0, :] = most recent, [-1, :] = oldest
 
         # --- Performance Tracking ---
         self.inf_times = []
@@ -237,17 +251,7 @@ class PolicyRunner:
             last_actions,
         ]
 
-        if self.obs_dim == 54:
-            f_contact = np.array(state.feet_contact, dtype=np.float32) if hasattr(state, "feet_contact") else np.zeros(4, dtype=np.float32)
-            b_height = np.array([state.base_pos[2]], dtype=np.float32) if hasattr(state, "base_pos") else np.array([0.35], dtype=np.float32)
-            obs_parts.append(f_contact)
-            obs_parts.append(b_height)
-        elif self.obs_dim != 49:
-            # Height scan fallback for simulation (not available on real robot without sensor)
-            h_val = 0.0 - state.base_pos[2] if hasattr(state, "base_pos") else -0.3
-            num_extra = self.obs_dim - 49
-            hscan = np.full(num_extra, h_val, dtype=np.float32)
-            obs_parts.append(hscan)
+
 
         # Debug print once
         if not hasattr(self, "_obs_debug_done"):
@@ -256,7 +260,20 @@ class PolicyRunner:
             )
             self._obs_debug_done = True
 
-        obs = np.concatenate(obs_parts).astype(np.float32)
+        obs_single = np.concatenate(obs_parts).astype(np.float32)
+
+        # Roll history: shift oldest out, insert current at front
+        self._obs_history = np.roll(self._obs_history, shift=1, axis=0)
+        self._obs_history[0, :] = obs_single
+
+        # If this is the first step after a reset, all other slots are stale/zero.
+        # Replicate obs_single to fill history, matching the training-side behavior.
+        if self._episode_start:
+            self._obs_history[:] = obs_single
+            self._episode_start = False
+
+        # Return flattened stacked obs
+        obs = self._obs_history.flatten()
         return obs
 
     def get_action(self, obs_np):
@@ -275,12 +292,16 @@ class PolicyRunner:
         self.counter += 1
         return result
 
-    def infer(self, state, commands, desired_qpos, mapping, verbose=None):
+    def infer(self, state, commands, desired_qpos, mapping, dt=0.02, verbose=None):
         """High-level inference with timing and internal history management."""
         # Use class-level verbose if not explicitly overridden
         show_stats = self.verbose if verbose is None else verbose
 
         t_start = time.perf_counter()
+        self._last_infer_time = t_start
+
+
+
         obs = self.build_obs(state, commands, self.last_actions, desired_qpos, mapping)
         actions = self.get_action(obs)
         t_end = time.perf_counter()
@@ -296,7 +317,12 @@ class PolicyRunner:
 
         return actions, inf_time
 
-    def step(self, state, commands, verbose=None):
+    def reset_history(self):
+        """Zero the observation history ring buffer (call at episode start)."""
+        self._obs_history[:] = 0.0
+        self._episode_start = True  # Next build_obs call will replicate the obs to all slots
+
+    def step(self, state, commands, dt=0.02, verbose=None):
         """
         Automatic inference step.
         Handles decimation, internal action tracking, and timing.
@@ -311,6 +337,7 @@ class PolicyRunner:
                 self.last_actions,
                 self.desired_qpos,
                 self.mapping,
+                dt=dt,
                 verbose=v,
             )
             self.last_actions[:] = actions

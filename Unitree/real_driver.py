@@ -80,7 +80,8 @@ class RealDriver(Node):
                 robot_type=robot,
                 checkpoint=internal_policy,
                 obs_dim=obs_dim,
-                use_estimator=True  # Usually True on physical hardware
+                use_estimator=True,  # Usually True on physical hardware
+                sim_dt=0.005
             )
         except ImportError:
             self.get_logger().error("[RealDriver] PyTorch not found. Internal policy disabled. Running in TELEMETRY ONLY mode.")
@@ -89,8 +90,11 @@ class RealDriver(Node):
                 robot_type=robot,
                 checkpoint=None,
                 obs_dim=obs_dim,
-                use_estimator=True
+                use_estimator=True,
+                sim_dt=0.005
             )
+        self.pipeline.decimation = 4  # 200 Hz loop / 4 = 50 Hz policy
+        self.pipeline.policy_dt = self.pipeline.decimation * self.pipeline.sim_dt
 
         # 4. Teleop Subscription
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)

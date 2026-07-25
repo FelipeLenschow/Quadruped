@@ -16,7 +16,7 @@ class LocomotionPipeline:
     Ensures identical execution across MuJoCo, Gazebo, Isaac Sim, and Physical Hardware.
     """
     def __init__(self, node, robot_type="go2", checkpoint=None, obs_dim=49,
-                 use_estimator=False, joint_names=None):
+                 use_estimator=False, joint_names=None, sim_dt=0.001):
         self.node = node
         self.robot_type = robot_type
 
@@ -51,7 +51,9 @@ class LocomotionPipeline:
                 "Robot will DISABLE directly on safety violations.")
 
         self.mj_to_isaac = list(range(12))  # Standard mapping
+        self.sim_dt = sim_dt
         self.decimation = self.ctrl_cfg.get("decimation", 4)
+        self.policy_dt = self.decimation * self.sim_dt
 
         # 3. Command Safety Processor (safety checking + arbitration)
         self.safety_processor = CommandSafetyProcessor(
@@ -168,7 +170,8 @@ class LocomotionPipeline:
                 if heartbeat_ok and "pose" in self.policy_manager.policies:
                     targets = self.policy_manager.step_single(
                         "pose", state, cmd_vel, self.mj_to_isaac,
-                        current_time=sim_time
+                        current_time=sim_time,
+                        dt=self.policy_dt
                     )
                     # Soft-clip to joint limits (still enforced)
                     final_targets = np.clip(targets, sp.soft_min, sp.soft_max)
@@ -197,7 +200,8 @@ class LocomotionPipeline:
                 if active_policy in self.policy_manager.policies:
                     targets = self.policy_manager.step_single(
                         active_policy, state, cmd_vel, self.mj_to_isaac,
-                        current_time=sim_time
+                        current_time=sim_time,
+                        dt=self.policy_dt
                     )
                     key = "safety" if active_policy == "safety" else "main"
                     proposed_targets[key] = targets

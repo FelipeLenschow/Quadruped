@@ -95,7 +95,7 @@ class PolicyManager:
         return pg
 
     def step_single(self, name: str, state, commands, mapping,
-                    current_time: float = None) -> np.ndarray:
+                    current_time: float = None, dt: float = 0.02) -> np.ndarray:
         """
         Step inference and compute joint-space targets for a single registered policy.
 
@@ -104,6 +104,8 @@ class PolicyManager:
             state:    StandardState from TelemetryManager.
             commands: Velocity commands [vx, vy, wz, height_cmd].
             mapping:  Joint mapping (e.g., self.mj_to_isaac).
+            current_time: Simulation time for pose generator interpolation.
+            dt:       Simulation time elapsed between policy steps (default 0.02s / 50Hz).
 
         Returns:
             np.ndarray: Proposed absolute joint targets in radians.
@@ -125,7 +127,8 @@ class PolicyManager:
             state,
             commands,
             runner.desired_qpos if runner.desired_qpos is not None else self.desired_qpos,
-            mapping
+            mapping,
+            dt=dt
         )
 
         # 2. Scale & Center to get absolute targets (radians)
@@ -135,7 +138,7 @@ class PolicyManager:
         targets = raw_actions * scale + qpos
         return targets.astype(np.float32)
 
-    def step_all(self, state, commands, mapping) -> dict:
+    def step_all(self, state, commands, mapping, dt: float = 0.02) -> dict:
         """
         Step inference and compute joint-space targets for all loaded policies.
         (Kept for backward compatibility, but step_single should be preferred for performance).
@@ -143,7 +146,7 @@ class PolicyManager:
         proposed_targets = {}
         for name in self.policies.keys():
             try:
-                proposed_targets[name] = self.step_single(name, state, commands, mapping)
+                proposed_targets[name] = self.step_single(name, state, commands, mapping, dt=dt)
             except Exception as e:
                 self.node.get_logger().error(
                     f"[PolicyManager] Error during step on policy '{name}': {e}")

@@ -89,7 +89,8 @@ class Ros2GazeboDriver(Node):
             checkpoint=checkpoint,
             obs_dim=obs_dim,
             use_estimator=effective_use_estimator,
-            joint_names=JOINT_NAMES
+            joint_names=JOINT_NAMES,
+            sim_dt=0.001
         )
 
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
@@ -441,15 +442,16 @@ class Ros2GazeboDriver(Node):
                 # Access latest inference time if available from runner
                 inf_ms = 0.0
                 runner = self.pipeline.policy_manager.policies.get("main")
-                if runner and hasattr(runner, "inf_times") and runner.inf_times:
-                    inf_ms = runner.inf_times[-1] * 1000
+                if runner:
+                    if hasattr(runner, "inf_times") and runner.inf_times:
+                        inf_ms = runner.inf_times[-1] * 1000
                 
                 # Debug Pose Error and Torque
                 err_norm = np.linalg.norm(pos_err)
                 torque_norm = np.linalg.norm(pd_torques)
                 
                 print(
-                    f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} err={err_norm:.3f} c={sum(contact)} tq={torque_norm:.1f} | inf={inf_ms:4.1f}ms   ",
+                    f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+5.2f} vy={self.base_lin_vel_b[1]:+5.2f} wz={self.base_ang_vel[2]:+5.2f} err={err_norm:.3f} c={sum(contact)} tq={torque_norm:.1f} | inf={inf_ms:4.1f}ms   ",
                     end="",
                     flush=True,
                 )
