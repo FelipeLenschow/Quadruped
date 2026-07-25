@@ -17,33 +17,6 @@ This document separates all developments into **Framework/Infrastructure Changes
 
 ---
 
-## Part 1: Framework & Infrastructure Enhancements
-*Status: SAFE & HIGHLY RECOMMENDED TO PORT TO `main`*
-
-These modifications improve developer ergonomics, automation, testing visibility, and cross-platform inference robustness without altering the theoretical formulation or gradients of the RL training policy.
-
-### 1. Automated Multi-Phase Curriculum Sequencing (`launcher.py`)
-In the NiceGait3 baseline, executing multi-phase curriculum transitions (e.g., Phase 1 $\to$ Phase 2 $\to$ Phase 3 $\to$ Phase 6) required manual intervention, manual directory renaming, and hardcoded checkpoint paths. The framework was overhauled with an automated sequential execution engine:
-* **Recursive Configuration Merging (`deep_update` & `resolve_phase_launcher`)**: Implemented deep dictionary merging so that child phases in `training_phases.yaml` can inherit from a `default` or parent phase and override specific hyperparameter trees without dropping unspecified sibling keys or crashing via `KeyError`.
-* **Automated Segment Execution (`compute_all_curriculum_segments`)**: Dynamically parses available curriculum phases and orchestrates sequential training loops automatically.
-* **Intelligent Checkpoint Chaining (`find_highest_step_checkpoint` & `rename_latest_run_dir`)**: At the conclusion of a training phase, the runner automatically inspects modification/creation timestamps in the run output directory, identifies the latest `.pt` checkpoint (or highest training step), renames the run directory cleanly, and feeds the discovered checkpoint path directly as the initialization weights for the subsequent phase.
-
-### 2. Dual-Policy Dynamic Inference Engine (`Controller/policy_runner.py` & `Controller/policy_manager.py`)
-To provide extreme flexibility for future Neural Network sizes and arbitrary history lengths:
-* **Dynamic Dimensionality Detection**: Replaced hardcoded input shapes by dynamically detecting the total observation dimension (`obs_dim`) from the loaded checkpoint's weights. The runner configures `_obs_dim_single` via environment variables (default 49) and calculates the observation history length automatically (`_obs_history_len = obs_dim // _obs_dim_single`).
-* **Observation History Ring-Buffer**: Built an in-memory observation matrix (`_obs_history` of shape `(history_len, obs_dim_single)`). At each control tick, historical frames are shifted out using `np.roll(..., shift=1, axis=0)`, inserting the freshest observation at index `0`.
-* **Episode Reset & Zero-Transient Initialization**: Added `reset_history()` and an `_episode_start` boolean flag. On the first inference execution after an episode reset or driver startup, the initial single-step observation is replicated across all historical time slots in the ring-buffer. This avoids injecting stale zero-padded observation sequences that trigger violent control transients in Sim2Sim or Sim2Real deployments.
-* **Explicit Timing & Frequency Propagation**: Standardized simulation control timing by passing `dt=0.02` (50Hz decimation rate) across `PolicyManager.step_single`, `step_all`, and `PolicyRunner.infer`.
-
-### 3. Simulation Driver Decimation & Telemetry (`Gazebo/`, `IsaacSim/`, `Mujoco/`, `Unitree/`)
-* **Standardized Physics Decimation**: Explicitly coupled driver physics steps (`sim_dt`, e.g., 0.005s in Isaac Sim, 0.001s in Gazebo) with control decimation multipliers (e.g., `decimation = 4` for 200Hz physics $\to$ 50Hz neural network command rate).
-* **Enhanced Real-Time Bridge Console**: Expanded CLI logging across all simulated and physical robot bridges. Terminal output during deployment now streams real-time base translational and rotational velocities ($v_x, v_y, \omega_z$), neural network forward-pass inference latency in milliseconds (`inf=Xms`), and running estimated gait frequency (`f=X.XXHz`).
-
-### 4. Mathematical Documentation & Benchmark Standards (`rewards.md` & `reward_equations.md`)
-* Formally codified the mathematical formulations, penalty weightings, physical rationales, and theoretical literature derivations for every active reward and constraint term across all phases of the quadruped locomotion curriculum.
-
----
-
 ## Part 2: Policy, Environment & Reward Modifications
 *Status: MDP ALGERING & DIVERGENCE SOURCE (Requires Selective / Behind-Flag Porting)*
 
