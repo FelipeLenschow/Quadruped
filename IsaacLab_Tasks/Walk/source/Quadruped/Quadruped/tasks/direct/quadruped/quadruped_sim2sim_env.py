@@ -357,7 +357,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
         for robot in self._robots:
             proj_grav = robot.data.projected_gravity_b
             upright_fail = proj_grav[:, 2] > -self.cfg.base_angle_termination_thresh
-            too_low = robot.data.root_pos_w[:, 2] < 0.15
+            too_low = (robot.data.root_pos_w[:, 2] - self.scene.env_origins[:, 2]) < 0.15
             died_chunks.append(too_low | upright_fail)
 
         died = torch.cat(died_chunks, dim=0)  # [3N]
