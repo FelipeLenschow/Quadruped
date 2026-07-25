@@ -82,22 +82,16 @@ To address standing-still local minima at low velocity commands (<0.3 m/s), seve
 
 ---
 
-## Part 3: Roadmap for Re-Integration onto `main`
+## Part 3: Remaining Roadmap for MDP & Physics Optimization
 
-To recover the verified NiceGait3 learning performance while upgrading the codebase to state-of-the-art framework standards, we will execute a staged integration after running `git switch main`:
+The Framework & Infrastructure migration (Stage 1) is **COMPLETE**. The environment is running on the NiceGait3 baseline with dynamic scaling, automated curriculum runners, and no hardcoded gait clock assumptions. 
+
+The following steps outline the remaining work to safely re-integrate the physical bugfixes and modularize the advanced locomotion rewards without disrupting early-stage convergence:
 
 ```mermaid
 graph TD
-    A[git switch main<br/>Commit 3dc5618: NiceGait3] --> B[Stage 1: Framework Porting<br/>No MDP Changes]
-    B --> C[Stage 2: Critical Bugfixes<br/>Minimal MDP Impact]
+    A[Framework Migration Complete] --> C[Stage 2: Critical Bugfixes<br/>Minimal MDP Impact]
     C --> D[Stage 3: Modular Policy Opt-in<br/>Gated behind flags]
-    
-    subgraph Stage 1 [Stage 1: Safe Infrastructure]
-        B1[Port automated launcher.py & YAML inheritance]
-        B2[Port dynamic 49/51-dim policy_runner.py & history stacking]
-        B3[Port driver decimation & live CLI telemetry]
-        B4[Port reward documentation markdown files]
-    end
     
     subgraph Stage 2 [Stage 2: Physical Correctness]
         C1[Apply ContactSensor FL/FR/RL/RR indexing fix]
@@ -105,18 +99,10 @@ graph TD
     end
     
     subgraph Stage 3 [Stage 3: Controlled Exploration]
-        D1[Add Phase Clock equations behind optional YAML flag]
-        D2[Evaluate base_acc_l2 regularizer with NiceGait3 weights]
-        D3[Systematically tune air-time vs clock gait incentives]
+        D1[Evaluate base_acc_l2 regularizer with NiceGait3 weights]
+        D2[Systematically tune air-time vs GRF stability incentives]
     end
 ```
-
-### Stage 1: Port Framework & Infrastructure (Zero MDP Alteration)
-1. Overwrite `launcher.py` with the robust automated multi-phase sequencing and checkpoint chaining implementation.
-2. Update `Controller/policy_manager.py` and `Controller/policy_runner.py` with dynamic 49/51-dim detection, observation ring-buffers, and explicit `dt` timing.
-3. Update simulation drivers (`Gazebo/`, `IsaacSim/`, `Mujoco/`, `Unitree/`) with console debugging telemetry and explicit decimation settings.
-4. Add `reward_equations.md` and update `rewards.md`.
-5. **Validation Target:** Verify that running sequential training on `main` replicates exact NiceGait3 learning curves with automated phase transitions and dynamic inference deployment.
 
 ### Stage 2: Integrate Critical Physical Bugfixes
 1. Port the `ContactSensor` foot ordering correction (`[FL, FR, RL, RR]`) in `quadruped_env.py` to ensure uniform left-right symmerty without modifying reward scales.
