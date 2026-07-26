@@ -39,11 +39,6 @@ These modifications directly altered the Isaac Lab training environment (`quadru
   * Replaced unconditional air-time rewards with phase-matched Gaussian rewards (`rew_scale_gait_phase`), incentivizing leg lift timing exclusively inside scheduled swing windows.
   * Added L1 timing penalties (`rew_scale_gait_phase_l1`) for lifting feet outside designated windows, and grounded-swing penalties (`rew_scale_gait_missed_lift`) for failing to break contact during a swing phase.
 
-### 4. Ground Reaction Force (GRF) & Stability Regularization
-* **Base Acceleration Regularizer (`rew_scale_base_acc_l2`)**: Introduced finite-difference calculation of body frame linear acceleration ($\Delta v / \Delta t$) to heavily penalize pitching, rolling, and jittery high-frequency trunk shaking.
-* **Contact Force Normalization Modifications**: Transitioned from NiceGait3’s static force ceiling ($100\text{ N}$ penalty boundary) to dynamic body-weight percentage normalizations, tuning scaling weights between `-1.0` and `-5.0e-4` to combat excessive impact GRF spikes observed during trotting transitions.
-* **Airborne Foot Threshold Transition**: Replaced NiceGait3's binary bounding constraint (penalizing when $\ge 3$ feet are simultaneously off the ground) with continuous blended threshold arrays (`max_air_feet_allowed = 2.0`).
-
 
 
 ---
