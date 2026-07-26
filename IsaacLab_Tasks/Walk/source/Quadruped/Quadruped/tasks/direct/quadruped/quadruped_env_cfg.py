@@ -197,6 +197,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # ── Simulation ────────────────────────────────────────────────────────────
     decimation = 4
     episode_length_s = _phase_cfg["env"]["episode_length_s"]
+    obs_history_len = _phase_cfg["env"]["obs_history_len"]
     sim: SimulationCfg = SimulationCfg(
         dt=0.005, 
         render_interval=decimation,
@@ -214,7 +215,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     )
 
     # ── Observation / Action spaces ───────────────────────────────────────────
-    observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 49))
+    observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 49 * (1 + obs_history_len)))
     # obs = [lin_vel(3) + ang_vel(3) + gravity(3) + cmd(4) + jpos(12) + jvel(12) + actions(12)] = 49
     action_space = 12
     state_space = 0

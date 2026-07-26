@@ -113,6 +113,9 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
         self.feet_air_penalty_val = torch.zeros(3 * N, device=D)
         self.max_contact_force_val = torch.zeros(3 * N, device=D)
 
+        if self.cfg.obs_history_len > 0:
+            self.obs_history_buf = torch.zeros(3 * N, self.cfg.obs_history_len * 49, device=D)
+
         # net contact forces — kept per-robot (different body counts possible)
         self._net_cf = [
             torch.zeros(N, r.num_bodies, 3, device=D) for r in self._robots
@@ -327,7 +330,13 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
             obs += torch.randn_like(obs) * self.cfg.observation_noise_scale
             obs_chunks.append(obs)
 
-        return {"policy": torch.cat(obs_chunks, dim=0)}  # [3N, 49]
+        policy_obs = torch.cat(obs_chunks, dim=0)
+
+        if self.cfg.obs_history_len > 0:
+            self.obs_history_buf = torch.cat([policy_obs, self.obs_history_buf[:, :-49]], dim=-1)
+            policy_obs = torch.cat([policy_obs, self.obs_history_buf], dim=-1)
+
+        return {"policy": policy_obs}
 
     def _get_rewards(self) -> torch.Tensor:
         N = self._scene_num_envs
@@ -491,6 +500,9 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
             logical_ids = phys_ids + logical_base
             self.actions[logical_ids] = 0.0
             self.previous_actions[logical_ids] = 0.0
+            
+            if self.cfg.obs_history_len > 0:
+                self.obs_history_buf[logical_ids] = 0.0
             self.last_joint_vel[logical_ids] = 0.0
             self.last_base_lin_vel[logical_ids] = 0.0
             self._resample_commands(logical_ids)

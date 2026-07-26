@@ -149,6 +149,11 @@ class QuadrupedEnv(DirectRLEnv):
             (self.num_envs,), 100.0, device=self.device
         )  # Force immediate resample
 
+        if self.cfg.obs_history_len > 0:
+            self.obs_history_buf = torch.zeros(
+                self.num_envs, self.cfg.obs_history_len * 49, device=self.device
+            )
+
         # Internal Curriculum Sequence
         self.agent_steps = 0
         self.curriculum_phase_idx = 0
@@ -734,6 +739,10 @@ class QuadrupedEnv(DirectRLEnv):
         obs_noise = torch.randn_like(obs) * self.cfg.observation_noise_scale
         obs = obs + obs_noise
 
+        if self.cfg.obs_history_len > 0:
+            self.obs_history_buf = torch.cat([obs, self.obs_history_buf[:, :-49]], dim=-1)
+            obs = torch.cat([obs, self.obs_history_buf], dim=-1)
+
         return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
@@ -860,6 +869,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.last_joint_vel[env_ids] = 0.0
             self.last_base_lin_vel[env_ids] = 0.0
             self.previous_actions[env_ids] = 0.0
+            if self.cfg.obs_history_len > 0:
+                self.obs_history_buf[env_ids] = 0.0
         else:
             super()._reset_idx(env_ids)
             # Standard Mass/Friction/State randomization
