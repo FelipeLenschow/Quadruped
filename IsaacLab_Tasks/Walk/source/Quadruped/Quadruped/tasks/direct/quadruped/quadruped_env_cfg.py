@@ -370,6 +370,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_max_contact_force = _phase_cfg["rewards"]["rew_scale_max_contact_force"]
     max_contact_force_pct = _phase_cfg["rewards"]["max_contact_force_pct"]
     rew_scale_max_air_feet = _phase_cfg["rewards"]["rew_scale_max_air_feet"]
+    max_air_feet_allowed = _phase_cfg["rewards"]["max_air_feet_allowed"]
 
     # Stability penalties
     rew_scale_flat_orientation_l2 = _phase_cfg["rewards"]["rew_scale_flat_orientation_l2"]

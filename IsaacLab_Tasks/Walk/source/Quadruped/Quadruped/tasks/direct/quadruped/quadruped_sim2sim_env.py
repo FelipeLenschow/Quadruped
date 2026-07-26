@@ -355,6 +355,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.cfg.rew_scale_max_contact_force,
                 self.cfg.rew_scale_base_acc_l2,
                 self.cfg.rew_scale_max_air_feet,
+                self.cfg.max_air_feet_allowed,
                 self.cfg.rew_scale_pos_deviation_l1,
                 self.cfg.rew_scale_stall,
                 self.cfg.target_base_height,
