@@ -71,7 +71,7 @@ if _is_sequence:
             _curriculum_phases.append({
                 "name": k,
                 "cfg": cfg,
-                "max_timesteps": cfg["env"].get("max_timesteps", 500000)
+                "max_timesteps": cfg["env"]["max_timesteps"]
             })
 
 _vel_range = _phase_cfg["events"]["push_velocity_range"] if _phase_cfg["events"]["enable_pushes"] else None
@@ -190,13 +190,13 @@ for variant in ROBOT_VARIANTS:
 @configclass
 class QuadrupedEnvCfg(DirectRLEnvCfg):
 
-    _yaml_rob = _phase_cfg["env"].get("robot_cfg", "")
+    _yaml_rob = _phase_cfg["env"]["robot_cfg"]
     _rob = _yaml_rob.upper() if _yaml_rob else os.environ.get("QUADRUPED_ROBOT", os.environ.get("FORCE_ROBOT", "RANDOM")).upper()
     robot_choice: str = _rob
 
     # ── Simulation ────────────────────────────────────────────────────────────
     decimation = 4
-    episode_length_s = 20.0
+    episode_length_s = _phase_cfg["env"]["episode_length_s"]
     sim: SimulationCfg = SimulationCfg(
         dt=0.005, 
         render_interval=decimation,
@@ -220,10 +220,10 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     state_space = 0
     action_scale = _phase_cfg["env"]["action_scale"]
     
-    base_max_timesteps = _phase_cfg["env"].get("max_timesteps", 500000)
+    base_max_timesteps = _phase_cfg["env"]["max_timesteps"]
     _total_timesteps = base_max_timesteps
     for p in _curriculum_phases:
-        _total_timesteps += p["cfg"]["env"].get("max_timesteps", 500000)
+        _total_timesteps += p["cfg"]["env"]["max_timesteps"]
     max_timesteps = _total_timesteps
 
     curriculum_phases = _curriculum_phases
@@ -242,7 +242,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
         env_spacing=2.5, 
         replicate_physics=(_rob != "RANDOM"),
     )
-    _ter = os.environ.get("QUADRUPED_TERRAIN", _phase_cfg["env"].get("terrain", "rough"))
+    _ter = os.environ.get("QUADRUPED_TERRAIN", _phase_cfg["env"]["terrain"])
     scene.terrain = (
         TC_ROUGH if _ter == "rough" else (TC_FLAT if _ter == "flat" else TC_ALL)
     )
@@ -263,8 +263,8 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # ╚════════════════════════════════════════════════════════════════════════╝
 
     # Base mass and Center of Mass (CoM) Randomization
-    payload_mass_range = tuple(_phase_cfg["domain_randomization"].get("payload_mass_range", [-1.0, 3.0]))
-    com_displacement_range = tuple(_phase_cfg["domain_randomization"].get("com_displacement_range", [0.0, 0.0]))
+    payload_mass_range = tuple(_phase_cfg["domain_randomization"]["payload_mass_range"])
+    com_displacement_range = tuple(_phase_cfg["domain_randomization"]["com_displacement_range"])
 
     # Joint friction — viscous drag
     joint_friction_range = tuple(_phase_cfg["domain_randomization"]["joint_friction_range"])
@@ -366,9 +366,9 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     hip_sym_multiplier = _phase_cfg["rewards"]["hip_sym_multiplier"]
     rew_scale_torque_symmetry = _phase_cfg["rewards"]["rew_scale_torque_symmetry"]
     rew_scale_grf_balance = _phase_cfg["rewards"]["rew_scale_grf_balance"]
-    rew_scale_grf_target = _phase_cfg["rewards"].get("rew_scale_grf_target", 0.0)
-    rew_scale_max_contact_force = _phase_cfg["rewards"].get("rew_scale_max_contact_force", 0.0)
-    max_contact_force_pct = _phase_cfg["rewards"].get("max_contact_force_pct", 0.75)
+    rew_scale_grf_target = _phase_cfg["rewards"]["rew_scale_grf_target"]
+    rew_scale_max_contact_force = _phase_cfg["rewards"]["rew_scale_max_contact_force"]
+    max_contact_force_pct = _phase_cfg["rewards"]["max_contact_force_pct"]
     rew_scale_max_air_feet = _phase_cfg["rewards"]["rew_scale_max_air_feet"]
 
     # Stability penalties
@@ -376,7 +376,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_lin_vel_z_l2 = _phase_cfg["rewards"]["rew_scale_lin_vel_z_l2"]
     rew_scale_ang_vel_xy_l2 = _phase_cfg["rewards"]["rew_scale_ang_vel_xy_l2"]
     rew_scale_dof_pos_l2 = _phase_cfg["rewards"]["rew_scale_dof_pos_l2"]
-    rew_scale_base_acc_l2 = _phase_cfg["rewards"].get("rew_scale_base_acc_l2", 0.0)
+    rew_scale_base_acc_l2 = _phase_cfg["rewards"]["rew_scale_base_acc_l2"]
 
     # Smoothness / efficiency
     rew_scale_dof_torques_l2 = _phase_cfg["rewards"]["rew_scale_dof_torques_l2"]
@@ -397,24 +397,24 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     command_lin_vel_std = _phase_cfg["commands"]["command_lin_vel_std"]
     command_ang_vel_std = _phase_cfg["commands"]["command_ang_vel_std"]
 
-    command_x_range = (-1.0, 1.0)              # [m/s]
-    command_y_range = (-1.0, 1.0)              # [m/s]
-    command_yaw_range = (-1.0, 1.0)            # [rad/s]
-    command_resampling_time = 10.0              # [s]
+    command_x_range = tuple(_phase_cfg["commands"]["command_x_range"])              # [m/s]
+    command_y_range = tuple(_phase_cfg["commands"]["command_y_range"])              # [m/s]
+    command_yaw_range = tuple(_phase_cfg["commands"]["command_yaw_range"])            # [rad/s]
+    command_resampling_time = _phase_cfg["commands"]["command_resampling_time"]              # [s]
 
     # Gait reward masking: feet_air_time only counted when ‖cmd‖ > this
     static_velocity_threshold = _phase_cfg["commands"]["static_velocity_threshold"]
 
     # Zero-command fraction and single-axis fractions
     zero_command_fraction = _phase_cfg["commands"]["zero_command_fraction"]
-    standby_duration_s = _phase_cfg["commands"].get("standby_duration_s", 0.5)
-    x_only_command_fraction = _phase_cfg["commands"].get("x_only_command_fraction", 0.0)
-    y_only_command_fraction = _phase_cfg["commands"].get("y_only_command_fraction", 0.0)
-    yaw_only_command_fraction = _phase_cfg["commands"].get("yaw_only_command_fraction", 0.0)
+    standby_duration_s = _phase_cfg["commands"]["standby_duration_s"]
+    x_only_command_fraction = _phase_cfg["commands"]["x_only_command_fraction"]
+    y_only_command_fraction = _phase_cfg["commands"]["y_only_command_fraction"]
+    yaw_only_command_fraction = _phase_cfg["commands"]["yaw_only_command_fraction"]
 
     # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  TERMINATION                                                          ║
     # ╚════════════════════════════════════════════════════════════════════════╝
 
     # Terminate if cos(tilt angle) > this (i.e. too tilted)
-    base_angle_termination_thresh = 0.7
+    base_angle_termination_thresh = _phase_cfg["env"]["base_angle_termination_thresh"]

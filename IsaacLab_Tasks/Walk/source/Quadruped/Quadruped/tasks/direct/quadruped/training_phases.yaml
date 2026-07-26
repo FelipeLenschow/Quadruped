@@ -17,12 +17,16 @@ default: &default
     action_scale: 0.25
     observation_noise_scale: 0.0
     max_timesteps: 50000
+    episode_length_s: 20.0
+    base_angle_termination_thresh: 0.7
   domain_randomization:
     joint_friction_range: [0.0, 0.0]
     joint_stiffness_range: [0.0, 0.0]
     joint_pd_damping_range: [0.0, 0.0]
     action_latency_range_steps: [0, 0]
     motor_backlash_range: [0.0, 0.0]
+    payload_mass_range: [-1.0, 3.0]
+    com_displacement_range: [0.0, 0.0]
   events:
     enable_pushes: false
     push_velocity_range: [-0.5, 0.5]
@@ -64,6 +68,10 @@ default: &default
   commands:
     command_lin_vel_std: 0.5
     command_ang_vel_std: 0.5
+    command_x_range: [-1.0, 1.0]
+    command_y_range: [-1.0, 1.0]
+    command_yaw_range: [-1.0, 1.0]
+    command_resampling_time: 10.0
     static_velocity_threshold: 0.1
     zero_command_fraction: 0.0
     standby_duration_s: 0.0
