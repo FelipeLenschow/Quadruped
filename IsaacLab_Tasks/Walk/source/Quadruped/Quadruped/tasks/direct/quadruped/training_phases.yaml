@@ -45,7 +45,7 @@ default: &default
     rew_scale_ang_vel_xy_l2: -0.05
     rew_scale_dof_pos_l2: -0.2
     rew_scale_max_air_feet: -0.5
-    rew_scale_base_acc_l2: 0.0
+    rew_scale_base_acc_l2: -0.1
     # ── Smoothness / efficiency penalties ──
     rew_scale_dof_torques_l2: -0.0002
     rew_scale_dof_acc_l2: -2.5e-7
@@ -55,6 +55,8 @@ default: &default
     rew_scale_feet_air_penalty_static: -5.0
     rew_scale_joint_vel_l2_static: -1.0e-5
     # ── Disabled ──
+    rew_scale_pos_deviation_l1: 0.0
+    rew_scale_stall: 0.0
     rew_scale_undesired_contacts: 0.0
     rew_scale_base_height_l2: 0.0
     target_base_height: 0.32
@@ -73,6 +75,8 @@ default: &default
     command_yaw_range: [-1.0, 1.0]
     command_resampling_time: 10.0
     static_velocity_threshold: 0.1
+    stall_velocity_threshold: 0.05
+    max_pos_leash: 0.4
     zero_command_fraction: 0.0
     standby_duration_s: 0.0
     x_only_command_fraction: 0.05

@@ -28,7 +28,6 @@ These modifications directly altered the Isaac Lab training environment (`quadru
   * *Critical Divergence Note:* In the NiceGait3 baseline, historical buffers (such as `feet_air_time`, old observation history steps, and `previous_actions`) were not strictly cleared across environmental resets. This benign "buggy carryover" inadvertently provided an initial noise spectrum and high-magnitude reward gradient spike in early Phase 1 training that accelerated policy locomotion discovery. Clean zeroing of these buffers eliminated this early gradient incentive, contributing to early-stage reward stagnation.
 
 ### 2. Gait Clock Dynamics & Foot Symmetry
-* **ContactSensor Foot Indexing Fix**: Uncovered and corrected an indexing asymmetry in `quadruped_env.py`. Isaac Lab’s regex body matching (`.*_foot`) returned sensor IDs in an order inconsistent with the physics engine's standard joint actuator convention (`[FL, FR, RL, RR]`). Remapped feet IDs explicitly (`[c_feet_ids[2], c_feet_ids[3], c_feet_ids[0], c_feet_ids[1]]`), resolving diagonal gait skewing.
 * **Gait Frequency Formula Evolution**: The coupling between commanded velocity and cyclical gait frequency ($f$) evolved through several mathematical forms across `ClockGait1-7`:
   * *Inverted/Linear iterations*: Initial approximations ($f = c \cdot v^2$ vs $f = \sqrt{v / c}$).
   * *Quadratic formulation*: $f = 0.2 \cdot v_{\text{eff}}^2$.
@@ -36,52 +35,35 @@ These modifications directly altered the Isaac Lab training environment (`quadru
     $$f(v_{\text{eff}}) = 0.6 \left(1 - e^{-5 v_{\text{eff}}}\right) + 0.4 v_{\text{eff}}$$
     where effective speed incorporates rotational turning velocity: $v_{\text{eff}} = \sqrt{v_x^2 + v_y^2} + 0.25 |\omega_z|$.
 * **Velocity-Dependent Gait Blending**: Added logic in `quadruped_env.py` to calculate a sigmoid blending weight based on velocity, smoothly interpolating foot swing phase offsets from walking configurations at low speeds to trotting configurations (`[0.0, 0.5, 0.5, 0.0]`) at higher speeds.
-
-### 3. Low-Speed Locomotion & Virtual Leash Constraints
-To address standing-still local minima at low velocity commands (<0.3 m/s), several complex environmental rewards were experimented with in `Slow` and `NewReward`:
-* **Virtual Target Tracking (`ref_pos_xy`, `ref_yaw`)**: Built an internal odometry integrator that advances a virtual target reference position and heading based on command velocities at each step.
-* **Stall Penalty (`stall_val`) & Positional Leash Deviation (`pos_deviation_val`)**: Implemented dynamic penalty gates that actively punish the policy when linear speed falls below a stall threshold ($0.05\text{ m/s}$) while commanded to move, or when physical position deviates beyond a maximum virtual leash limit ($0.4\text{ m}$).
+* **Phase-Matched Swing Rewards & Penalties**:
+  * Replaced unconditional air-time rewards with phase-matched Gaussian rewards (`rew_scale_gait_phase`), incentivizing leg lift timing exclusively inside scheduled swing windows.
+  * Added L1 timing penalties (`rew_scale_gait_phase_l1`) for lifting feet outside designated windows, and grounded-swing penalties (`rew_scale_gait_missed_lift`) for failing to break contact during a swing phase.
 
 ### 4. Ground Reaction Force (GRF) & Stability Regularization
 * **Base Acceleration Regularizer (`rew_scale_base_acc_l2`)**: Introduced finite-difference calculation of body frame linear acceleration ($\Delta v / \Delta t$) to heavily penalize pitching, rolling, and jittery high-frequency trunk shaking.
 * **Contact Force Normalization Modifications**: Transitioned from NiceGait3’s static force ceiling ($100\text{ N}$ penalty boundary) to dynamic body-weight percentage normalizations, tuning scaling weights between `-1.0` and `-5.0e-4` to combat excessive impact GRF spikes observed during trotting transitions.
 * **Airborne Foot Threshold Transition**: Replaced NiceGait3's binary bounding constraint (penalizing when $\ge 3$ feet are simultaneously off the ground) with continuous blended threshold arrays (`max_air_feet_allowed = 2.0`).
-* **Phase-Matched Swing Rewards & Penalties**:
-  * Replaced unconditional air-time rewards with phase-matched Gaussian rewards (`rew_scale_gait_phase`), incentivizing leg lift timing exclusively inside scheduled swing windows.
-  * Added L1 timing penalties (`rew_scale_gait_phase_l1`) for lifting feet outside designated windows, and grounded-swing penalties (`rew_scale_gait_missed_lift`) for failing to break contact during a swing phase.
 
-### 5. Multi-Robot Sim2Sim Termination Physics (`quadruped_sim2sim_env.py`)
-* Refactored episode termination conditions (`_get_dones`) across Go2, A1, and generic Quadruped architectures. Decoupled absolute termination base-height thresholds from initial spawning altitudes and ground terrain elevation to prevent premature episode terminations caused by initial spawning settling drops.
+
 
 ---
 
-## Part 3: Remaining Roadmap for MDP & Physics Optimization
+## Part 3: Roadmap Status & Next Steps
 
-The Framework & Infrastructure migration (Stage 1) is **COMPLETE**. The environment is running on the NiceGait3 baseline with dynamic scaling, automated curriculum runners, and no hardcoded gait clock assumptions. 
+The Framework & Infrastructure migration (Stage 1) is **COMPLETE**.
+The Physical Correctness Bugfixes (Stage 2) are **COMPLETE**.
+The Modularization of Advanced Locomotion Rewards (Stage 3) is **COMPLETE**. 
 
-The following steps outline the remaining work to safely re-integrate the physical bugfixes and modularize the advanced locomotion rewards without disrupting early-stage convergence:
+All features (including `base_acc_l2`, GRF penalties, and the low-speed odometry leash/stall penalties) have been surgically integrated into the codebase but defaulted to `0.0` in the baseline YAML configuration to prevent disruption of early-stage convergence.
 
 ```mermaid
 graph TD
-    A[Framework Migration Complete] --> C[Stage 2: Critical Bugfixes<br/>Minimal MDP Impact]
-    C --> D[Stage 3: Modular Policy Opt-in<br/>Gated behind flags]
-    
-    subgraph Stage 2 [Stage 2: Physical Correctness]
-        C1[Apply ContactSensor FL/FR/RL/RR indexing fix]
-        C2[Apply Sim2Sim relative height termination physics]
-    end
-    
-    subgraph Stage 3 [Stage 3: Controlled Exploration]
-        D1[Evaluate base_acc_l2 regularizer with NiceGait3 weights]
-        D2[Systematically tune air-time vs GRF stability incentives]
-    end
+    A[Framework Migration Complete] --> C[Stage 2: Critical Bugfixes Complete]
+    C --> D[Stage 3: Modular Opt-in Framework Complete]
+    D --> E[Execution: Systematic Tuning Runs]
 ```
 
-### Stage 2: Integrate Critical Physical Bugfixes
-1. Port the `ContactSensor` foot ordering correction (`[FL, FR, RL, RR]`) in `quadruped_env.py` to ensure uniform left-right symmerty without modifying reward scales.
-2. Port the relative base height termination logic in `quadruped_sim2sim_env.py` to prevent premature initialization failures.
-3. **Validation Target:** Confirm stable Sim2Sim deployment across all robot targets without early termination spikes.
-
-### Stage 3: Modularize Policy & Reward Extensions
-1. Re-introduce stability regularizers (like `rew_scale_base_acc_l2` and weight-normalized GRF thresholds) individually via systematic parameter sweeps rather than en-masse replacements of Phase 1 basic locomotion incentives.
-2. **Validation Target:** Maintain early-stage Phase 1 high-gradient policy convergence while incrementally gaining low-velocity controllability and GRF smoothness.
+### Next Steps: Systematic Tuning & Execution
+1. **Baseline Validation:** Execute a full Phase 1 run using the pristine NiceGait3 baseline configuration (which is currently loaded and clean).
+2. **Modular Activation:** Re-introduce stability regularizers (`rew_scale_base_acc_l2`, GRF thresholds) individually via systematic YAML parameter sweeps.
+3. **Target:** Maintain the early-stage Phase 1 high-gradient policy convergence while incrementally trading reward headroom for low-velocity controllability and GRF smoothness.

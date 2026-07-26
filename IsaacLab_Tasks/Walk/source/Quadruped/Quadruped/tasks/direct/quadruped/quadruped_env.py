@@ -128,6 +128,10 @@ class QuadrupedEnv(DirectRLEnv):
         self.target_commands = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_joint_vel = torch.zeros(self.num_envs, 12, device=self.device)
         self.last_base_lin_vel = torch.zeros((self.num_envs, 3), device=self.device)
+        self.ref_pos_xy = torch.zeros((self.num_envs, 2), device=self.device)
+        self.ref_yaw = torch.zeros(self.num_envs, device=self.device)
+        self.pos_deviation_val = torch.zeros(self.num_envs, device=self.device)
+        self.stall_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_feet_contact = torch.zeros(
             self.num_envs, 4, dtype=torch.bool, device=self.device
@@ -498,6 +502,15 @@ class QuadrupedEnv(DirectRLEnv):
             self.commands[:, 2] = teleop_cmd[2]
             self.commands[:, 3] = 0.0
 
+        # Integrate virtual reference yaw and position using current commands
+        self.ref_yaw += self.commands[:, 2] * self.step_dt
+        cos_yaw = torch.cos(self.ref_yaw)
+        sin_yaw = torch.sin(self.ref_yaw)
+        vx_world = self.commands[:, 0] * cos_yaw - self.commands[:, 1] * sin_yaw
+        vy_world = self.commands[:, 0] * sin_yaw + self.commands[:, 1] * cos_yaw
+        self.ref_pos_xy[:, 0] += vx_world * self.step_dt
+        self.ref_pos_xy[:, 1] += vy_world * self.step_dt
+
     def _apply_action(self) -> None:
         """
         Applies the neural network action to the robot joints.
@@ -681,6 +694,27 @@ class QuadrupedEnv(DirectRLEnv):
         self.feet_air_time[contact] = 0.0
         self.last_feet_contact = contact
 
+        # Compute leashed virtual reference position deviation
+        pos_error = self.ref_pos_xy - self.root_pos_w[:, :2]
+        error_dist = torch.norm(pos_error, dim=1)
+        max_leash = getattr(self.cfg, "max_pos_leash", 0.4)
+        exceeds_leash = error_dist > max_leash
+        if exceeds_leash.any():
+            scale = max_leash / error_dist[exceeds_leash]
+            self.ref_pos_xy[exceeds_leash] = (
+                self.root_pos_w[exceeds_leash, :2]
+                + pos_error[exceeds_leash] * scale.unsqueeze(1)
+            )
+            error_dist[exceeds_leash] = max_leash
+        self.pos_deviation_val = error_dist
+
+        # Compute linear speed deficit (stall penalty) when commanded above stall_velocity_threshold
+        stall_thresh = getattr(self.cfg, "stall_velocity_threshold", 0.05)
+        cmd_speed = torch.norm(self.commands[:, :2], dim=1)
+        robot_speed = torch.norm(self.base_lin_vel[:, :2], dim=1)
+        stall_mask = (cmd_speed > stall_thresh).float()
+        self.stall_val = stall_mask * torch.clamp(cmd_speed - robot_speed, min=0.0)
+
 
         # Observations (unscaled)
         obs = torch.cat(
@@ -737,6 +771,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_max_contact_force,
             self.cfg.rew_scale_base_acc_l2,
             self.cfg.rew_scale_max_air_feet,
+            self.cfg.rew_scale_pos_deviation_l1,
+            self.cfg.rew_scale_stall,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
@@ -761,6 +797,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.grf_balance_val,
             self.grf_target_val,
             self.max_contact_force_val,
+            self.pos_deviation_val,
+            self.stall_val,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
             self._fl_idx,
@@ -976,6 +1014,10 @@ class QuadrupedEnv(DirectRLEnv):
 
         # 4. Reset Action Buffer
         self.actions[env_ids] = 0.0
+        w, x, y, z = default_root_state[:, 3], default_root_state[:, 4], default_root_state[:, 5], default_root_state[:, 6]
+        current_yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+        self.ref_pos_xy[env_ids] = default_root_state[:, :2].clone()
+        self.ref_yaw[env_ids] = current_yaw
 
         # 5. Resample Commands
         self._resample_commands(env_ids)
@@ -1008,6 +1050,8 @@ def compute_rewards(
     rew_scale_max_contact_force: float,
     rew_scale_base_acc_l2: float,
     rew_scale_max_air_feet: float,
+    rew_scale_pos_deviation_l1: float,
+    rew_scale_stall: float,
     target_base_height: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
@@ -1032,6 +1076,8 @@ def compute_rewards(
     grf_balance_val: torch.Tensor,
     grf_target_val: torch.Tensor,
     max_contact_force_val: torch.Tensor,
+    pos_deviation_val: torch.Tensor,
+    stall_val: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
     fl_idx: torch.Tensor,
@@ -1156,6 +1202,12 @@ def compute_rewards(
     else:
         rew_torque_symmetry = torch.zeros_like(rew_alive)
 
+    # 16. Integrated Position Deviation L1 Penalty
+    rew_pos_deviation = rew_scale_pos_deviation_l1 * pos_deviation_val
+
+    # 17. Linear Speed Deficit (Stall) Penalty
+    rew_stall = rew_scale_stall * stall_val
+
     total_reward = (
         rew_alive
         + rew_undesired_contacts
@@ -1181,5 +1233,7 @@ def compute_rewards(
         + rew_scale_grf_balance * grf_balance_val
         + rew_scale_grf_target * grf_target_val
         + rew_scale_max_contact_force * max_contact_force_val
+        + rew_pos_deviation
+        + rew_stall
     )
     return total_reward

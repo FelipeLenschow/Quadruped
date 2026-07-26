@@ -389,6 +389,8 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_joint_vel_l2_static = _phase_cfg["rewards"]["rew_scale_joint_vel_l2_static"]
     rew_scale_base_height_l2 = _phase_cfg["rewards"]["rew_scale_base_height_l2"]
     target_base_height = _phase_cfg["rewards"]["target_base_height"]
+    rew_scale_pos_deviation_l1 = _phase_cfg["rewards"]["rew_scale_pos_deviation_l1"]
+    rew_scale_stall = _phase_cfg["rewards"]["rew_scale_stall"]
 
     # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  COMMANDS                                                             ║
@@ -404,6 +406,8 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
 
     # Gait reward masking: feet_air_time only counted when ‖cmd‖ > this
     static_velocity_threshold = _phase_cfg["commands"]["static_velocity_threshold"]
+    stall_velocity_threshold = _phase_cfg["commands"]["stall_velocity_threshold"]
+    max_pos_leash = _phase_cfg["commands"]["max_pos_leash"]
 
     # Zero-command fraction and single-axis fractions
     zero_command_fraction = _phase_cfg["commands"]["zero_command_fraction"]

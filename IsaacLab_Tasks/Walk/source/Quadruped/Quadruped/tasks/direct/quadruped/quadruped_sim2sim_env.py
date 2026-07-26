@@ -66,18 +66,18 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
             self._cs_a1, self._cs_quadruped, self._cs_go2
         ]
 
-        def _find_joints_and_feet(robot):
+        def _find_joints_and_feet(robot, cs):
             dof_idx, _ = robot.find_joints(
                 ".*_hip_joint|.*_thigh_joint|.*_calf_joint"
             )
-            feet_ids_raw, _ = robot.find_bodies(".*_foot")
+            feet_ids_raw, _ = cs.find_bodies(".*_foot")
             feet_ids = [feet_ids_raw[2], feet_ids_raw[3],
                         feet_ids_raw[0], feet_ids_raw[1]]
             return dof_idx, feet_ids
 
-        self._dof_idx_a1, self._feet_a1 = _find_joints_and_feet(self._robot_a1)
-        self._dof_idx_quadruped, self._feet_quadruped = _find_joints_and_feet(self._robot_quadruped)
-        self._dof_idx_go2, self._feet_go2 = _find_joints_and_feet(self._robot_go2)
+        self._dof_idx_a1, self._feet_a1 = _find_joints_and_feet(self._robot_a1, self._cs_a1)
+        self._dof_idx_quadruped, self._feet_quadruped = _find_joints_and_feet(self._robot_quadruped, self._cs_quadruped)
+        self._dof_idx_go2, self._feet_go2 = _find_joints_and_feet(self._robot_go2, self._cs_go2)
 
         self._all_dof_idx = [self._dof_idx_a1, self._dof_idx_quadruped, self._dof_idx_go2]
         self._all_feet = [self._feet_a1, self._feet_quadruped, self._feet_go2]
@@ -355,6 +355,8 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.cfg.rew_scale_max_contact_force,
                 self.cfg.rew_scale_base_acc_l2,
                 self.cfg.rew_scale_max_air_feet,
+                self.cfg.rew_scale_pos_deviation_l1,
+                self.cfg.rew_scale_stall,
                 self.cfg.target_base_height,
                 self.cfg.command_lin_vel_std,
                 self.cfg.command_ang_vel_std,
@@ -375,6 +377,8 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 zero_val, # grf_balance_val
                 zero_val, # grf_target_val
                 zero_val, # max_contact_force_val
+                zero_val, # pos_deviation_val
+                zero_val, # stall_val,
                 zero_val, # base_height_val
                 zero_val, # undesired_contacts
                 zero_idx, # fl_idx
