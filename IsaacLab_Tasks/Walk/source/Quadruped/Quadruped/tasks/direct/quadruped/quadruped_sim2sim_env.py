@@ -110,6 +110,8 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
         self.feet_air_time        = torch.zeros(3 * N, 4, device=D)
         self.last_feet_contact    = torch.zeros(3 * N, 4, device=D, dtype=torch.bool)
         self.feet_air_time_reward_val = torch.zeros(3 * N, device=D)
+        self.feet_air_penalty_val = torch.zeros(3 * N, device=D)
+        self.max_contact_force_val = torch.zeros(3 * N, device=D)
 
         # net contact forces — kept per-robot (different body counts possible)
         self._net_cf = [
@@ -298,6 +300,19 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
             self.feet_air_time[slice_][contact] = 0.0
             self.last_feet_contact[slice_] = contact
 
+            # --- Section 4: GRF & Stability Penalities ---
+            self.feet_air_penalty_val[slice_] = torch.sum((~contact).float(), dim=1)
+            
+            feet_forces_z = self._net_cf[i][:, feet_ids, 2].abs()
+            masses = robot.root_physx_view.get_masses()
+            robot_mass = masses.sum(dim=-1) # (N,)
+            robot_total_weight = robot_mass * 9.81
+            
+            max_force_pct = getattr(self.cfg, "max_contact_force_pct", 0.75)
+            per_foot_thresh = robot_total_weight * max_force_pct
+            excess = (feet_forces_z - per_foot_thresh.unsqueeze(1)).clamp(min=0.0)
+            self.max_contact_force_val[slice_] = torch.sum(excess.square(), dim=1) / torch.square(robot_total_weight).clamp(min=1.0)
+
             # Store for reward / done use
             self.last_joint_vel[slice_, :jvel.shape[1]] = jvel
 
@@ -372,12 +387,12 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.previous_actions[sl],
                 self.feet_air_time_reward_val[sl],
                 zero_val, # foot_height_reward_val
-                zero_val, # feet_air_penalty_val
+                self.feet_air_penalty_val[sl],
                 zero_val, # feet_air_penalty_static_val
                 zero_val, # joint_vel_l2_static_val
                 zero_val, # grf_balance_val
                 zero_val, # grf_target_val
-                zero_val, # max_contact_force_val
+                self.max_contact_force_val[sl],
                 zero_val, # pos_deviation_val
                 zero_val, # stall_val,
                 zero_val, # base_height_val
