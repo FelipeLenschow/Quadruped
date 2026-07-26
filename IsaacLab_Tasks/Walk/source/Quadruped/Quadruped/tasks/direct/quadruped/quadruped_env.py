@@ -127,6 +127,7 @@ class QuadrupedEnv(DirectRLEnv):
         self.commands = torch.zeros(self.num_envs, 4, device=self.device)
         self.target_commands = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_joint_vel = torch.zeros(self.num_envs, 12, device=self.device)
+        self.last_base_lin_vel = torch.zeros((self.num_envs, 3), device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_feet_contact = torch.zeros(
             self.num_envs, 4, dtype=torch.bool, device=self.device
@@ -387,6 +388,7 @@ class QuadrupedEnv(DirectRLEnv):
                 self._transition_to_next_phase()
         self.previous_actions = self.actions.clone()
         self.last_joint_vel = self.joint_vel.clone()
+        self.last_base_lin_vel = self.base_lin_vel.clone()
         self.actions = actions.clone()
 
         # Update action history for latency simulation
@@ -733,6 +735,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_grf_balance,
             self.cfg.rew_scale_grf_target,
             self.cfg.rew_scale_max_contact_force,
+            self.cfg.rew_scale_base_acc_l2,
             self.cfg.rew_scale_max_air_feet,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
@@ -745,6 +748,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.desired_joint_pos,
             self.joint_vel,
             self.last_joint_vel,
+            self.last_base_lin_vel,
             self.applied_torque,
             self.joint_acc,
             self.actions,
@@ -815,6 +819,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.reset_buf[env_ids] = 0
             self.feet_air_time[env_ids] = 0.0
             self.last_joint_vel[env_ids] = 0.0
+            self.last_base_lin_vel[env_ids] = 0.0
             self.previous_actions[env_ids] = 0.0
         else:
             super()._reset_idx(env_ids)
@@ -1001,6 +1006,7 @@ def compute_rewards(
     rew_scale_grf_balance: float,
     rew_scale_grf_target: float,
     rew_scale_max_contact_force: float,
+    rew_scale_base_acc_l2: float,
     rew_scale_max_air_feet: float,
     target_base_height: float,
     command_lin_vel_std: float,
@@ -1013,6 +1019,7 @@ def compute_rewards(
     desired_joint_pos: torch.Tensor,
     joint_vel: torch.Tensor,
     last_joint_vel: torch.Tensor,
+    last_base_lin_vel: torch.Tensor,
     joint_torques: torch.Tensor,
     joint_acc: torch.Tensor,
     actions: torch.Tensor,
@@ -1078,6 +1085,10 @@ def compute_rewards(
     # However, Isaac Sim usually provides it. We passed joint_acc.
     # If joint_acc is zero (because no sensor?), check implementation.
     # For now assuming it works.
+
+    # Base Acceleration Penalty (calculated via finite difference)
+    base_acc = (base_lin_vel - last_base_lin_vel) / step_dt
+    rew_base_acc_l2 = rew_scale_base_acc_l2 * torch.sum(torch.square(base_acc), dim=1)
 
     # 8. Action Rate L2 (Penalty)
     # Penalize large changes in action
@@ -1153,11 +1164,12 @@ def compute_rewards(
         + rew_lin_vel_z_l2
         + rew_ang_vel_xy_l2
         + rew_dof_torques_l2
+        + rew_dof_pos_l2
         + rew_dof_acc_l2
+        + rew_base_acc_l2
         + rew_action_rate_l2
         + rew_max_air_feet
         + rew_feet_air_time
-        + rew_dof_pos_l2
         + rew_flat_orientation_l2
         + rew_foot_height
         + rew_base_height_l2

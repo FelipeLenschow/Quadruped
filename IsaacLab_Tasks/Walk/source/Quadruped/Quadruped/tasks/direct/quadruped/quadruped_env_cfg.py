@@ -376,6 +376,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_lin_vel_z_l2 = _phase_cfg["rewards"]["rew_scale_lin_vel_z_l2"]
     rew_scale_ang_vel_xy_l2 = _phase_cfg["rewards"]["rew_scale_ang_vel_xy_l2"]
     rew_scale_dof_pos_l2 = _phase_cfg["rewards"]["rew_scale_dof_pos_l2"]
+    rew_scale_base_acc_l2 = _phase_cfg["rewards"].get("rew_scale_base_acc_l2", 0.0)
 
     # Smoothness / efficiency
     rew_scale_dof_torques_l2 = _phase_cfg["rewards"]["rew_scale_dof_torques_l2"]

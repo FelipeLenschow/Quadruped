@@ -105,6 +105,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
         # last_joint_vel: use Quadruped joint count as reference (all 3 have 12+)
         num_jnts = self._robots[0].num_joints
         self.last_joint_vel       = torch.zeros(3 * N, num_jnts, device=D)
+        self.last_base_lin_vel    = torch.zeros(3 * N, 3, device=D)
 
         self.feet_air_time        = torch.zeros(3 * N, 4, device=D)
         self.last_feet_contact    = torch.zeros(3 * N, 4, device=D, dtype=torch.bool)
@@ -178,6 +179,12 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self.previous_actions = self.actions.clone()
         self.actions = actions.clone()
+
+        # Store last base linear velocity for acceleration penalty
+        N = self._scene_num_envs
+        for i, robot in enumerate(self._robots):
+            sl = slice(i * N, (i + 1) * N)
+            self.last_base_lin_vel[sl] = robot.data.root_lin_vel_b.clone()
 
         # Update timers and resample stale commands
         self.command_timer += self.step_dt
@@ -319,8 +326,12 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
             jvel = robot.data.joint_vel[:, dof_idx]
             last_jvel = self.last_joint_vel[sl, :jvel.shape[1]]
 
+            zero_val = torch.zeros(N, device=self.device)
+            zero_idx = torch.zeros(0, dtype=torch.long, device=self.device)
+
             r = compute_rewards(
                 self.cfg.rew_scale_alive,
+                self.cfg.rew_scale_undesired_contacts,
                 self.cfg.rew_scale_track_lin_vel_xy_exp,
                 self.cfg.rew_scale_track_ang_vel_z_exp,
                 self.cfg.rew_scale_lin_vel_z_l2,
@@ -331,18 +342,45 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.cfg.rew_scale_action_rate_l2,
                 self.cfg.rew_scale_feet_air_time,
                 self.cfg.rew_scale_flat_orientation_l2,
+                self.cfg.rew_scale_foot_height_exp,
+                self.cfg.rew_scale_feet_air_penalty,
+                self.cfg.rew_scale_feet_air_penalty_static,
+                self.cfg.rew_scale_joint_vel_l2_static,
+                self.cfg.rew_scale_base_height_l2,
+                self.cfg.rew_scale_trot_symmetry,
+                self.cfg.hip_sym_multiplier,
+                self.cfg.rew_scale_torque_symmetry,
+                self.cfg.rew_scale_grf_balance,
+                self.cfg.rew_scale_grf_target,
+                self.cfg.rew_scale_max_contact_force,
+                self.cfg.rew_scale_base_acc_l2,
+                self.cfg.rew_scale_max_air_feet,
+                self.cfg.target_base_height,
                 self.cfg.command_lin_vel_std,
                 self.cfg.command_ang_vel_std,
                 self.commands[sl],
                 robot.data.root_lin_vel_b,
                 robot.data.root_ang_vel_b,
                 robot.data.projected_gravity_b,
-                jpos, desired_jp, jvel, last_jvel,
+                jpos, desired_jp, jvel, last_jvel, self.last_base_lin_vel[sl],
                 robot.data.applied_torque,
                 robot.data.joint_acc,
                 self.actions[sl],
                 self.previous_actions[sl],
                 self.feet_air_time_reward_val[sl],
+                zero_val, # foot_height_reward_val
+                zero_val, # feet_air_penalty_val
+                zero_val, # feet_air_penalty_static_val
+                zero_val, # joint_vel_l2_static_val
+                zero_val, # grf_balance_val
+                zero_val, # grf_target_val
+                zero_val, # max_contact_force_val
+                zero_val, # base_height_val
+                zero_val, # undesired_contacts
+                zero_idx, # fl_idx
+                zero_idx, # fr_idx
+                zero_idx, # rl_idx
+                zero_idx, # rr_idx
                 self.reset_terminated[sl],
                 self.step_dt,
             )
@@ -432,4 +470,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
             # Reset action buffer slice
             logical_ids = phys_ids + logical_base
             self.actions[logical_ids] = 0.0
+            self.previous_actions[logical_ids] = 0.0
+            self.last_joint_vel[logical_ids] = 0.0
+            self.last_base_lin_vel[logical_ids] = 0.0
             self._resample_commands(logical_ids)

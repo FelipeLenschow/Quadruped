@@ -41,6 +41,7 @@ default: &default
     rew_scale_ang_vel_xy_l2: -0.05
     rew_scale_dof_pos_l2: -0.2
     rew_scale_max_air_feet: -0.5
+    rew_scale_base_acc_l2: 0.0
     # ── Smoothness / efficiency penalties ──
     rew_scale_dof_torques_l2: -0.0002
     rew_scale_dof_acc_l2: -2.5e-7
