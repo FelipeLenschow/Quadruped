@@ -67,7 +67,7 @@ default: &default
     rew_scale_torque_symmetry: 0.0
     rew_scale_grf_balance: 0.0
     rew_scale_grf_target: 0.0
-    rew_scale_max_contact_force: 0.0 #-0.0005
+    rew_scale_max_contact_force: 0.0
     max_contact_force_pct: 0.75
   commands:
     command_lin_vel_std: 0.5
