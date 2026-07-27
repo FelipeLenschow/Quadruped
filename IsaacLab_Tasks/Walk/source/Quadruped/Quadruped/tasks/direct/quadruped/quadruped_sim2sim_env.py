@@ -403,6 +403,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 zero_val, # grf_target_val
                 self.max_contact_force_val[sl],
                 zero_val, # pos_deviation_val
+                zero_val, # yaw_deviation_val
                 zero_val, # stall_val,
                 zero_val, # base_height_val
                 zero_val, # undesired_contacts

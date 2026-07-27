@@ -131,6 +131,7 @@ class QuadrupedEnv(DirectRLEnv):
         self.ref_pos_xy = torch.zeros((self.num_envs, 2), device=self.device)
         self.ref_yaw = torch.zeros(self.num_envs, device=self.device)
         self.pos_deviation_val = torch.zeros(self.num_envs, device=self.device)
+        self.yaw_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.stall_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_feet_contact = torch.zeros(
@@ -713,6 +714,24 @@ class QuadrupedEnv(DirectRLEnv):
             error_dist[exceeds_leash] = max_leash
         self.pos_deviation_val = error_dist
 
+        # Compute leashed virtual reference yaw deviation
+        w = self.root_quat_w[:, 0]
+        x = self.root_quat_w[:, 1]
+        y = self.root_quat_w[:, 2]
+        z = self.root_quat_w[:, 3]
+        current_yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+        
+        yaw_error = self.ref_yaw - current_yaw
+        yaw_error = (yaw_error + torch.pi) % (2.0 * torch.pi) - torch.pi
+        
+        max_yaw_leash = self.cfg.max_yaw_leash
+        exceeds_yaw_leash = torch.abs(yaw_error) > max_yaw_leash
+        if exceeds_yaw_leash.any():
+            yaw_error_clamped = torch.sign(yaw_error[exceeds_yaw_leash]) * max_yaw_leash
+            self.ref_yaw[exceeds_yaw_leash] = current_yaw[exceeds_yaw_leash] + yaw_error_clamped
+            yaw_error[exceeds_yaw_leash] = yaw_error_clamped
+        self.yaw_deviation_val = torch.abs(yaw_error)
+
         # Compute linear speed deficit (stall penalty) when commanded above stall_velocity_threshold
         stall_thresh = getattr(self.cfg, "stall_velocity_threshold", 0.05)
         cmd_speed = torch.norm(self.commands[:, :2], dim=1)
@@ -782,6 +801,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_max_air_feet,
             self.cfg.max_air_feet_allowed,
             self.cfg.rew_scale_pos_deviation_l1,
+            self.cfg.rew_scale_yaw_deviation_l1,
             self.cfg.rew_scale_stall,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
@@ -808,6 +828,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.grf_target_val,
             self.max_contact_force_val,
             self.pos_deviation_val,
+            self.yaw_deviation_val,
             self.stall_val,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
@@ -1064,6 +1085,7 @@ def compute_rewards(
     rew_scale_max_air_feet: float,
     max_air_feet_allowed: float,
     rew_scale_pos_deviation_l1: float,
+    rew_scale_yaw_deviation_l1: float,
     rew_scale_stall: float,
     target_base_height: float,
     command_lin_vel_std: float,
@@ -1090,6 +1112,7 @@ def compute_rewards(
     grf_target_val: torch.Tensor,
     max_contact_force_val: torch.Tensor,
     pos_deviation_val: torch.Tensor,
+    yaw_deviation_val: torch.Tensor,
     stall_val: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
@@ -1217,6 +1240,7 @@ def compute_rewards(
 
     # 16. Integrated Position Deviation L1 Penalty
     rew_pos_deviation = rew_scale_pos_deviation_l1 * pos_deviation_val
+    rew_yaw_deviation = rew_scale_yaw_deviation_l1 * yaw_deviation_val
 
     # 17. Linear Speed Deficit (Stall) Penalty
     rew_stall = rew_scale_stall * stall_val
@@ -1247,6 +1271,7 @@ def compute_rewards(
         + rew_scale_grf_target * grf_target_val
         + rew_scale_max_contact_force * max_contact_force_val
         + rew_pos_deviation
+        + rew_yaw_deviation
         + rew_stall
     )
     return total_reward
