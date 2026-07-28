@@ -196,8 +196,9 @@ class Ros2MujocoDriver(Node):
                 for foot_idx, foot_name in enumerate(["FL", "FR", "RL", "RR"]):
                     name1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g1)
                     name2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g2)
-                    if (name1 and foot_name.lower() in name1.lower()) or \
-                       (name2 and foot_name.lower() in name2.lower()):
+                    is_match1 = name1 and name1.lower() != "floor" and foot_name.lower() in name1.lower()
+                    is_match2 = name2 and name2.lower() != "floor" and foot_name.lower() in name2.lower()
+                    if is_match1 or is_match2:
                         contact[foot_idx] = 1.0
 
         return {

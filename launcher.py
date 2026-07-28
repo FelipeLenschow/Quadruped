@@ -244,6 +244,7 @@ def run_cli_menu():
         print("  [4] Play MuJoCo")
         print("  [5] Play Gazebo")
         print("  [6] Deploy to Robot")
+        print("  [7] Evaluate Policy (MuJoCo)")
         print("  " + "-" * 45)
         print("  [C] Console")
         print("  [T] Test Joints (Real Robot)")
@@ -259,6 +260,7 @@ def run_cli_menu():
         print("  [X] Play MuJoCo (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Gazebo (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Deploy to Robot (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Evaluate Policy (REQUIRES DOCKER OR PY3.10)")
         print("  " + "-" * 45)
         print("  [X] Console (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Test Joints (Real Robot) (REQUIRES DOCKER OR PY3.10)")
@@ -279,6 +281,7 @@ def run_cli_menu():
         "4": "mujoco",
         "5": "gazebo",
         "6": "real_deploy",
+        "7": "eval_policy",
         "k": "teleop",
         "K": "teleop",
         "v": "visualizers",
@@ -301,7 +304,7 @@ def run_cli_menu():
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-6, K, V, C, T, P, M, R, F] (default {default_action}): ").strip() or default_action
+    choice = input(f"Enter choice [0-7, K, V, C, T, P, M, R, F] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice.lower(), "None")
     
     if action == "hardware_tools":
@@ -370,7 +373,7 @@ def run_cli_menu():
         print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Aborting.")
         sys.exit(1)
         
-    if requires_docker and choice.lower() in ["4", "5", "6", "k", "v", "c", "t", "p", "m", "r", "f"]:
+    if requires_docker and choice.lower() in ["4", "5", "6", "7", "k", "v", "c", "t", "p", "m", "r", "f"]:
         print(f"\n[ERROR] Action '{action}' requires ROS 2 Humble (Python 3.10).")
         print("        Please run this task inside DOCKER or switch to a 3.10 environment.")
         sys.exit(1)
@@ -496,7 +499,7 @@ def run_cli_menu():
         pass
 
     domain_id = default_domain
-    if action not in ["train", "isaac_lab"]:
+    if action not in ["train", "isaac_lab", "eval_policy"]:
         domain_id = input(f"Enter ROS_DOMAIN_ID (default {default_domain}): ").strip() or default_domain
     robot_cfg = "UNITREE_GO2_CFG" # Default for now
     terrain_cfg = "flat"
@@ -510,17 +513,17 @@ def run_cli_menu():
     use_estimator = False
     training_phase = ""
 
-    if action in ["train", "isaac_lab", "isaac_sim", "mujoco", "gazebo"]:
-        if action in ["isaac_sim", "mujoco", "gazebo"]:
+    if action in ["train", "isaac_lab", "eval_policy", "isaac_sim", "mujoco", "gazebo"]:
+        if action in ["isaac_sim", "mujoco", "gazebo", "eval_policy"]:
             robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1] (default 1): ").strip() or "1"
             robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG"}.get(robot_choice, "UNITREE_GO2_CFG")
-        elif action == "isaac_lab":
+        elif action in ["isaac_lab"]:
             robot_choice = input("Select Robot [1: Go2, 2: Go1, 3: A1, 4: All (Mixed)] (default 1): ").strip() or "1"
             robot_cfg = {"1": "UNITREE_GO2_CFG", "2": "UNITREE_GO1_CFG", "3": "UNITREE_A1_CFG", "4": "RANDOM"}.get(robot_choice, "UNITREE_GO2_CFG")
         else:
             robot_cfg = "RANDOM" # Will be overridden by YAML or fallback to default
         
-        if action == "isaac_lab":
+        if action in ["isaac_lab"]:
             terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
             terrain_cfg = "rough" if terrain_choice == "2" else "flat"
         else:
@@ -713,7 +716,7 @@ def main():
     print("\n" + "=" * 50)
     print(f"Launching {action.upper()} Mode for {module_name}!")
     print(f"Robot:    {robot_cfg}")
-    if action == "isaac_lab":
+    if action in ["isaac_lab"]:
         print(f"Terrain:  {terrain_cfg}")
     print(f"Domain ID: {domain_id}")
     if training_phase:
@@ -864,10 +867,24 @@ def main():
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree"):
+    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable 
+
+        if action == "eval_policy":
+            bridge_script = os.path.abspath(os.path.join("Mujoco", "eval_mujoco.py"))
+            cmd = [
+                sys_python,
+                bridge_script,
+                f"--robot={robot_key}",
+                f"--internal_policy={abs_ckpt}",
+                f"--obs_dim={obs_dim}",
+            ]
+            if headless:
+                cmd.append("--headless")
+            if use_estimator:
+                cmd.append("--use_estimator")
 
 
         if action == "isaac_sim":
