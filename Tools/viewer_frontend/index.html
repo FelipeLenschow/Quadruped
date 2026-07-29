@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Policy Evaluation Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-dark: #0B0F19;
+            --panel-bg: #131A2A;
+            --text-main: #E2E8F0;
+            --text-muted: #94A3B8;
+            --border-color: #1E293B;
+            --accent: #3B82F6;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: radial-gradient(circle at 50% 0%, #1e293b 0%, var(--bg-dark) 50%);
+            color: var(--text-main);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Sidebar Styles */
+        .sidebar {
+            width: 320px;
+            background-color: rgba(19, 26, 42, 0.6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.4);
+        }
+
+        .sidebar-header {
+            padding: 24px 20px;
+            border-bottom: 1px solid var(--border-color);
+            background: transparent;
+        }
+
+        .sidebar-header h2 {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #fff;
+            letter-spacing: -0.02em;
+        }
+
+        .sidebar-header p {
+            margin: 6px 0 0;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .report-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+        }
+
+        .report-item {
+            padding: 14px 16px;
+            margin-bottom: 8px;
+            background-color: rgba(255,255,255,0.02);
+            border: 1px solid transparent;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .report-item:hover {
+            background-color: rgba(255,255,255,0.05);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        .report-item.active {
+            background: linear-gradient(90deg, rgba(59, 130, 246, 0.15) 0%, rgba(59,130,246,0.02) 100%);
+            border: 1px solid rgba(59, 130, 246, 0.4);
+            border-left: 4px solid var(--accent);
+            padding-left: 13px; /* Adjust for border */
+        }
+
+
+
+        .report-item .content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .report-item .name {
+            font-size: 0.95rem;
+            font-weight: 500;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #fff;
+        }
+
+        .report-item .meta {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .color-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-left: 12px;
+            flex-shrink: 0;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+
+        /* Main Content Styles */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .top-nav {
+            padding: 20px 40px;
+            background-color: rgba(19, 26, 42, 0.6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 20;
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 10px;
+            background: rgba(0,0,0,0.2);
+            padding: 4px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 8px 16px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn:hover {
+            color: #fff;
+            background: rgba(255,255,255,0.05);
+        }
+
+        .tab-btn.active {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+        }
+
+        .dashboard {
+            padding: 40px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 24px;
+            display: none; /* hidden until selected */
+        }
+
+        .chart-group {
+            display: contents; /* Allows children to participate in the parent's grid */
+        }
+
+        .card {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+            border-color: rgba(255,255,255,0.1);
+        }
+
+        .card-header {
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 6px;
+        }
+
+        .card-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .chart-container {
+            flex: 1;
+            min-height: 300px;
+            position: relative;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+            text-align: center;
+        }
+        
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>Evaluation Hub</h2>
+            <p>Select checkpoints to compare</p>
+        </div>
+        <div class="report-list" id="report-list">
+            <!-- Populated by JS -->
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="top-nav" id="top-nav" style="display:none;">
+            <!-- Axis Selection -->
+            <div class="nav-group" id="axis-tabs">
+                <button class="tab-btn active" data-axis="x">Forward (X)</button>
+                <button class="tab-btn" data-axis="y">Lateral (Y)</button>
+                <button class="tab-btn" data-axis="yaw">Turn (Yaw)</button>
+            </div>
+            
+            <!-- Category Selection -->
+            <div class="nav-group" id="category-tabs">
+                <button class="tab-btn active" data-cat="tracking">Velocity & Freq</button>
+                <button class="tab-btn" data-cat="base">Base Variation</button>
+                <button class="tab-btn" data-cat="feet">Feet Behavior</button>
+                <button class="tab-btn" data-cat="gait">Gait Metrics</button>
+            </div>
+        </div>
+
+        <div class="empty-state" id="empty-state">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+            <h2>No Data Selected</h2>
+            <p>Select one or more runs from the sidebar to visualize the telemetry.</p>
+        </div>
+
+        <div class="dashboard" id="dashboard">
+            <!-- ================= TRACKING & SYNC ================= -->
+            <div id="cat-tracking" class="chart-group">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title" id="title-speed">Velocity Tracking</div>
+                        <div class="card-desc">Comparison of commanded vs actual velocity.</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartSpeed"></canvas></div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Step Frequency</div>
+                        <div class="card-desc">Number of strides per second (Hz).</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartFreq"></canvas></div>
+                </div>
+            </div>
+
+            <!-- ================= BASE VARIATION ================= -->
+            <div id="cat-base" class="chart-group" style="display:none;">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Base Z-Velocity Oscillation</div>
+                        <div class="card-desc">Standard deviation of vertical velocity (m/s). Lower is smoother.</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartOscZ"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Base Roll Oscillation</div>
+                        <div class="card-desc">Standard deviation of roll velocity (rad/s). Lower is smoother.</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartOscRoll"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Base Pitch Oscillation</div>
+                        <div class="card-desc">Standard deviation of pitch velocity (rad/s). Lower is smoother.</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartOscPitch"></canvas></div>
+                </div>
+            </div>
+
+            <!-- ================= FEET BEHAVIOR ================= -->
+            <div id="cat-feet" class="chart-group" style="display:none;">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Peak Ground Reaction Force</div>
+                        <div class="card-desc">Impact force during stance. Shaded area shows min/max spread across legs.</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartGRF"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Foot Lift Height</div>
+                        <div class="card-desc">Clearance height (cm) during swing phase.</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartLift"></canvas></div>
+                </div>
+            </div>
+
+            <!-- ================= GAIT METRICS ================= -->
+            <div id="cat-gait" class="chart-group" style="display:none;">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Phase Difference: Front Legs</div>
+                        <div class="card-desc">Time offset between FL and FR strikes (Target 50% for trot).</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartPhaseFront"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Phase Difference: Right Legs</div>
+                        <div class="card-desc">Time offset between FR and RR strikes (Target 50% for trot).</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartPhaseRight"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Phase Difference: Diagonal</div>
+                        <div class="card-desc">Time offset between FL and RR strikes (Target 0% for trot).</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartPhaseDiag"></canvas></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Set Chart.js defaults for dark mode aesthetics
+        Chart.defaults.color = '#94a3b8';
+        Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.1)';
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        
+        const COLORS = ['#3b82f6', '#10b981', '#f43f5e', '#8b5cf6', '#f59e0b', '#06b6d4'];
+        
+        let allReports = [];
+        let selectedPaths = new Set();
+        let charts = {};
+        
+        let currentAxis = 'x';
+        let currentCategory = 'tracking';
+
+        // Initialize Tabs
+        document.querySelectorAll('#axis-tabs .tab-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('#axis-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                currentAxis = e.target.getAttribute('data-axis');
+                updateDashboard();
+            });
+        });
+
+        document.querySelectorAll('#category-tabs .tab-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('#category-tabs .tab-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                
+                // Hide all groups, show selected
+                currentCategory = e.target.getAttribute('data-cat');
+                document.querySelectorAll('.chart-group').forEach(g => g.style.display = 'none');
+                document.getElementById('cat-' + currentCategory).style.display = 'contents';
+                
+                updateDashboard(); // Redraw visible charts
+            });
+        });
+
+        async function fetchReports() {
+            try {
+                const response = await fetch('/api/reports');
+                const data = await response.json();
+                
+                // Sort alphabetically by display name
+                allReports = data.reports.sort((a, b) => {
+                    const nameA = a.metadata.display_name || a.metadata.checkpoint_name || "";
+                    const nameB = b.metadata.display_name || b.metadata.checkpoint_name || "";
+                    return nameA.localeCompare(nameB);
+                });
+                
+                renderSidebar();
+                updateDashboard();
+            } catch (err) {
+                console.error("Failed to fetch reports:", err);
+                document.getElementById('report-list').innerHTML = 
+                    `<div style="color: #f43f5e; font-size: 0.9rem; text-align: center; margin-top: 20px;">Failed to load reports. Is the server running?</div>`;
+            }
+        }
+
+        function renderSidebar() {
+            const list = document.getElementById('report-list');
+            list.innerHTML = '';
+            
+            if (allReports.length === 0) {
+                list.innerHTML = `<div style="color: var(--text-muted); font-size: 0.9rem; text-align: center; margin-top: 20px;">No reports found. Run an evaluation first!</div>`;
+                return;
+            }
+
+            allReports.forEach((report, index) => {
+                const color = COLORS[index % COLORS.length];
+                const meta = report.metadata;
+                const path = meta.file_path;
+                const isSelected = selectedPaths.has(path);
+                
+                const item = document.createElement('div');
+                item.className = `report-item ${isSelected ? 'active' : ''}`;
+                
+                const shortName = meta.display_name ? meta.display_name : (meta.checkpoint_name !== "None" ? meta.checkpoint_name : "Latest Run");
+                
+                item.innerHTML = `
+                    <div class="content">
+                        <div class="name">${shortName}</div>
+                        <div class="meta">${meta.robot_type.toUpperCase()} • ${meta.timestamp}</div>
+                    </div>
+                    <div class="color-indicator" style="background-color: ${color};"></div>
+                `;
+                
+                item.addEventListener('click', () => toggleSelection(path, item));
+                list.appendChild(item);
+            });
+        }
+
+        function toggleSelection(path, element) {
+            if (selectedPaths.has(path)) {
+                selectedPaths.delete(path);
+                element.classList.remove('active');
+            } else {
+                selectedPaths.add(path);
+                element.classList.add('active');
+            }
+            
+
+            
+            updateDashboard();
+        }
+
+        function getRes(r, l, axis) {
+            // Support backward compatibility for legacy JSON (flat results dict)
+            let resDict = r.data.results;
+            if (resDict[axis]) {
+                resDict = resDict[axis]; // New nested structure
+            } else if (axis !== 'x') {
+                return null; // Legacy reports only have X data
+            }
+
+            return resDict[l.toString()] || 
+                   resDict[l.toFixed(1)] || 
+                   resDict[l.toFixed(2)];
+        }
+
+        function updateDashboard() {
+            const emptyState = document.getElementById('empty-state');
+            const dashboard = document.getElementById('dashboard');
+            const topNav = document.getElementById('top-nav');
+
+            if (selectedPaths.size === 0) {
+                emptyState.style.display = 'flex';
+                dashboard.style.display = 'none';
+                topNav.style.display = 'none';
+                return;
+            }
+
+            emptyState.style.display = 'none';
+            dashboard.style.display = 'grid';
+            topNav.style.display = 'flex';
+
+            const selectedReports = [];
+            allReports.forEach((report, index) => {
+                if (selectedPaths.has(report.metadata.file_path)) {
+                    selectedReports.push({
+                        data: report,
+                        color: COLORS[index % COLORS.length],
+                        label: report.metadata.display_name ? report.metadata.display_name : (report.metadata.checkpoint_name !== "None" ? report.metadata.checkpoint_name : `Report ${index+1}`)
+                    });
+                }
+            });
+
+            // Update axis labels
+            let speedUnit = (currentAxis === 'yaw') ? 'rad/s' : 'm/s';
+            let speedLabel = (currentAxis === 'yaw') ? 'Turn Speed' : 'Speed';
+            
+            // Only render charts for the active category to save memory/cpu
+            if (currentCategory === 'tracking') {
+                document.getElementById('title-speed').innerText = `Velocity Tracking (${currentAxis.toUpperCase()})`;
+                renderChartSpeed(selectedReports, speedUnit, speedLabel);
+                renderSimpleLineChart(selectedReports, 'chartFreq', 'step_frequency_hz', 'Step Frequency (Hz)');
+            } 
+            else if (currentCategory === 'base') {
+                renderSimpleLineChart(selectedReports, 'chartOscZ', ['base_oscillation', 'std_z_vel'], 'Z Vel Std (m/s)');
+                renderSimpleLineChart(selectedReports, 'chartOscRoll', ['base_oscillation', 'std_roll_vel'], 'Roll Vel Std (rad/s)');
+                renderSimpleLineChart(selectedReports, 'chartOscPitch', ['base_oscillation', 'std_pitch_vel'], 'Pitch Vel Std (rad/s)');
+            }
+            else if (currentCategory === 'feet') {
+                renderChartEnvelope(selectedReports, 'chartGRF', 'grf_peak_stance_N', 'Peak Force (N)');
+                renderChartEnvelope(selectedReports, 'chartLift', 'foot_lift_height_cm', 'Height (cm)');
+            }
+            else if (currentCategory === 'gait') {
+                renderSimpleLineChart(selectedReports, 'chartPhaseFront', 'phase_diff_front_percent', 'Phase Offset (%)');
+                renderSimpleLineChart(selectedReports, 'chartPhaseRight', 'phase_diff_right_percent', 'Phase Offset (%)');
+                renderSimpleLineChart(selectedReports, 'chartPhaseDiag', 'phase_diff_diag_percent', 'Phase Offset (%)');
+            }
+        }
+
+        function createOrUpdateChart(id, config) {
+            if (charts[id]) {
+                charts[id].data = config.data;
+                charts[id].options = config.options;
+                charts[id].update('none'); // Instantly update without animation
+            } else {
+                const ctx = document.getElementById(id).getContext('2d');
+                charts[id] = new Chart(ctx, config);
+            }
+        }
+
+        // --- Chart Renderers ---
+        
+        function extractSpeeds(reports) {
+            let speeds = new Set();
+            reports.forEach(r => {
+                let d = r.data.results;
+                if (d[currentAxis]) d = d[currentAxis];
+                if (d) Object.keys(d).forEach(s => speeds.add(parseFloat(s)));
+            });
+            return Array.from(speeds).sort((a,b) => a-b);
+        }
+
+        function renderChartSpeed(reports, speedUnit, speedLabel) {
+            const labels = extractSpeeds(reports);
+            const datasets = reports.map(r => {
+                const data = [];
+                labels.forEach(l => {
+                    const res = getRes(r, l, currentAxis);
+                    if (res) data.push({ x: l, y: res.actual_speed });
+                });
+                return {
+                    label: r.label,
+                    data: data,
+                    borderColor: r.color,
+                    backgroundColor: r.color,
+                    tension: 0.3,
+                    borderWidth: 2,
+                    pointRadius: 4
+                };
+            });
+            
+            // Add Ideal line
+            datasets.push({
+                label: 'Ideal (Command)',
+                data: labels.map(l => ({ x: l, y: l })),
+                borderColor: 'rgba(255, 255, 255, 0.3)',
+                borderDash: [5, 5],
+                borderWidth: 1,
+                pointRadius: 0,
+                fill: false
+            });
+
+            createOrUpdateChart('chartSpeed', {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'linear', title: { display: true, text: `Commanded ${speedLabel} (${speedUnit})` } },
+                        y: { title: { display: true, text: `Actual ${speedLabel} (${speedUnit})` } }
+                    }
+                }
+            });
+        }
+
+        function renderChartEnvelope(reports, chartId, dataKey, yLabel) {
+            const labels = extractSpeeds(reports);
+            const datasets = [];
+
+            reports.forEach((r) => {
+                const maxData = [];
+                const minData = [];
+                const meanData = [];
+
+                labels.forEach(l => {
+                    const res = getRes(r, l, currentAxis);
+                    if (!res || !res[dataKey]) return;
+                    
+                    const arr = res[dataKey];
+                    maxData.push({ x: l, y: Math.max(...arr) });
+                    minData.push({ x: l, y: Math.min(...arr) });
+                    meanData.push({ x: l, y: arr.reduce((a,b) => a+b, 0) / arr.length });
+                });
+
+                // 1. Max boundary (invisible)
+                datasets.push({
+                    label: r.label + ' (Max)',
+                    data: maxData,
+                    borderColor: 'transparent',
+                    backgroundColor: 'transparent',
+                    pointRadius: 0,
+                    pointHoverRadius: 0,
+                    fill: false,
+                    tension: 0.3
+                });
+
+                // 2. Min boundary (fills to Max)
+                datasets.push({
+                    label: r.label + ' (Min)',
+                    data: minData,
+                    borderColor: 'transparent',
+                    backgroundColor: r.color + '26', // 15% opacity shade
+                    pointRadius: 0,
+                    pointHoverRadius: 0,
+                    fill: '-1',
+                    tension: 0.3
+                });
+
+                // 3. Mean line (visible)
+                datasets.push({
+                    label: r.label,
+                    data: meanData,
+                    borderColor: r.color,
+                    backgroundColor: r.color,
+                    borderWidth: 2,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    fill: false,
+                    tension: 0.3
+                });
+            });
+
+            let speedUnit = (currentAxis === 'yaw') ? 'rad/s' : 'm/s';
+            let speedLabel = (currentAxis === 'yaw') ? 'Turn Speed' : 'Speed';
+
+            createOrUpdateChart(chartId, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: {
+                                filter: function(item) {
+                                    return !item.text.includes('(Max)') && !item.text.includes('(Min)');
+                                }
+                            }
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            filter: function(item) {
+                                return !item.dataset.label.includes('(Max)') && !item.dataset.label.includes('(Min)');
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { type: 'linear', title: { display: true, text: `Commanded ${speedLabel} (${speedUnit})` } },
+                        y: { title: { display: true, text: yLabel }, beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        function renderSimpleLineChart(reports, chartId, dataKeyPath, yLabel) {
+            const labels = extractSpeeds(reports);
+            
+            const datasets = reports.map(r => {
+                const data = [];
+                labels.forEach(l => {
+                    const res = getRes(r, l, currentAxis);
+                    if (!res) return;
+                    
+                    let val = res;
+                    if (Array.isArray(dataKeyPath)) {
+                        for (let key of dataKeyPath) val = val[key];
+                    } else {
+                        val = val[dataKeyPath];
+                    }
+                    if (val !== undefined && val !== null) {
+                        data.push({ x: l, y: val });
+                    }
+                });
+                return {
+                    label: r.label,
+                    data: data,
+                    borderColor: r.color,
+                    backgroundColor: r.color,
+                    tension: 0.3,
+                    borderWidth: 2
+                };
+            });
+
+            let speedUnit = (currentAxis === 'yaw') ? 'rad/s' : 'm/s';
+            let speedLabel = (currentAxis === 'yaw') ? 'Turn Speed' : 'Speed';
+
+            createOrUpdateChart(chartId, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'linear', title: { display: true, text: `Commanded ${speedLabel} (${speedUnit})` } },
+                        y: { title: { display: true, text: yLabel }, beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        // Init
+        fetchReports();
+    </script>
+</body>
+</html>

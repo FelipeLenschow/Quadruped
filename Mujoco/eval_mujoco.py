@@ -21,6 +21,7 @@ class MujocoEvaluator(Node):
     def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False, headless=True):
         super().__init__("mujoco_evaluator_node")
         self.robot_type = robot_type
+        self.checkpoint = checkpoint
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
         self.headless = headless
 
@@ -184,11 +185,15 @@ class MujocoEvaluator(Node):
         )
 
     def _evaluation_loop(self):
-        speeds = [0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50, 0.75, 1.00]
+        axes_tests = {
+            "x": [0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50, 0.75, 1.00],
+            "y": [0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50],
+            "yaw": [0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00]
+        }
         steps_per_speed = 32000  # 32 seconds at 1000Hz (30s walking + 2s warmup)
         warmup_steps = 2000     # 2 seconds standing still
         
-        results = {}
+        results = {"x": {}, "y": {}, "yaw": {}}
         
         print("\n" + "="*60)
         print("🚀 STARTING MUJOCO POLICY EVALUATION")
@@ -227,154 +232,203 @@ class MujocoEvaluator(Node):
                     track_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "base")
                 viewer.cam.trackbodyid = track_id
 
-            for speed in speeds:
-                print(f"\n[EVAL] Testing forward velocity: {speed} m/s")
-                self._reset_robot()
-                
-                max_foot_heights = [0.0, 0.0, 0.0, 0.0]
-                swing_times = [[], [], [], []]
-                stance_force_sum = [0.0, 0.0, 0.0, 0.0]
-                stance_force_count = [0, 0, 0, 0]
-                max_grf_stance_N = [0.0, 0.0, 0.0, 0.0]
-                
-                base_z_vels = []
-                base_roll_vels = []
-                base_pitch_vels = []
-                actual_fwd_vels = []
-                
-                sync_match_count = 0
-                eval_steps = 0
-                
-                last_contact = [0.0, 0.0, 0.0, 0.0]
-                current_swing_time = [0.0, 0.0, 0.0, 0.0]
-                
-                for step in range(steps_per_speed):
-                    if not rclpy.ok(): return
+            for axis, speeds in axes_tests.items():
+                for speed in speeds:
+                    print(f"\n[EVAL] Testing {axis} velocity: {speed}")
+                    self._reset_robot()
                     
-                    if step < warmup_steps:
-                        self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
-                    else:
-                        self.cmd_vel = [speed, 0.0, 0.0, 0.0]
-                        
-                    raw_data = self._get_raw_sensor_data()
-                    self.current_targets = self.pipeline.step(
-                        raw_state_kwargs=raw_data,
-                        cmd_vel=self.cmd_vel,
-                        sim_time=self.data.time
-                    )
+                    max_foot_heights = [0.0, 0.0, 0.0, 0.0]
+                    swing_times = [[], [], [], []]
+                    stance_force_sum = [0.0, 0.0, 0.0, 0.0]
+                    stance_force_count = [0, 0, 0, 0]
+                    max_grf_stance_N = [0.0, 0.0, 0.0, 0.0]
                     
-                    torques = self._pd_torques(self.current_targets)
-                    for i, act_idx in enumerate(self.isaac_ctrl_idx):
-                        self.data.ctrl[act_idx] = torques[i]
-
-                    mujoco.mj_step(self.model, self.data)
+                    base_z_vels = []
+                    base_roll_vels = []
+                    base_pitch_vels = []
+                    actual_vels = []
                     
-                    if not self.headless:
-                        viewer.sync()
+                    eval_steps = 0
+                    
+                    last_contact = [0.0, 0.0, 0.0, 0.0]
+                    current_swing_time = [0.0, 0.0, 0.0, 0.0]
+                    
+                    last_strike_time = [0.0, 0.0, 0.0, 0.0]
+                    stride_duration = [0.0, 0.0, 0.0, 0.0]
+                    phase_diff_front_list = []
+                    phase_diff_right_list = []
+                    phase_diff_diag_list = []
+                    
+                    for step in range(steps_per_speed):
+                        if not rclpy.ok(): return
                         
-                    if step >= warmup_steps:
-                        eval_steps += 1
-                        contact = raw_data['contact']
-                        
-                        for foot_idx in range(4):
-                            is_contact = (contact[foot_idx] > 0)
+                        if step < warmup_steps:
+                            self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
+                        else:
+                            if axis == "x":
+                                self.cmd_vel = [speed, 0.0, 0.0, 0.0]
+                            elif axis == "y":
+                                self.cmd_vel = [0.0, speed, 0.0, 0.0]
+                            elif axis == "yaw":
+                                self.cmd_vel = [0.0, 0.0, speed, 0.0]
                             
-                            if is_contact:
-                                if current_swing_time[foot_idx] > 0:
-                                    swing_times[foot_idx].append(current_swing_time[foot_idx])
-                                    current_swing_time[foot_idx] = 0.0
-                                
-                                force = np.zeros(6, dtype=np.float64)
-                                foot_force = 0.0
-                                for c_i in range(self.data.ncon):
-                                    con = self.data.contact[c_i]
-                                    g1, g2 = con.geom1, con.geom2
-                                    if g1 == 0 or g2 == 0:
-                                        name1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g1)
-                                        name2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g2)
-                                        fn = ["FL", "FR", "RL", "RR"][foot_idx]
-                                        is_match1 = name1 and name1.lower() != "floor" and fn.lower() in name1.lower()
-                                        is_match2 = name2 and name2.lower() != "floor" and fn.lower() in name2.lower()
-                                        if is_match1 or is_match2:
-                                            mujoco.mj_contactForce(self.model, self.data, c_i, force)
-                                            foot_force += abs(force[0])
-                                stance_force_sum[foot_idx] += foot_force
-                                stance_force_count[foot_idx] += 1
-                                max_grf_stance_N[foot_idx] = max(max_grf_stance_N[foot_idx], foot_force)
-                                
-                            else:
-                                current_swing_time[foot_idx] += 0.001
-                                if len(self.foot_geom_ids) == 4:
-                                    z_height = self.data.geom_xpos[self.foot_geom_ids[foot_idx]][2]
-                                    # Normalize relative to ground (floor is at 0.0). We also need to subtract nominal foot radius if we want exact clearance, but relative height is fine.
-                                    max_foot_heights[foot_idx] = max(max_foot_heights[foot_idx], z_height)
-
-                        last_contact = contact
+                        raw_data = self._get_raw_sensor_data()
+                        self.current_targets = self.pipeline.step(
+                            raw_state_kwargs=raw_data,
+                            cmd_vel=self.cmd_vel,
+                            sim_time=self.data.time
+                        )
                         
-                        pair1_sync = (contact[0] == contact[3])
-                        pair2_sync = (contact[1] == contact[2])
-                        if pair1_sync and pair2_sync:
-                            sync_match_count += 1
+                        torques = self._pd_torques(self.current_targets)
+                        for i, act_idx in enumerate(self.isaac_ctrl_idx):
+                            self.data.ctrl[act_idx] = torques[i]
+    
+                        mujoco.mj_step(self.model, self.data)
+                        
+                        if not self.headless:
+                            viewer.sync()
                             
-                        base_z_vels.append(raw_data['vel'][2])
-                        base_roll_vels.append(raw_data['gyro'][0])
-                        base_pitch_vels.append(raw_data['gyro'][1])
-                        actual_fwd_vels.append(raw_data['vel'][0])
+                        if step >= warmup_steps:
+                            eval_steps += 1
+                            contact = raw_data['contact']
+                            
+                            for foot_idx in range(4):
+                                is_contact = (contact[foot_idx] > 0)
+                                
+                                if is_contact:
+                                    if current_swing_time[foot_idx] > 0:
+                                        swing_times[foot_idx].append(current_swing_time[foot_idx])
+                                        current_swing_time[foot_idx] = 0.0
+                                        
+                                        t = self.data.time
+                                        if last_strike_time[foot_idx] > 0:
+                                            stride_duration[foot_idx] = t - last_strike_time[foot_idx]
+                                        last_strike_time[foot_idx] = t
+                                        
+                                        if foot_idx == 1 and stride_duration[0] > 0.1: # FR vs FL
+                                            p = ((t - last_strike_time[0]) % stride_duration[0]) / stride_duration[0]
+                                            phase_diff_front_list.append(p if p <= 0.5 else 1.0 - p)
+                                        if foot_idx == 3 and stride_duration[1] > 0.1: # RR vs FR
+                                            p = ((t - last_strike_time[1]) % stride_duration[1]) / stride_duration[1]
+                                            phase_diff_right_list.append(p if p <= 0.5 else 1.0 - p)
+                                        if foot_idx == 3 and stride_duration[0] > 0.1: # RR vs FL
+                                            p = ((t - last_strike_time[0]) % stride_duration[0]) / stride_duration[0]
+                                            phase_diff_diag_list.append(p if p <= 0.5 else 1.0 - p)
+                                    
+                                    force = np.zeros(6, dtype=np.float64)
+                                    foot_force = 0.0
+                                    for c_i in range(self.data.ncon):
+                                        con = self.data.contact[c_i]
+                                        g1, g2 = con.geom1, con.geom2
+                                        if g1 == 0 or g2 == 0:
+                                            name1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g1)
+                                            name2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g2)
+                                            fn = ["FL", "FR", "RL", "RR"][foot_idx]
+                                            is_match1 = name1 and name1.lower() != "floor" and fn.lower() in name1.lower()
+                                            is_match2 = name2 and name2.lower() != "floor" and fn.lower() in name2.lower()
+                                            if is_match1 or is_match2:
+                                                mujoco.mj_contactForce(self.model, self.data, c_i, force)
+                                                foot_force += abs(force[0])
+                                    stance_force_sum[foot_idx] += foot_force
+                                    stance_force_count[foot_idx] += 1
+                                    max_grf_stance_N[foot_idx] = max(max_grf_stance_N[foot_idx], foot_force)
+                                    
+                                else:
+                                    current_swing_time[foot_idx] += 0.001
+                                    if len(self.foot_geom_ids) == 4:
+                                        z_height = self.data.geom_xpos[self.foot_geom_ids[foot_idx]][2]
+                                        # Normalize relative to ground (floor is at 0.0). We also need to subtract nominal foot radius if we want exact clearance, but relative height is fine.
+                                        max_foot_heights[foot_idx] = max(max_foot_heights[foot_idx], z_height)
+    
+                            last_contact = contact
+                                
+                            base_z_vels.append(raw_data['vel'][2])
+                            base_roll_vels.append(raw_data['gyro'][0])
+                            base_pitch_vels.append(raw_data['gyro'][1])
+                            
+                            if axis == "x":
+                                actual_vels.append(raw_data['vel'][0])
+                            elif axis == "y":
+                                actual_vels.append(raw_data['vel'][1])
+                            elif axis == "yaw":
+                                actual_vels.append(raw_data['gyro'][2])
 
-                avg_fwd = np.mean(actual_fwd_vels)
-                # Max foot height resets every speed, so the accumulated max is what we report.
-                # However, since they stand during warmup, maybe max is just the highest it got.
-                # Let's subtract ~0.02 (foot radius) to give true lift height above floor
-                avg_foot_height_max = [max(0.0, h - 0.02) for h in max_foot_heights]
-                
-                valid_swing_times = [
-                    [t for t in leg_times if t > 0.05] for leg_times in swing_times
-                ]
-                all_valid_swings = [t for leg_times in valid_swing_times for t in leg_times]
-                avg_swing_time = np.mean(all_valid_swings) if all_valid_swings else 0.0
-                
-                eval_duration_s = max(1, eval_steps) * 0.001
-                avg_step_freq = np.mean([len(swings) for swings in valid_swing_times]) / eval_duration_s
-                
-                avg_grf = [
-                    stance_force_sum[i] / max(1, stance_force_count[i]) for i in range(4)
-                ]
-                
-                sync_percentage = (sync_match_count / max(1, eval_steps)) * 100.0
-                
-                std_z = float(np.std(base_z_vels))
-                std_roll = float(np.std(base_roll_vels))
-                std_pitch = float(np.std(base_pitch_vels))
-                
-                results[str(speed)] = {
-                    "commanded_speed": round(float(speed), 2),
-                    "actual_speed": round(float(avg_fwd), 2),
-                    "foot_lift_height_cm": [round(float(x) * 100.0, 2) for x in avg_foot_height_max],
-                    "foot_swing_time_s": round(float(avg_swing_time), 2),
-                    "step_frequency_hz": round(float(avg_step_freq), 2),
-                    "grf_stance_N": [round(float(x), 2) for x in avg_grf],
-                    "grf_peak_stance_N": [round(float(x), 2) for x in max_grf_stance_N],
-                    "trot_sync_percent": round(float(sync_percentage), 2),
-                    "base_oscillation": {
-                        "std_z_vel": round(std_z, 2),
-                        "std_roll_vel": round(std_roll, 2),
-                        "std_pitch_vel": round(std_pitch, 2)
+                    avg_actual_vel = np.mean(actual_vels) if actual_vels else 0.0
+                    avg_foot_height_max = [max(0.0, h - 0.02) for h in max_foot_heights]
+                    
+                    valid_swing_times = [
+                        [t for t in leg_times if t > 0.05] for leg_times in swing_times
+                    ]
+                    all_valid_swings = [t for leg_times in valid_swing_times for t in leg_times]
+                    avg_swing_time = np.mean(all_valid_swings) if all_valid_swings else 0.0
+                    
+                    eval_duration_s = max(1, eval_steps) * 0.001
+                    avg_step_freq = np.mean([len(swings) for swings in valid_swing_times]) / eval_duration_s
+                    
+                    avg_grf = [
+                        stance_force_sum[i] / max(1, stance_force_count[i]) for i in range(4)
+                    ]
+                    
+                    std_z = float(np.std(base_z_vels)) if base_z_vels else 0.0
+                    std_roll = float(np.std(base_roll_vels)) if base_roll_vels else 0.0
+                    std_pitch = float(np.std(base_pitch_vels)) if base_pitch_vels else 0.0
+                    
+                    avg_phase_front = np.mean(phase_diff_front_list) * 100.0 if phase_diff_front_list else 0.0
+                    avg_phase_right = np.mean(phase_diff_right_list) * 100.0 if phase_diff_right_list else 0.0
+                    avg_phase_diag = np.mean(phase_diff_diag_list) * 100.0 if phase_diff_diag_list else 0.0
+                    
+                    results[axis][str(speed)] = {
+                        "commanded_speed": round(float(speed), 2),
+                        "actual_speed": round(float(avg_actual_vel), 2),
+                        "foot_lift_height_cm": [round(float(x) * 100.0, 2) for x in avg_foot_height_max],
+                        "foot_swing_time_s": round(float(avg_swing_time), 2),
+                        "step_frequency_hz": round(float(avg_step_freq), 2),
+                        "grf_stance_N": [round(float(x), 2) for x in avg_grf],
+                        "grf_peak_stance_N": [round(float(x), 2) for x in max_grf_stance_N],
+                        "phase_diff_front_percent": round(float(avg_phase_front), 2),
+                        "phase_diff_right_percent": round(float(avg_phase_right), 2),
+                        "phase_diff_diag_percent": round(float(avg_phase_diag), 2),
+                        "base_oscillation": {
+                            "std_z_vel": round(std_z, 2),
+                            "std_roll_vel": round(std_roll, 2),
+                            "std_pitch_vel": round(std_pitch, 2)
+                        }
                     }
-                }
+    
+                    print(f"   => Actual Vel: {avg_actual_vel:.3f}")
+                    print(f"   => Foot Lift Height (FL,FR,RL,RR): {[round(v, 4) for v in avg_foot_height_max]} m")
+                    print(f"   => Average Swing Time: {avg_swing_time:.3f} s (Freq: {avg_step_freq:.2f} Hz)")
+                    print(f"   => Peak Stance GRF (FL,FR,RL,RR): {[round(v, 1) for v in max_grf_stance_N]} N")
+                    print(f"   => Phases (Front, Right, Diag): {avg_phase_front:.1f}%, {avg_phase_right:.1f}%, {avg_phase_diag:.1f}%")
 
-                print(f"   => Actual Fwd Vel: {avg_fwd:.3f} m/s")
-                print(f"   => Foot Lift Height (FL,FR,RL,RR): {[round(v, 4) for v in avg_foot_height_max]} m")
-                print(f"   => Average Swing Time: {avg_swing_time:.3f} s (Freq: {avg_step_freq:.2f} Hz)")
-                print(f"   => Avg Stance GRF (FL,FR,RL,RR): {[round(v, 1) for v in avg_grf]} N")
-                print(f"   => Peak Stance GRF (FL,FR,RL,RR): {[round(v, 1) for v in max_grf_stance_N]} N")
-                print(f"   => Trot Synchronization: {sync_percentage:.1f}%")
-                print(f"   => Base Oscillation (Z_vel, Roll, Pitch): {std_z:.3f} m/s, {std_roll:.3f} rad/s, {std_pitch:.3f} rad/s")
-
-            log_dir = "logs/skrl/eval_reports"
+            if self.checkpoint:
+                log_dir = os.path.dirname(self.checkpoint)
+                basename = os.path.basename(self.checkpoint).replace(".pt", "")
+                report_filename = f"mujoco_eval_report_{basename}.json"
+            else:
+                log_dir = "logs/skrl/eval_reports"
+                report_filename = "mujoco_eval_report.json"
+                
             os.makedirs(log_dir, exist_ok=True)
-            report_path = os.path.join(log_dir, "mujoco_eval_report.json")
+            report_path = os.path.join(log_dir, report_filename)
+            
+            final_report = {
+                "metadata": {
+                    "checkpoint": os.path.abspath(self.checkpoint) if self.checkpoint else "None",
+                    "checkpoint_name": os.path.basename(self.checkpoint) if self.checkpoint else "None",
+                    "robot_type": self.robot_type,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                },
+                "results": results
+            }
+            
             with open(report_path, "w") as f:
-                json.dump(results, f, indent=4)
+                json.dump(final_report, f, indent=4)
+                
+            try:
+                os.chmod(report_path, 0o666)
+            except Exception as e:
+                pass
                 
             print("\n" + "="*60)
             print(f"✅ MUJOCO EVALUATION COMPLETE. Report saved to: {report_path}")
