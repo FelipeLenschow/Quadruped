@@ -732,12 +732,15 @@ class QuadrupedEnv(DirectRLEnv):
             yaw_error[exceeds_yaw_leash] = yaw_error_clamped
         self.yaw_deviation_val = torch.abs(yaw_error)
 
-        # Compute linear speed deficit (stall penalty) when commanded above stall_velocity_threshold
+        # Compute linear speed deficit (stall penalty) when commanded above stall_velocity_threshold.
+        # Uses signed projection of actual velocity onto the command direction so that backward
+        # walking at the commanded magnitude is fully penalized (not rewarded like norm-vs-norm was).
         stall_thresh = getattr(self.cfg, "stall_velocity_threshold", 0.05)
-        cmd_speed = torch.norm(self.commands[:, :2], dim=1)
-        robot_speed = torch.norm(self.base_lin_vel[:, :2], dim=1)
+        cmd_speed = torch.norm(self.commands[:, :2], dim=1)  # |cmd|
+        cmd_dir = self.commands[:, :2] / cmd_speed.clamp(min=1e-6).unsqueeze(1)  # unit vector
+        signed_speed = (self.base_lin_vel[:, :2] * cmd_dir).sum(dim=1)  # projection onto cmd
         stall_mask = (cmd_speed > stall_thresh).float()
-        self.stall_val = stall_mask * torch.clamp(cmd_speed - robot_speed, min=0.0)
+        self.stall_val = stall_mask * torch.clamp(cmd_speed - signed_speed, min=0.0)
 
 
         # Observations (unscaled)
@@ -857,7 +860,13 @@ class QuadrupedEnv(DirectRLEnv):
         # Fall detection: if the robot's body is lower than 15cm, it likely fell.
         base_height = self.root_pos_w[:, 2] - self.scene.env_origins[:, 2]
 
-        died = (base_height < 0.15) | upright_check
+        # Suppress termination during the standby/landing phase so the robot is not
+        # killed mid-bounce when it drops from spawn height.
+        standby_duration = getattr(self.cfg, "standby_duration_s", 0.5)
+        past_standby = (self.episode_length_buf * self.step_dt) > standby_duration
+
+        died = past_standby & ((base_height < 0.15) | upright_check)
+
 
         return died, time_out
 
@@ -1131,20 +1140,31 @@ def compute_rewards(
 
     # 2. Tracking Linear Velocity XY (Exponential)
     # Target is commands[:, 0:2] (x, y)
-    # Local velocity is base_lin_vel[:, 0:2]
+    # Local velocity is base_lin_vel[:, :2]
     # commands is [vx, vy, wz, heading]
+    # Sigma scales with command speed so the robot is held to a tighter relative
+    # tolerance at low speeds (must actually stop) and a looser absolute tolerance
+    # at high speeds (normal velocity variance).
+    command_speed_xy = torch.norm(commands[:, :2], dim=1)
+    # Denominator: s·v² — Formula: exp(-(x-x_cmd)² / (s·x_cmd²))
+    # v² is always positive (no sign issue), and σ = √s·v grows linearly with speed.
+    dynamic_lin_vel_denom = torch.clamp(command_lin_vel_std * command_speed_xy**1, min=0.05)
+
     lin_vel_error = torch.sum(
         torch.square(base_lin_vel[:, :2] - commands[:, :2]), dim=1
     )
     rew_track_lin_vel_xy_exp = rew_scale_track_lin_vel_xy_exp * torch.exp(
-        -lin_vel_error / (command_lin_vel_std**2)
+        -lin_vel_error / dynamic_lin_vel_denom
     )
 
     # 3. Tracking Angular Velocity Z (Exponential)
     # Target is commands[:, 2] (wz)
+    command_speed_w = torch.abs(commands[:, 2])
+    dynamic_ang_vel_denom = torch.clamp(command_ang_vel_std * command_speed_w**1, min=0.05)
+
     ang_vel_error = torch.square(base_ang_vel[:, 2] - commands[:, 2])
     rew_track_ang_vel_z_exp = rew_scale_track_ang_vel_z_exp * torch.exp(
-        -ang_vel_error / (command_ang_vel_std**2)
+        -ang_vel_error / dynamic_ang_vel_denom
     )
 
     # 4. Linear Velocity Z L2 Penalty
