@@ -442,14 +442,22 @@
                 return;
             }
 
+            const pathColors = new Map();
+            let cIndex = 0;
+            selectedPaths.forEach(path => {
+                pathColors.set(path, COLORS[cIndex % COLORS.length]);
+                cIndex++;
+            });
+
             allReports.forEach((report, index) => {
-                const color = COLORS[index % COLORS.length];
                 const meta = report.metadata;
                 const path = meta.file_path;
                 const isSelected = selectedPaths.has(path);
+                const color = isSelected ? pathColors.get(path) : 'transparent';
                 
                 const item = document.createElement('div');
                 item.className = `report-item ${isSelected ? 'active' : ''}`;
+                item.dataset.path = path;
                 
                 const shortName = meta.display_name ? meta.display_name : (meta.checkpoint_name !== "None" ? meta.checkpoint_name : "Latest Run");
                 
@@ -475,9 +483,27 @@
                 element.classList.add('active');
             }
             
-
-            
+            updateSidebarColors();
             updateDashboard();
+        }
+
+        function updateSidebarColors() {
+            const pathColors = new Map();
+            let cIndex = 0;
+            selectedPaths.forEach(path => {
+                pathColors.set(path, COLORS[cIndex % COLORS.length]);
+                cIndex++;
+            });
+
+            document.querySelectorAll('.report-item').forEach(item => {
+                const path = item.dataset.path;
+                const indicator = item.querySelector('.color-indicator');
+                if (selectedPaths.has(path)) {
+                    indicator.style.backgroundColor = pathColors.get(path);
+                } else {
+                    indicator.style.backgroundColor = 'transparent';
+                }
+            });
         }
 
         function getRes(r, l, axis) {
@@ -510,12 +536,19 @@
             dashboard.style.display = 'grid';
             topNav.style.display = 'flex';
 
+            const pathColors = new Map();
+            let cIndex = 0;
+            selectedPaths.forEach(path => {
+                pathColors.set(path, COLORS[cIndex % COLORS.length]);
+                cIndex++;
+            });
+
             const selectedReports = [];
             allReports.forEach((report, index) => {
                 if (selectedPaths.has(report.metadata.file_path)) {
                     selectedReports.push({
                         data: report,
-                        color: COLORS[index % COLORS.length],
+                        color: pathColors.get(report.metadata.file_path),
                         label: report.metadata.display_name ? report.metadata.display_name : (report.metadata.checkpoint_name !== "None" ? report.metadata.checkpoint_name : `Report ${index+1}`)
                     });
                 }
