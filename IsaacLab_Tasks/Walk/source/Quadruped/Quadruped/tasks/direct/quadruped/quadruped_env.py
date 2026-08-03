@@ -146,6 +146,12 @@ class QuadrupedEnv(DirectRLEnv):
         self.grf_target_val = torch.zeros(self.num_envs, device=self.device)
         self.max_contact_force_val = torch.zeros(self.num_envs, device=self.device)
         self.robot_total_weight = torch.zeros(self.num_envs, device=self.device)  # mg per env, updated on reset
+        # Strike-time buffers for contact-driven gait phase symmetry reward
+        # last_strike_time: simulation time of last touchdown per foot (N, 4) [FL, FR, RL, RR]
+        # stride_duration:  time between the last two consecutive touchdowns per foot (N, 4)
+        self.last_strike_time = torch.zeros(self.num_envs, 4, device=self.device)
+        self.stride_duration  = torch.ones(self.num_envs, 4, device=self.device)  # init to 1.0 to avoid div-by-zero
+        self.gait_phase_sym_val = torch.zeros(self.num_envs, device=self.device)
         self.command_timer = torch.full(
             (self.num_envs,), 100.0, device=self.device
         )  # Force immediate resample
@@ -700,6 +706,70 @@ class QuadrupedEnv(DirectRLEnv):
         self.feet_air_time[contact] = 0.0
         self.last_feet_contact = contact
 
+        # -- Contact-driven gait phase symmetry reward --
+        # Mirrors the strike-time logic used in eval_mujoco.py.
+        # On each foot's touchdown we record the event time and compute the stride duration
+        # (time between consecutive touchdowns). The phase of foot B relative to foot A is:
+        #   phase = ((t_B - last_strike_A) % stride_A) / stride_A  → [0, 1]
+        # We then score how close this is to the target offset via cosine distance.
+        if self.cfg.rew_scale_gait_phase_sym != 0.0:
+            # Current simulation time for all envs  (N,)
+            t_now = self.episode_length_buf.float() * self.step_dt  # proxy: steps * dt
+
+            # Use the first_contact already computed above (before last_feet_contact was updated)
+            # Update stride_duration and last_strike_time for feet that just landed
+            for foot in range(4):
+                landing = first_contact[:, foot]  # (N,) bool
+                if landing.any():
+                    prev_t = self.last_strike_time[landing, foot]
+                    new_dur = t_now[landing] - prev_t
+                    # Only update stride if the duration looks physically plausible (> 0.1s)
+                    valid = new_dur > 0.1
+                    if valid.any():
+                        self.stride_duration[landing & valid.unsqueeze(-1).squeeze(), foot] = new_dur[valid]
+                    self.last_strike_time[landing, foot] = t_now[landing]
+
+            # Compute phase of foot B relative to foot A for each of the 6 pairs
+            # phase_rel(A, B) = ((t_now - last_strike_A) % stride_A) / stride_A  → [0, 1]
+            # Only valid when stride_A is known (> 0.1s) and robot is moving
+            moving = (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold)  # (N,) bool
+
+            def _phase_rel(ref_foot, other_foot):
+                """Phase of other_foot relative to ref_foot. Returns score in [0,1] and validity mask."""
+                dur = self.stride_duration[:, ref_foot]          # (N,)
+                valid = (dur > 0.1) & moving
+                elapsed = (t_now - self.last_strike_time[:, ref_foot]) % dur.clamp(min=1e-4)
+                phase = elapsed / dur.clamp(min=1e-4)            # [0, 1]
+                return phase, valid
+
+            def _cosine_score(phase, target_offset):
+                """Cosine score: 1.0 when phase==target, 0.0 when phase==target+0.5."""
+                diff = (phase - target_offset) * 2.0 * torch.pi
+                return 0.5 * (1.0 + torch.cos(diff))
+
+            # All 6 unique pairs  [FL=0, FR=1, RL=2, RR=3]
+            pairs = [
+                (0, 1, self.cfg.gait_phase_offset_front),  # FL vs FR
+                (2, 3, self.cfg.gait_phase_offset_rear),   # RL vs RR
+                (0, 2, self.cfg.gait_phase_offset_left),   # FL vs RL
+                (1, 3, self.cfg.gait_phase_offset_right),  # FR vs RR
+                (0, 3, self.cfg.gait_phase_offset_diag1),  # FL vs RR
+                (1, 2, self.cfg.gait_phase_offset_diag2),  # FR vs RL
+            ]
+
+            total_score = torch.zeros(self.num_envs, device=self.device)
+            total_weight = torch.zeros(self.num_envs, device=self.device)
+            for ref, other, target in pairs:
+                phase, valid = _phase_rel(ref, other)
+                score = _cosine_score(phase, target)
+                total_score += score * valid.float()
+                total_weight += valid.float()
+
+            # Average over valid pairs; if no pair is valid (robot just spawned), score = 0
+            self.gait_phase_sym_val = total_score / total_weight.clamp(min=1.0) * (total_weight > 0).float()
+        else:
+            self.gait_phase_sym_val = torch.zeros(self.num_envs, device=self.device)
+
         # Compute leashed virtual reference position deviation
         pos_error = self.ref_pos_xy - self.root_pos_w[:, :2]
         error_dist = torch.norm(pos_error, dim=1)
@@ -806,6 +876,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_pos_deviation_l1,
             self.cfg.rew_scale_yaw_deviation_l1,
             self.cfg.rew_scale_stall,
+            self.cfg.rew_scale_gait_phase_sym,
             self.cfg.target_base_height,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
@@ -833,6 +904,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.pos_deviation_val,
             self.yaw_deviation_val,
             self.stall_val,
+            self.gait_phase_sym_val,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
             self._fl_idx,
@@ -899,6 +971,9 @@ class QuadrupedEnv(DirectRLEnv):
             self.last_joint_vel[env_ids] = 0.0
             self.last_base_lin_vel[env_ids] = 0.0
             self.previous_actions[env_ids] = 0.0
+            self.last_strike_time[env_ids] = 0.0
+            self.stride_duration[env_ids] = 1.0
+            self.gait_phase_sym_val[env_ids] = 0.0
             if self.cfg.obs_history_len > 0:
                 self.obs_history_buf[env_ids] = 0.0
         else:
@@ -1096,6 +1171,7 @@ def compute_rewards(
     rew_scale_pos_deviation_l1: float,
     rew_scale_yaw_deviation_l1: float,
     rew_scale_stall: float,
+    rew_scale_gait_phase_sym: float,
     target_base_height: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
@@ -1123,6 +1199,7 @@ def compute_rewards(
     pos_deviation_val: torch.Tensor,
     yaw_deviation_val: torch.Tensor,
     stall_val: torch.Tensor,
+    gait_phase_sym_val: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
     fl_idx: torch.Tensor,
@@ -1148,7 +1225,7 @@ def compute_rewards(
     command_speed_xy = torch.norm(commands[:, :2], dim=1)
     # Denominator: s·v² — Formula: exp(-(x-x_cmd)² / (s·x_cmd²))
     # v² is always positive (no sign issue), and σ = √s·v grows linearly with speed.
-    dynamic_lin_vel_denom = torch.clamp(command_lin_vel_std * command_speed_xy**1, min=0.05)
+    dynamic_lin_vel_denom = torch.clamp(command_lin_vel_std * command_speed_xy**2, min=0.005)
 
     lin_vel_error = torch.sum(
         torch.square(base_lin_vel[:, :2] - commands[:, :2]), dim=1
@@ -1160,7 +1237,7 @@ def compute_rewards(
     # 3. Tracking Angular Velocity Z (Exponential)
     # Target is commands[:, 2] (wz)
     command_speed_w = torch.abs(commands[:, 2])
-    dynamic_ang_vel_denom = torch.clamp(command_ang_vel_std * command_speed_w**1, min=0.05)
+    dynamic_ang_vel_denom = torch.clamp(command_ang_vel_std * command_speed_w**2, min=0.005)
 
     ang_vel_error = torch.square(base_ang_vel[:, 2] - commands[:, 2])
     rew_track_ang_vel_z_exp = rew_scale_track_ang_vel_z_exp * torch.exp(
@@ -1265,6 +1342,9 @@ def compute_rewards(
     # 17. Linear Speed Deficit (Stall) Penalty
     rew_stall = rew_scale_stall * stall_val
 
+    # 18. Gait Phase Symmetry (cosine-based, all 6 leg pairs, configured offsets)
+    rew_gait_phase_sym = rew_scale_gait_phase_sym * gait_phase_sym_val
+
     total_reward = (
         rew_alive
         + rew_undesired_contacts
@@ -1293,5 +1373,6 @@ def compute_rewards(
         + rew_pos_deviation
         + rew_yaw_deviation
         + rew_stall
+        + rew_gait_phase_sym
     )
     return total_reward

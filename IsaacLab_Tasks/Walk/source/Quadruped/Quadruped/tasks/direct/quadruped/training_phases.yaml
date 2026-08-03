@@ -17,7 +17,7 @@ default: &default
     num_envs: 6000
     action_scale: 0.25
     observation_noise_scale: 0.0
-    max_timesteps: 25000
+    max_timesteps: 50000
     episode_length_s: 20.0
     base_angle_termination_thresh: 0.7
   domain_randomization:
@@ -38,14 +38,14 @@ default: &default
     rew_scale_track_ang_vel_z_exp: 1.5
     rew_scale_feet_air_time: 1.0
     target_feet_air_time: 0.2
-    rew_scale_foot_height_exp: 0.1
+    rew_scale_foot_height_exp: 0.25
     target_foot_height: 0.1
     # ── Stability penalties ──
     rew_scale_flat_orientation_l2: -5.0
     rew_scale_lin_vel_z_l2: -2.0
     rew_scale_ang_vel_xy_l2: -0.05
     rew_scale_dof_pos_l2: -0.2
-    rew_scale_max_air_feet: -0.5
+    rew_scale_max_air_feet: 0.0
     max_air_feet_allowed: 2.0
     rew_scale_base_acc_l2: -0.1
     # ── Smoothness / efficiency penalties ──
@@ -54,7 +54,7 @@ default: &default
     rew_scale_action_rate_l2: -0.01
     # ── Standing still penalties ──
     rew_scale_feet_air_penalty: -0.005
-    rew_scale_feet_air_penalty_static: -5.0
+    rew_scale_feet_air_penalty_static: -1.0
     rew_scale_joint_vel_l2_static: -1.0e-5
     # ── Disabled ──
     rew_scale_pos_deviation_l1: -1.0
@@ -62,14 +62,23 @@ default: &default
     rew_scale_stall: -2.0
     rew_scale_undesired_contacts: 0.0 ###
     rew_scale_base_height_l2: 0.0
-    target_base_height: 0.25
+    target_base_height: 0.28
     rew_scale_trot_symmetry: 0.0
     hip_sym_multiplier: 3.0
     rew_scale_torque_symmetry: 0.0 ###
     rew_scale_grf_balance: 0.0
     rew_scale_grf_target: 0.0
-    rew_scale_max_contact_force: -0.0005
+    rew_scale_max_contact_force: -0.002
     max_contact_force_pct: 0.75
+    # ── Gait Phase Symmetry (all 6 leg pairs, offsets in cycles [0, 1]) ──
+    # Trot defaults: diagonal in-phase (0.0), all others anti-phase (0.5)
+    rew_scale_gait_phase_sym: 0.0   # start disabled; enable when gait is stable
+    gait_phase_offset_front: 0.5    # FL vs FR  (0.5 = anti-phase)
+    gait_phase_offset_rear:  0.5    # RL vs RR  (0.5 = anti-phase)
+    gait_phase_offset_left:  0.5    # FL vs RL  (0.5 = anti-phase)
+    gait_phase_offset_right: 0.5    # FR vs RR  (0.5 = anti-phase)
+    gait_phase_offset_diag1: 0.0    # FL vs RR  (0.0 = in-phase)
+    gait_phase_offset_diag2: 0.0    # FR vs RL  (0.0 = in-phase)
   commands:
     command_lin_vel_std: 0.5
     command_ang_vel_std: 0.5
@@ -95,7 +104,6 @@ phases:
       rew_scale_trot_symmetry: -0.1       # Bootstrap diagonal coordination, prevent pace
       rew_scale_grf_balance: -0.4          # Penalize uneven force distribution to prevent dragging
       rew_scale_grf_target: -0.15           # Penalize deviation from mg/n weight share
-      rew_scale_max_contact_force: -5.0e-4
 
   # Phase 2: Hardening — drop symmetry constraint, add DR + pushes
   phase2:
@@ -150,5 +158,5 @@ phases:
   phase6:
     inherits: phase5
     env:
-      max_timesteps: 100000
+      max_timesteps: 200000
     

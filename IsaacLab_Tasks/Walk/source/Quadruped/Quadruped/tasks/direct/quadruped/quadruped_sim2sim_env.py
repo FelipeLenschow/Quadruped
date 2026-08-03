@@ -381,7 +381,9 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.cfg.rew_scale_max_air_feet,
                 self.cfg.max_air_feet_allowed,
                 self.cfg.rew_scale_pos_deviation_l1,
+                self.cfg.rew_scale_yaw_deviation_l1,
                 self.cfg.rew_scale_stall,
+                self.cfg.rew_scale_gait_phase_sym,
                 self.cfg.target_base_height,
                 self.cfg.command_lin_vel_std,
                 self.cfg.command_ang_vel_std,
@@ -405,6 +407,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 zero_val, # pos_deviation_val
                 zero_val, # yaw_deviation_val
                 zero_val, # stall_val,
+                zero_val, # gait_phase_sym_val
                 zero_val, # base_height_val
                 zero_val, # undesired_contacts
                 zero_idx, # fl_idx

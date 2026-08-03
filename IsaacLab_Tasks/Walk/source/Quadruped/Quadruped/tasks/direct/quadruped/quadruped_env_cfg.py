@@ -395,6 +395,15 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_yaw_deviation_l1 = _phase_cfg["rewards"]["rew_scale_yaw_deviation_l1"]
     rew_scale_stall = _phase_cfg["rewards"]["rew_scale_stall"]
 
+    # Gait phase symmetry reward (all 6 leg pairs)
+    rew_scale_gait_phase_sym  = _phase_cfg["rewards"]["rew_scale_gait_phase_sym"]
+    gait_phase_offset_front   = _phase_cfg["rewards"]["gait_phase_offset_front"]
+    gait_phase_offset_rear    = _phase_cfg["rewards"]["gait_phase_offset_rear"]
+    gait_phase_offset_left    = _phase_cfg["rewards"]["gait_phase_offset_left"]
+    gait_phase_offset_right   = _phase_cfg["rewards"]["gait_phase_offset_right"]
+    gait_phase_offset_diag1   = _phase_cfg["rewards"]["gait_phase_offset_diag1"]
+    gait_phase_offset_diag2   = _phase_cfg["rewards"]["gait_phase_offset_diag2"]
+
     # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  COMMANDS                                                             ║
     # ╚════════════════════════════════════════════════════════════════════════╝
