@@ -1,0 +1,95 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<root>
+ <tabbed_widget name="Main Window" parent="main_window">
+  <Tab tab_name="Policy Rewards" containers="1">
+   <Container>
+    <DockSplitter sizes="0.5;0.5" orientation="-" count="2">
+     <DockSplitter sizes="0.5;0.5" orientation="|" count="2">
+      <DockArea name="Tracking Rewards">
+       <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
+        <range bottom="0.0" top="1.6" left="0.0" right="1.0"/>
+        <limitY/>
+        <curve color="#1f77b4" name="Reward: Track Lin Vel XY"/>
+        <curve color="#d62728" name="Reward: Track Ang Vel Z"/>
+       </plot>
+      </DockArea>
+      <DockArea name="Gait Rewards">
+       <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
+        <range bottom="0.0" top="2.0" left="0.0" right="1.0"/>
+        <limitY/>
+        <curve color="#1ac938" name="Reward: Feet Air Time"/>
+        <curve color="#ff7f0e" name="Reward: Foot Height"/>
+       </plot>
+      </DockArea>
+     </DockSplitter>
+     <DockSplitter sizes="0.5;0.5" orientation="|" count="2">
+      <DockArea name="Stability Penalties">
+       <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
+        <range bottom="-1.0" top="0.1" left="0.0" right="1.0"/>
+        <limitY/>
+        <curve color="#8c564b" name="Penalty: Flat Orientation"/>
+        <curve color="#e377c2" name="Penalty: Lin Vel Z"/>
+        <curve color="#7f7f7f" name="Penalty: Ang Vel XY"/>
+        <curve color="#17becf" name="Penalty: Base Acc"/>
+       </plot>
+      </DockArea>
+      <DockArea name="Total Reward">
+       <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
+        <range bottom="-2.0" top="3.0" left="0.0" right="1.0"/>
+        <limitY/>
+        <curve color="#bcbd22" name="Reward: TOTAL"/>
+       </plot>
+      </DockArea>
+     </DockSplitter>
+    </DockSplitter>
+   </Container>
+  </Tab>
+ </tabbed_widget>
+ <customMathEquations>
+  <snippet name="Reward: Track Lin Vel XY">
+   <global></global>
+   <function>return value</function>
+   <linked_source>/policy_rewards/data[0]</linked_source>
+  </snippet>
+  <snippet name="Reward: Track Ang Vel Z">
+   <global></global>
+   <function>return value</function>
+   <linked_source>/policy_rewards/data[1]</linked_source>
+  </snippet>
+  <snippet name="Reward: Feet Air Time">
+   <global></global>
+   <function>return value</function>
+   <linked_source>/policy_rewards/data[2]</linked_source>
+  </snippet>
+  <snippet name="Reward: Foot Height">
+   <global></global>
+   <function>return value</function>
+   <linked_source>/policy_rewards/data[3]</linked_source>
+  </snippet>
+  <snippet name="Penalty: Flat Orientation">
+   <global></global>
+   <function>return value</function>
+   <linked_source>/policy_rewards/data[4]</linked_source>
+  </snippet>
+  <snippet name="Penalty: Lin Vel Z">
+   <global></global>
+   <function>return value</function>
+   <linked_source>/policy_rewards/data[5]</linked_source>
+  </snippet>
+  <snippet name="Penalty: Ang Vel XY">
+   <global></global>
+   <function>return value</function>
+   <linked_source>/policy_rewards/data[6]</linked_source>
+  </snippet>
+  <snippet name="Penalty: Base Acc">
+   <global></global>
+   <function>return value</function>
+   <linked_source>/policy_rewards/data[10]</linked_source>
+  </snippet>
+  <snippet name="Reward: TOTAL">
+   <global></global>
+   <function>return value</function>
+   <linked_source>/policy_rewards/data[12]</linked_source>
+  </snippet>
+ </customMathEquations>
+</root>

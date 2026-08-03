@@ -1009,6 +1009,23 @@ def main():
 
         # Check if we should auto-record this session
         record_proc = None
+        reward_proc = None
+        
+        # Start Reward Estimator automatically for deployments
+        if action in ["isaac_sim", "mujoco", "mujoco_twin", "real_deploy", "eval_mujoco"]:
+            reward_script = os.path.abspath(os.path.join("Controller", "reward_estimator_node.py"))
+            reward_cmd = [sys_python, reward_script]
+            
+            if abs_ckpt:
+                ckpt_dir = os.path.dirname(abs_ckpt)
+                config_path = os.path.join(ckpt_dir, "training_phases.yaml")
+                if os.path.exists(config_path):
+                    reward_cmd.extend(["--ros-args", "-p", f"config_path:={config_path}"])
+                    
+            print("[Launcher] Starting Background Reward Estimator Node...")
+            reward_proc = subprocess.Popen(reward_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            time.sleep(0.5)
+
         if record_session:
             record_dir = "Mcap/Recordings"
             try:
@@ -1040,6 +1057,14 @@ def main():
         except KeyboardInterrupt:
             pass
         finally:
+            if reward_proc is not None:
+                print("\n[Launcher] Stopping Background Reward Estimator Node...")
+                reward_proc.terminate()
+                try:
+                    reward_proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    reward_proc.kill()
+                    
             if record_proc is not None:
                 print("\n[Launcher] Stopping background MCAP recorder...")
                 record_proc.terminate()
