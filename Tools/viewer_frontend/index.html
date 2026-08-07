@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -36,7 +37,7 @@
             display: flex;
             flex-direction: column;
             z-index: 10;
-            box-shadow: 4px 0 20px rgba(0,0,0,0.4);
+            box-shadow: 4px 0 20px rgba(0, 0, 0, 0.4);
         }
 
         .sidebar-header {
@@ -68,7 +69,7 @@
         .report-item {
             padding: 14px 16px;
             margin-bottom: 8px;
-            background-color: rgba(255,255,255,0.02);
+            background-color: rgba(255, 255, 255, 0.02);
             border: 1px solid transparent;
             border-radius: 10px;
             cursor: pointer;
@@ -79,16 +80,17 @@
         }
 
         .report-item:hover {
-            background-color: rgba(255,255,255,0.05);
+            background-color: rgba(255, 255, 255, 0.05);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
         .report-item.active {
-            background: linear-gradient(90deg, rgba(59, 130, 246, 0.15) 0%, rgba(59,130,246,0.02) 100%);
+            background: linear-gradient(90deg, rgba(59, 130, 246, 0.15) 0%, rgba(59, 130, 246, 0.02) 100%);
             border: 1px solid rgba(59, 130, 246, 0.4);
             border-left: 4px solid var(--accent);
-            padding-left: 13px; /* Adjust for border */
+            padding-left: 13px;
+            /* Adjust for border */
         }
 
 
@@ -119,7 +121,7 @@
             border-radius: 50%;
             margin-left: 12px;
             flex-shrink: 0;
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
         }
 
         /* Main Content Styles */
@@ -148,7 +150,7 @@
         .nav-group {
             display: flex;
             gap: 10px;
-            background: rgba(0,0,0,0.2);
+            background: rgba(0, 0, 0, 0.2);
             padding: 4px;
             border-radius: 8px;
             border: 1px solid var(--border-color);
@@ -168,7 +170,7 @@
 
         .tab-btn:hover {
             color: #fff;
-            background: rgba(255,255,255,0.05);
+            background: rgba(255, 255, 255, 0.05);
         }
 
         .tab-btn.active {
@@ -182,11 +184,13 @@
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
             gap: 24px;
-            display: none; /* hidden until selected */
+            display: none;
+            /* hidden until selected */
         }
 
         .chart-group {
-            display: contents; /* Allows children to participate in the parent's grid */
+            display: contents;
+            /* Allows children to participate in the parent's grid */
         }
 
         .card {
@@ -194,7 +198,7 @@
             border: 1px solid var(--border-color);
             border-radius: 12px;
             padding: 20px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
             display: flex;
             flex-direction: column;
             transition: transform 0.2s ease, box-shadow 0.2s ease;
@@ -202,8 +206,8 @@
 
         .card:hover {
             transform: translateY(-2px);
-            box-shadow: 0 8px 30px rgba(0,0,0,0.25);
-            border-color: rgba(255,255,255,0.1);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+            border-color: rgba(255, 255, 255, 0.1);
         }
 
         .card-header {
@@ -238,7 +242,7 @@
             color: var(--text-muted);
             text-align: center;
         }
-        
+
         .empty-state svg {
             width: 64px;
             height: 64px;
@@ -247,6 +251,7 @@
         }
     </style>
 </head>
+
 <body>
 
     <div class="sidebar">
@@ -267,18 +272,23 @@
                 <button class="tab-btn" data-axis="y">Lateral (Y)</button>
                 <button class="tab-btn" data-axis="yaw">Turn (Yaw)</button>
             </div>
-            
+
             <!-- Category Selection -->
             <div class="nav-group" id="category-tabs">
                 <button class="tab-btn active" data-cat="tracking">Velocity & Freq</button>
                 <button class="tab-btn" data-cat="base">Base Variation</button>
                 <button class="tab-btn" data-cat="feet">Feet Behavior</button>
                 <button class="tab-btn" data-cat="gait">Gait Metrics</button>
+                <button class="tab-btn" data-cat="position">Position Drift</button>
             </div>
         </div>
 
         <div class="empty-state" id="empty-state">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z">
+                </path>
+            </svg>
             <h2>No Data Selected</h2>
             <p>Select one or more runs from the sidebar to visualize the telemetry.</p>
         </div>
@@ -293,7 +303,7 @@
                     </div>
                     <div class="chart-container"><canvas id="chartSpeed"></canvas></div>
                 </div>
-                
+
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">Step Frequency</div>
@@ -333,7 +343,8 @@
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">Peak Ground Reaction Force</div>
-                        <div class="card-desc">Impact force during stance. Shaded area shows min/max spread across legs.</div>
+                        <div class="card-desc">Impact force during stance. Shaded area shows min/max spread across legs.
+                        </div>
                     </div>
                     <div class="chart-container"><canvas id="chartGRF"></canvas></div>
                 </div>
@@ -370,6 +381,31 @@
                     <div class="chart-container"><canvas id="chartPhaseDiag"></canvas></div>
                 </div>
             </div>
+
+            <!-- ================= POSITION DRIFT ================= -->
+            <div id="cat-position" class="chart-group" style="display:none;">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Forward Drift (X)</div>
+                        <div class="card-desc">Accumulated error in the local forward axis (meters).</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartErrX"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Lateral Drift (Y)</div>
+                        <div class="card-desc">Accumulated error in the local lateral axis (meters).</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartErrY"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Turn Drift (Yaw)</div>
+                        <div class="card-desc">Accumulated error in the local yaw axis (radians).</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartErrYaw"></canvas></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -378,13 +414,14 @@
         Chart.defaults.color = '#94a3b8';
         Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.1)';
         Chart.defaults.font.family = "'Inter', sans-serif";
-        
+
         const COLORS = ['#3b82f6', '#10b981', '#f43f5e', '#8b5cf6', '#f59e0b', '#06b6d4'];
-        
+
         let allReports = [];
         let selectedPaths = new Set();
+        let pathColors = new Map();
         let charts = {};
-        
+
         let currentAxis = 'x';
         let currentCategory = 'tracking';
 
@@ -402,12 +439,12 @@
             btn.addEventListener('click', (e) => {
                 document.querySelectorAll('#category-tabs .tab-btn').forEach(b => b.classList.remove('active'));
                 e.target.classList.add('active');
-                
+
                 // Hide all groups, show selected
                 currentCategory = e.target.getAttribute('data-cat');
                 document.querySelectorAll('.chart-group').forEach(g => g.style.display = 'none');
                 document.getElementById('cat-' + currentCategory).style.display = 'contents';
-                
+
                 updateDashboard(); // Redraw visible charts
             });
         });
@@ -416,19 +453,19 @@
             try {
                 const response = await fetch('/api/reports');
                 const data = await response.json();
-                
+
                 // Sort alphabetically by display name
                 allReports = data.reports.sort((a, b) => {
                     const nameA = a.metadata.display_name || a.metadata.checkpoint_name || "";
                     const nameB = b.metadata.display_name || b.metadata.checkpoint_name || "";
                     return nameA.localeCompare(nameB);
                 });
-                
+
                 renderSidebar();
                 updateDashboard();
             } catch (err) {
                 console.error("Failed to fetch reports:", err);
-                document.getElementById('report-list').innerHTML = 
+                document.getElementById('report-list').innerHTML =
                     `<div style="color: #f43f5e; font-size: 0.9rem; text-align: center; margin-top: 20px;">Failed to load reports. Is the server running?</div>`;
             }
         }
@@ -436,31 +473,24 @@
         function renderSidebar() {
             const list = document.getElementById('report-list');
             list.innerHTML = '';
-            
+
             if (allReports.length === 0) {
                 list.innerHTML = `<div style="color: var(--text-muted); font-size: 0.9rem; text-align: center; margin-top: 20px;">No reports found. Run an evaluation first!</div>`;
                 return;
             }
-
-            const pathColors = new Map();
-            let cIndex = 0;
-            selectedPaths.forEach(path => {
-                pathColors.set(path, COLORS[cIndex % COLORS.length]);
-                cIndex++;
-            });
 
             allReports.forEach((report, index) => {
                 const meta = report.metadata;
                 const path = meta.file_path;
                 const isSelected = selectedPaths.has(path);
                 const color = isSelected ? pathColors.get(path) : 'transparent';
-                
+
                 const item = document.createElement('div');
                 item.className = `report-item ${isSelected ? 'active' : ''}`;
                 item.dataset.path = path;
-                
+
                 const shortName = meta.display_name ? meta.display_name : (meta.checkpoint_name !== "None" ? meta.checkpoint_name : "Latest Run");
-                
+
                 item.innerHTML = `
                     <div class="content">
                         <div class="name">${shortName}</div>
@@ -468,7 +498,7 @@
                     </div>
                     <div class="color-indicator" style="background-color: ${color};"></div>
                 `;
-                
+
                 item.addEventListener('click', () => toggleSelection(path, item));
                 list.appendChild(item);
             });
@@ -477,24 +507,32 @@
         function toggleSelection(path, element) {
             if (selectedPaths.has(path)) {
                 selectedPaths.delete(path);
+                pathColors.delete(path);
                 element.classList.remove('active');
             } else {
                 selectedPaths.add(path);
+                
+                const usedColors = new Set(pathColors.values());
+                let assignedColor = COLORS[0];
+                for (const color of COLORS) {
+                    if (!usedColors.has(color)) {
+                        assignedColor = color;
+                        break;
+                    }
+                }
+                if (usedColors.size >= COLORS.length) {
+                    assignedColor = COLORS[selectedPaths.size % COLORS.length];
+                }
+                
+                pathColors.set(path, assignedColor);
                 element.classList.add('active');
             }
-            
+
             updateSidebarColors();
             updateDashboard();
         }
 
         function updateSidebarColors() {
-            const pathColors = new Map();
-            let cIndex = 0;
-            selectedPaths.forEach(path => {
-                pathColors.set(path, COLORS[cIndex % COLORS.length]);
-                cIndex++;
-            });
-
             document.querySelectorAll('.report-item').forEach(item => {
                 const path = item.dataset.path;
                 const indicator = item.querySelector('.color-indicator');
@@ -515,9 +553,9 @@
                 return null; // Legacy reports only have X data
             }
 
-            return resDict[l.toString()] || 
-                   resDict[l.toFixed(1)] || 
-                   resDict[l.toFixed(2)];
+            return resDict[l.toString()] ||
+                resDict[l.toFixed(1)] ||
+                resDict[l.toFixed(2)];
         }
 
         function updateDashboard() {
@@ -536,20 +574,13 @@
             dashboard.style.display = 'grid';
             topNav.style.display = 'flex';
 
-            const pathColors = new Map();
-            let cIndex = 0;
-            selectedPaths.forEach(path => {
-                pathColors.set(path, COLORS[cIndex % COLORS.length]);
-                cIndex++;
-            });
-
             const selectedReports = [];
             allReports.forEach((report, index) => {
                 if (selectedPaths.has(report.metadata.file_path)) {
                     selectedReports.push({
                         data: report,
                         color: pathColors.get(report.metadata.file_path),
-                        label: report.metadata.display_name ? report.metadata.display_name : (report.metadata.checkpoint_name !== "None" ? report.metadata.checkpoint_name : `Report ${index+1}`)
+                        label: report.metadata.display_name ? report.metadata.display_name : (report.metadata.checkpoint_name !== "None" ? report.metadata.checkpoint_name : `Report ${index + 1}`)
                     });
                 }
             });
@@ -557,13 +588,13 @@
             // Update axis labels
             let speedUnit = (currentAxis === 'yaw') ? 'rad/s' : 'm/s';
             let speedLabel = (currentAxis === 'yaw') ? 'Turn Speed' : 'Speed';
-            
+
             // Only render charts for the active category to save memory/cpu
             if (currentCategory === 'tracking') {
                 document.getElementById('title-speed').innerText = `Velocity Tracking (${currentAxis.toUpperCase()})`;
                 renderChartSpeed(selectedReports, speedUnit, speedLabel);
-                renderSimpleLineChart(selectedReports, 'chartFreq', 'step_frequency_hz', 'Step Frequency (Hz)');
-            } 
+                renderChartEnvelope(selectedReports, 'chartFreq', 'step_frequency_hz', 'Step Frequency (Hz)');
+            }
             else if (currentCategory === 'base') {
                 renderSimpleLineChart(selectedReports, 'chartOscZ', ['base_oscillation', 'std_z_vel'], 'Z Vel Std (m/s)');
                 renderSimpleLineChart(selectedReports, 'chartOscRoll', ['base_oscillation', 'std_roll_vel'], 'Roll Vel Std (rad/s)');
@@ -577,6 +608,11 @@
                 renderSimpleLineChart(selectedReports, 'chartPhaseFront', 'phase_diff_front_percent', 'Phase Offset (%)');
                 renderSimpleLineChart(selectedReports, 'chartPhaseRight', 'phase_diff_right_percent', 'Phase Offset (%)');
                 renderSimpleLineChart(selectedReports, 'chartPhaseDiag', 'phase_diff_diag_percent', 'Phase Offset (%)');
+            }
+            else if (currentCategory === 'position') {
+                renderSimpleLineChart(selectedReports, 'chartErrX', ['position_error', 'x_m'], 'Forward Drift (m)');
+                renderSimpleLineChart(selectedReports, 'chartErrY', ['position_error', 'y_m'], 'Lateral Drift (m)');
+                renderSimpleLineChart(selectedReports, 'chartErrYaw', ['position_error', 'yaw_rad'], 'Turn Drift (rad)');
             }
         }
 
@@ -592,7 +628,7 @@
         }
 
         // --- Chart Renderers ---
-        
+
         function extractSpeeds(reports) {
             let speeds = new Set();
             reports.forEach(r => {
@@ -600,7 +636,7 @@
                 if (d[currentAxis]) d = d[currentAxis];
                 if (d) Object.keys(d).forEach(s => speeds.add(parseFloat(s)));
             });
-            return Array.from(speeds).sort((a,b) => a-b);
+            return Array.from(speeds).sort((a, b) => a - b);
         }
 
         function renderChartSpeed(reports, speedUnit, speedLabel) {
@@ -621,7 +657,7 @@
                     pointRadius: 4
                 };
             });
-            
+
             // Add Ideal line
             datasets.push({
                 label: 'Ideal (Command)',
@@ -658,12 +694,15 @@
 
                 labels.forEach(l => {
                     const res = getRes(r, l, currentAxis);
-                    if (!res || !res[dataKey]) return;
-                    
-                    const arr = res[dataKey];
+                    if (!res || res[dataKey] == null) return;
+
+                    let arr = res[dataKey];
+                    if (!Array.isArray(arr)) {
+                        arr = [arr];
+                    }
                     maxData.push({ x: l, y: Math.max(...arr) });
                     minData.push({ x: l, y: Math.min(...arr) });
-                    meanData.push({ x: l, y: arr.reduce((a,b) => a+b, 0) / arr.length });
+                    meanData.push({ x: l, y: arr.reduce((a, b) => a + b, 0) / arr.length });
                 });
 
                 // 1. Max boundary (invisible)
@@ -716,7 +755,7 @@
                     plugins: {
                         legend: {
                             labels: {
-                                filter: function(item) {
+                                filter: function (item) {
                                     return !item.text.includes('(Max)') && !item.text.includes('(Min)');
                                 }
                             }
@@ -724,7 +763,7 @@
                         tooltip: {
                             mode: 'index',
                             intersect: false,
-                            filter: function(item) {
+                            filter: function (item) {
                                 return !item.dataset.label.includes('(Max)') && !item.dataset.label.includes('(Min)');
                             }
                         }
@@ -739,16 +778,19 @@
 
         function renderSimpleLineChart(reports, chartId, dataKeyPath, yLabel) {
             const labels = extractSpeeds(reports);
-            
+
             const datasets = reports.map(r => {
                 const data = [];
                 labels.forEach(l => {
                     const res = getRes(r, l, currentAxis);
                     if (!res) return;
-                    
+
                     let val = res;
                     if (Array.isArray(dataKeyPath)) {
-                        for (let key of dataKeyPath) val = val[key];
+                        for (let key of dataKeyPath) {
+                            if (val == null) break;
+                            val = val[key];
+                        }
                     } else {
                         val = val[dataKeyPath];
                     }
@@ -787,4 +829,5 @@
         fetchReports();
     </script>
 </body>
+
 </html>

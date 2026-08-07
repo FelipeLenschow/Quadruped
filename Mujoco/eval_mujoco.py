@@ -186,9 +186,9 @@ class MujocoEvaluator(Node):
 
     def _evaluation_loop(self):
         axes_tests = {
-            "x": [0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50, 0.75, 1.00],
-            "y": [0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50],
-            "yaw": [0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00]
+            "x": [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50, 0.75, 1.00],
+            "y": [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50],
+            "yaw": [0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00]
         }
         steps_per_speed = 32000  # 32 seconds at 1000Hz (30s walking + 2s warmup)
         warmup_steps = 2000     # 2 seconds standing still
@@ -249,6 +249,10 @@ class MujocoEvaluator(Node):
                     actual_vels = []
                     
                     eval_steps = 0
+                    
+                    err_x_sum = 0.0
+                    err_y_sum = 0.0
+                    err_yaw_sum = 0.0
                     
                     last_contact = [0.0, 0.0, 0.0, 0.0]
                     current_swing_time = [0.0, 0.0, 0.0, 0.0]
@@ -348,10 +352,19 @@ class MujocoEvaluator(Node):
                             
                             if axis == "x":
                                 actual_vels.append(raw_data['vel'][0])
+                                err_x_sum += (raw_data['vel'][0] - speed) * 0.001
+                                err_y_sum += (raw_data['vel'][1] - 0.0) * 0.001
+                                err_yaw_sum += (raw_data['gyro'][2] - 0.0) * 0.001
                             elif axis == "y":
                                 actual_vels.append(raw_data['vel'][1])
+                                err_x_sum += (raw_data['vel'][0] - 0.0) * 0.001
+                                err_y_sum += (raw_data['vel'][1] - speed) * 0.001
+                                err_yaw_sum += (raw_data['gyro'][2] - 0.0) * 0.001
                             elif axis == "yaw":
                                 actual_vels.append(raw_data['gyro'][2])
+                                err_x_sum += (raw_data['vel'][0] - 0.0) * 0.001
+                                err_y_sum += (raw_data['vel'][1] - 0.0) * 0.001
+                                err_yaw_sum += (raw_data['gyro'][2] - speed) * 0.001
 
                     avg_actual_vel = np.mean(actual_vels) if actual_vels else 0.0
                     avg_foot_height_max = [max(0.0, h - 0.02) for h in max_foot_heights]
@@ -363,7 +376,8 @@ class MujocoEvaluator(Node):
                     avg_swing_time = np.mean(all_valid_swings) if all_valid_swings else 0.0
                     
                     eval_duration_s = max(1, eval_steps) * 0.001
-                    avg_step_freq = np.mean([len(swings) for swings in valid_swing_times]) / eval_duration_s
+                    step_freqs = [(len(swings) / eval_duration_s) for swings in valid_swing_times]
+                    avg_step_freq = np.mean(step_freqs) if step_freqs else 0.0
                     
                     avg_grf = [
                         stance_force_sum[i] / max(1, stance_force_count[i]) for i in range(4)
@@ -382,7 +396,7 @@ class MujocoEvaluator(Node):
                         "actual_speed": round(float(avg_actual_vel), 2),
                         "foot_lift_height_cm": [round(float(x) * 100.0, 2) for x in avg_foot_height_max],
                         "foot_swing_time_s": round(float(avg_swing_time), 2),
-                        "step_frequency_hz": round(float(avg_step_freq), 2),
+                        "step_frequency_hz": [round(float(f), 2) for f in step_freqs],
                         "grf_stance_N": [round(float(x), 2) for x in avg_grf],
                         "grf_peak_stance_N": [round(float(x), 2) for x in max_grf_stance_N],
                         "phase_diff_front_percent": round(float(avg_phase_front), 2),
@@ -392,6 +406,11 @@ class MujocoEvaluator(Node):
                             "std_z_vel": round(std_z, 2),
                             "std_roll_vel": round(std_roll, 2),
                             "std_pitch_vel": round(std_pitch, 2)
+                        },
+                        "position_error": {
+                            "x_m": round(err_x_sum, 4),
+                            "y_m": round(err_y_sum, 4),
+                            "yaw_rad": round(err_yaw_sum, 4)
                         }
                     }
     
