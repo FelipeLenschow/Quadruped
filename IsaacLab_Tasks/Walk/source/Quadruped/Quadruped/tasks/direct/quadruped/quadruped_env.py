@@ -634,10 +634,9 @@ class QuadrupedEnv(DirectRLEnv):
         # Increment air time
         self.feet_air_time += self.step_dt
         # Calculate reward for feet that just landed: (air_time - threshold) * first_contact
-        # A normal trot has a swing time of ~0.15 to 0.25 seconds. 
-        # Using configurable threshold (default 0.2s) so it rewards a healthy step height without requiring gazelle jumps.
+        # This only rewards air time *above* the minimum threshold
         rew_air_time = torch.sum(
-            (self.feet_air_time - self.cfg.target_feet_air_time).clamp(min=0.0) * first_contact.float(), dim=1
+            (self.feet_air_time - self.cfg.min_feet_air_time).clamp(min=0.0) * first_contact.float(), dim=1
         ) * (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold)
         self.feet_air_time_reward_val = rew_air_time
 
@@ -726,7 +725,9 @@ class QuadrupedEnv(DirectRLEnv):
                     # Only update stride if the duration looks physically plausible (> 0.1s)
                     valid = new_dur > 0.1
                     if valid.any():
-                        self.stride_duration[landing & valid.unsqueeze(-1).squeeze(), foot] = new_dur[valid]
+                        update_mask = landing.clone()
+                        update_mask[landing] = valid
+                        self.stride_duration[update_mask, foot] = new_dur[valid]
                     self.last_strike_time[landing, foot] = t_now[landing]
 
             # Compute phase of foot B relative to foot A for each of the 6 pairs
@@ -737,9 +738,14 @@ class QuadrupedEnv(DirectRLEnv):
             def _phase_rel(ref_foot, other_foot):
                 """Phase of other_foot relative to ref_foot. Returns score in [0,1] and validity mask."""
                 dur = self.stride_duration[:, ref_foot]          # (N,)
-                valid = (dur > 0.1) & moving
-                elapsed = (t_now - self.last_strike_time[:, ref_foot]) % dur.clamp(min=1e-4)
-                phase = elapsed / dur.clamp(min=1e-4)            # [0, 1]
+                
+                # Check if the foot has struck recently (prevent reward farming by standing still)
+                time_since_strike = t_now - self.last_strike_time[:, ref_foot]
+                active_stepping = time_since_strike < (dur * 1.5)
+                
+                valid = (dur > 0.1) & moving & active_stepping
+                time_diff = self.last_strike_time[:, other_foot] - self.last_strike_time[:, ref_foot]
+                phase = (time_diff % dur.clamp(min=1e-4)) / dur.clamp(min=1e-4)            # [0, 1]
                 return phase, valid
 
             def _cosine_score(phase, target_offset):
@@ -832,8 +838,9 @@ class QuadrupedEnv(DirectRLEnv):
         obs = obs + obs_noise
 
         if self.cfg.obs_history_len > 0:
+            full_obs = torch.cat([obs, self.obs_history_buf], dim=-1)
             self.obs_history_buf = torch.cat([obs, self.obs_history_buf[:, :-49]], dim=-1)
-            obs = torch.cat([obs, self.obs_history_buf], dim=-1)
+            obs = full_obs
 
         return {"policy": obs}
 
@@ -878,8 +885,10 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_stall,
             self.cfg.rew_scale_gait_phase_sym,
             self.cfg.target_base_height,
+            self.cfg.static_velocity_threshold,
             self.cfg.command_lin_vel_std,
             self.cfg.command_ang_vel_std,
+            self.cfg.vel_tracking_sigma_exp,
             self.commands,
             self.base_lin_vel,
             self.base_ang_vel,
@@ -1173,8 +1182,10 @@ def compute_rewards(
     rew_scale_stall: float,
     rew_scale_gait_phase_sym: float,
     target_base_height: float,
+    static_velocity_threshold: float,
     command_lin_vel_std: float,
     command_ang_vel_std: float,
+    vel_tracking_sigma_exp: float,
     commands: torch.Tensor,
     base_lin_vel: torch.Tensor,
     base_ang_vel: torch.Tensor,
@@ -1223,9 +1234,7 @@ def compute_rewards(
     # tolerance at low speeds (must actually stop) and a looser absolute tolerance
     # at high speeds (normal velocity variance).
     command_speed_xy = torch.norm(commands[:, :2], dim=1)
-    # Denominator: s·v² — Formula: exp(-(x-x_cmd)² / (s·x_cmd²))
-    # v² is always positive (no sign issue), and σ = √s·v grows linearly with speed.
-    dynamic_lin_vel_denom = torch.clamp(command_lin_vel_std * command_speed_xy**2, min=0.005)
+    dynamic_lin_vel_denom = torch.clamp(command_lin_vel_std * command_speed_xy**vel_tracking_sigma_exp, min=0.005)
 
     lin_vel_error = torch.sum(
         torch.square(base_lin_vel[:, :2] - commands[:, :2]), dim=1
@@ -1237,7 +1246,7 @@ def compute_rewards(
     # 3. Tracking Angular Velocity Z (Exponential)
     # Target is commands[:, 2] (wz)
     command_speed_w = torch.abs(commands[:, 2])
-    dynamic_ang_vel_denom = torch.clamp(command_ang_vel_std * command_speed_w**2, min=0.005)
+    dynamic_ang_vel_denom = torch.clamp(command_ang_vel_std * command_speed_w**vel_tracking_sigma_exp, min=0.005)
 
     ang_vel_error = torch.square(base_ang_vel[:, 2] - commands[:, 2])
     rew_track_ang_vel_z_exp = rew_scale_track_ang_vel_z_exp * torch.exp(

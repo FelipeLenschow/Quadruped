@@ -360,7 +360,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
 
     # Gait shaping
     rew_scale_feet_air_time = _phase_cfg["rewards"]["rew_scale_feet_air_time"]
-    target_feet_air_time = _phase_cfg["rewards"]["target_feet_air_time"]
+    min_feet_air_time = _phase_cfg["rewards"]["min_feet_air_time"]
     rew_scale_foot_height_exp = _phase_cfg["rewards"]["rew_scale_foot_height_exp"]
     target_foot_height = _phase_cfg["rewards"]["target_foot_height"]
     rew_scale_trot_symmetry = _phase_cfg["rewards"]["rew_scale_trot_symmetry"]
@@ -410,6 +410,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
 
     command_lin_vel_std = _phase_cfg["commands"]["command_lin_vel_std"]
     command_ang_vel_std = _phase_cfg["commands"]["command_ang_vel_std"]
+    vel_tracking_sigma_exp = _phase_cfg["commands"].get("vel_tracking_sigma_exp", 2.0)
 
     command_x_range = tuple(_phase_cfg["commands"]["command_x_range"])              # [m/s]
     command_y_range = tuple(_phase_cfg["commands"]["command_y_range"])              # [m/s]
