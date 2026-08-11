@@ -9,6 +9,7 @@ import torch
 import copy
 import random
 from collections.abc import Sequence
+from typing import Dict, Tuple
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
@@ -579,6 +580,29 @@ class QuadrupedEnv(DirectRLEnv):
             zeros = torch.zeros_like(targets)
             self.robot.set_joint_velocity_target(zeros, joint_ids=self._joint_dof_idx)
 
+    def _refresh_joint_and_base_vel(self) -> None:
+        """Refresh self.joint_vel / self.base_lin_vel from the live sim state.
+
+        DirectRLEnv.step() calls _get_dones() then _get_rewards() BEFORE _get_observations()
+        (see isaaclab/envs/direct_rl_env.py), even though the physics substeps (and the
+        scene.update() that refreshes self.robot.data.*) already ran earlier in step(). So the
+        self.joint_vel / self.base_lin_vel attributes below are only refreshed by
+        _get_observations(), which means at reward-computation time they still hold the value
+        from the END of the PREVIOUS step -- identical to last_joint_vel/last_base_lin_vel
+        (captured from the same stale attributes in _pre_physics_step), making the dof_acc_l2/
+        base_acc_l2 finite-difference always evaluate to exactly zero. Calling this at the top
+        of _get_rewards() (before last_joint_vel/last_base_lin_vel get overwritten downstream)
+        pulls the genuinely fresh, current-step value straight from self.robot.data instead.
+        """
+        if getattr(self, "is_heterogeneous", False):
+            for i, view in enumerate(self.robot_views):
+                indices = self.robot_view_indices[i]
+                self.joint_vel[indices] = view.data.joint_vel[:, self._joint_dof_idx]
+                self.base_lin_vel[indices] = view.data.root_lin_vel_b
+        else:
+            self.joint_vel = self.robot.data.joint_vel[:, self._joint_dof_idx]
+            self.base_lin_vel = self.robot.data.root_lin_vel_b
+
     def _get_observations(self) -> dict:
         """
         Collects data from the simulation to feed into the neural network.
@@ -849,11 +873,15 @@ class QuadrupedEnv(DirectRLEnv):
         Computes the reward (score) for the current step.
         The goal is to teach the robot to stand up and retain balance.
         """
+        # Pull fresh joint_vel/base_lin_vel before computing dof_acc_l2/base_acc_l2 below -- see
+        # _refresh_joint_and_base_vel's docstring for why this can't just rely on self.joint_vel.
+        self._refresh_joint_and_base_vel()
+
         # Calculate undesired contacts penalty
         # If any thigh/calf/trunk sensor registers > 1.0 N force, it's a contact
         undesired_contacts = (torch.norm(self.net_undesired_contact_forces, dim=-1).max(dim=1)[0] > 1.0).float()
         
-        total_reward = compute_rewards(
+        total_reward, reward_log = compute_rewards(
             self.cfg.rew_scale_alive,
             self.cfg.rew_scale_undesired_contacts,
             self.cfg.rew_scale_track_lin_vel_xy_exp,
@@ -923,6 +951,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.reset_terminated,
             self.step_dt,
         )
+        self.extras.setdefault("log", {})
+        self.extras["log"].update(reward_log)
         return total_reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1219,7 +1249,9 @@ def compute_rewards(
     rr_idx: torch.Tensor,
     reset_terminated: torch.Tensor,
     step_dt: float,
-):
+) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    log: Dict[str, torch.Tensor] = {}
+
     # 1. Alive (Optional, usually 0)
     rew_alive = rew_scale_alive * (1.0 - reset_terminated.float())
     
@@ -1267,12 +1299,10 @@ def compute_rewards(
     )
 
     # 7. DOF Acceleration L2 (Penalty)
+    # self.robot.data.joint_acc is always zero in this DirectRLEnv setup (confirmed via
+    # scripts/check_joint_acc.py), so compute via finite difference instead, same as base_acc below.
+    joint_acc = (joint_vel - last_joint_vel) / step_dt
     rew_dof_acc_l2 = rew_scale_dof_acc_l2 * torch.sum(torch.square(joint_acc), dim=1)
-    # Note: If joint_acc is not readily available or reliable in DirectRLEnv simplifications,
-    # we might need to approximate it from (joint_vel - last_joint_vel)/dt.
-    # However, Isaac Sim usually provides it. We passed joint_acc.
-    # If joint_acc is zero (because no sensor?), check implementation.
-    # For now assuming it works.
 
     # Base Acceleration Penalty (calculated via finite difference)
     base_acc = (base_lin_vel - last_base_lin_vel) / step_dt
@@ -1354,6 +1384,48 @@ def compute_rewards(
     # 18. Gait Phase Symmetry (cosine-based, all 6 leg pairs, configured offsets)
     rew_gait_phase_sym = rew_scale_gait_phase_sym * gait_phase_sym_val
 
+    rew_feet_air_penalty = rew_scale_feet_air_penalty * feet_air_penalty_val
+    rew_feet_air_penalty_static = rew_scale_feet_air_penalty_static * feet_air_penalty_static_val
+    rew_joint_vel_l2_static = rew_scale_joint_vel_l2_static * joint_vel_l2_static_val
+    rew_grf_balance = rew_scale_grf_balance * grf_balance_val
+    rew_grf_target = rew_scale_grf_target * grf_target_val
+    rew_max_contact_force = rew_scale_max_contact_force * max_contact_force_val
+
+    # Per-term breakdown, mean across all parallel envs -- shows up in TensorBoard under
+    # "Info / <key>" (skrl's agent config has environment_info: log wired up already).
+    log["reward/alive"] = rew_alive.mean()
+    log["reward/undesired_contacts"] = rew_undesired_contacts.mean()
+    log["reward/track_lin_vel_xy_exp"] = rew_track_lin_vel_xy_exp.mean()
+    log["reward/track_ang_vel_z_exp"] = rew_track_ang_vel_z_exp.mean()
+    log["reward/lin_vel_z_l2"] = rew_lin_vel_z_l2.mean()
+    log["reward/ang_vel_xy_l2"] = rew_ang_vel_xy_l2.mean()
+    log["reward/dof_torques_l2"] = rew_dof_torques_l2.mean()
+    log["reward/dof_pos_l2"] = rew_dof_pos_l2.mean()
+    log["reward/dof_acc_l2"] = rew_dof_acc_l2.mean()
+    log["reward/base_acc_l2"] = rew_base_acc_l2.mean()
+    log["reward/action_rate_l2"] = rew_action_rate_l2.mean()
+    log["reward/max_air_feet"] = rew_max_air_feet.mean()
+    log["reward/feet_air_time"] = rew_feet_air_time.mean()
+    log["reward/flat_orientation_l2"] = rew_flat_orientation_l2.mean()
+    log["reward/foot_height"] = rew_foot_height.mean()
+    log["reward/base_height_l2"] = rew_base_height_l2.mean()
+    log["reward/feet_air_penalty"] = rew_feet_air_penalty.mean()
+    log["reward/feet_air_penalty_static"] = rew_feet_air_penalty_static.mean()
+    log["reward/joint_vel_l2_static"] = rew_joint_vel_l2_static.mean()
+    log["reward/trot_symmetry"] = rew_trot_symmetry.mean()
+    log["reward/torque_symmetry"] = rew_torque_symmetry.mean()
+    log["reward/grf_balance"] = rew_grf_balance.mean()
+    log["reward/grf_target"] = rew_grf_target.mean()
+    log["reward/max_contact_force"] = rew_max_contact_force.mean()
+    log["reward/pos_deviation"] = rew_pos_deviation.mean()
+    log["reward/yaw_deviation"] = rew_yaw_deviation.mean()
+    log["reward/stall"] = rew_stall.mean()
+    log["reward/gait_phase_sym"] = rew_gait_phase_sym.mean()
+    # Raw (unscaled) diagnostics -- useful to sanity-check a term is actually receiving live,
+    # nonzero physical data before worrying about whether its reward *scale* is well tuned.
+    log["diag/joint_acc_sum_sq_mean"] = torch.sum(torch.square(joint_acc), dim=1).mean()
+    log["diag/base_acc_sum_sq_mean"] = torch.sum(torch.square(base_acc), dim=1).mean()
+
     total_reward = (
         rew_alive
         + rew_undesired_contacts
@@ -1371,17 +1443,17 @@ def compute_rewards(
         + rew_flat_orientation_l2
         + rew_foot_height
         + rew_base_height_l2
-        + rew_scale_feet_air_penalty * feet_air_penalty_val
-        + rew_scale_feet_air_penalty_static * feet_air_penalty_static_val
-        + rew_scale_joint_vel_l2_static * joint_vel_l2_static_val
+        + rew_feet_air_penalty
+        + rew_feet_air_penalty_static
+        + rew_joint_vel_l2_static
         + rew_trot_symmetry
         + rew_torque_symmetry
-        + rew_scale_grf_balance * grf_balance_val
-        + rew_scale_grf_target * grf_target_val
-        + rew_scale_max_contact_force * max_contact_force_val
+        + rew_grf_balance
+        + rew_grf_target
+        + rew_max_contact_force
         + rew_pos_deviation
         + rew_yaw_deviation
         + rew_stall
         + rew_gait_phase_sym
     )
-    return total_reward
+    return total_reward, log
