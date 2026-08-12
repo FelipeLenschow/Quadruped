@@ -415,8 +415,10 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     command_yaw_range = tuple(_phase_cfg["commands"]["command_yaw_range"])            # [rad/s]
     command_resampling_time = _phase_cfg["commands"]["command_resampling_time"]              # [s]
 
-    # Gait reward masking: feet_air_time only counted when ‖cmd‖ > this
+    # Gait reward masking: ramps linearly from fully-static at ‖cmd‖ <= static_velocity_threshold
+    # to fully-moving at ‖cmd‖ >= static_command_ramp (was a hard switch at the threshold).
     static_velocity_threshold = _phase_cfg["commands"]["static_velocity_threshold"]
+    static_command_ramp = _phase_cfg["commands"].get("static_command_ramp", 0.1)
     max_pos_leash = _phase_cfg["commands"]["max_pos_leash"]
     max_yaw_leash = _phase_cfg["commands"]["max_yaw_leash"]
 

@@ -132,7 +132,7 @@ default: &default
     # Upper end of the static->moving reward ramp (see static_velocity_threshold use in
     # quadruped_env.py). Full stepping reward from 0.1 upward, so this never suppresses the
     # low-speed walking we actually want; it only removes the discontinuity at exactly zero.
-    static_command_ramp: 0.1
+    static_command_ramp: 0.5
     max_pos_leash: 0.4
     max_yaw_leash: 0.5
     zero_command_fraction: 0.05

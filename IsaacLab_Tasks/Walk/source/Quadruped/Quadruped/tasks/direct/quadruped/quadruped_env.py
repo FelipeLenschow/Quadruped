@@ -647,6 +647,22 @@ class QuadrupedEnv(DirectRLEnv):
         first_contact = contact & ~self.last_feet_contact
         # Increment air time
         self.feet_air_time += self.step_dt
+
+        # Smooth static/moving gate. This used to be a hard switch at static_velocity_threshold
+        # (0.001): at ||cmd||=0 the stepping rewards were off and the static penalties on, and one
+        # thousandth above it they swapped completely. Those two inputs are near-identical to the
+        # network but demanded opposite behaviour, so it could never represent the cliff sharply and
+        # the "keep stepping" mode bled across into exact zero -- the robot marching in place under a
+        # zero command. Ramping the weight linearly over [threshold, static_command_ramp] instead
+        # makes "near-zero command -> hold still" a learnable, continuous function of the command.
+        # The ramp tops out well below the speeds we want real walking at, so full stepping reward is
+        # still available everywhere it matters.
+        cmd_norm = torch.norm(self.commands[:, :3], dim=1)
+        ramp_lo = self.cfg.static_velocity_threshold
+        ramp_hi = max(self.cfg.static_command_ramp, ramp_lo + 1e-6)
+        moving_mask = ((cmd_norm - ramp_lo) / (ramp_hi - ramp_lo)).clamp(0.0, 1.0)
+        static_mask = 1.0 - moving_mask
+
         # Potential-based shaping: treat phi(t) = exp(-(air_time-target)^2/sigma) as a potential and
         # reward its rate of change dphi/dt every step while airborne, instead of paying phi(t) once
         # at landing. Summed over a swing this telescopes back to phi(landing)-phi(0) (same total as
@@ -660,7 +676,7 @@ class QuadrupedEnv(DirectRLEnv):
         # sum) to phi(landing)-phi(0) over a swing -- the raw rate alone would overcount by 1/step_dt.
         rew_air_time = torch.sum(
             dphi_dt * self.step_dt * (~contact).float(), dim=1
-        ) * (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold)
+        ) * moving_mask
         self.feet_air_time_reward_val = rew_air_time
 
         # -- Update foot height reward logic --
@@ -687,7 +703,7 @@ class QuadrupedEnv(DirectRLEnv):
             dim=1,
         )
         # Apply command mask (x, y, yaw commands)
-        rew_foot_height *= (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold).float()
+        rew_foot_height *= moving_mask
 
         self.foot_height_reward_val = rew_foot_height
 
@@ -697,9 +713,11 @@ class QuadrupedEnv(DirectRLEnv):
         # target_feet_air_time/feet_air_time_sigma comment in training_phases.yaml for the balance
         # against rew_scale_feet_air_time so this penalty doesn't outweigh completing a real step.
         self.feet_air_penalty_val = torch.sum(self.feet_air_time * (~contact).float(), dim=1)
-        # Extra penalty when standing still (commands == 0)
-        static_mask = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.static_velocity_threshold).float()
+        # Extra penalty when standing still (ramped static_mask computed above).
         self.feet_air_penalty_static_val = self.feet_air_penalty_val * static_mask
+        # Marching in place is exactly "zero base velocity, large joint velocity", so this is the
+        # term that targets it directly -- the velocity-tracking and pos_deviation rewards are both
+        # fully satisfied by a robot that steps without translating and give no pressure at all.
         self.joint_vel_l2_static_val = (
             torch.sum(torch.square(self.joint_vel), dim=1) * static_mask
         )
@@ -760,7 +778,7 @@ class QuadrupedEnv(DirectRLEnv):
             # Compute phase of foot B relative to foot A for each of the 6 pairs
             # phase_rel(A, B) = ((t_now - last_strike_A) % stride_A) / stride_A  → [0, 1]
             # Only valid when stride_A is known (> 0.1s) and robot is moving
-            moving = (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold)  # (N,) bool
+            moving = cmd_norm > self.cfg.static_velocity_threshold  # (N,) bool
 
             def _phase_rel(ref_foot, other_foot):
                 """Phase of other_foot relative to ref_foot. Returns score in [0,1] and validity mask."""
