@@ -360,18 +360,17 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
 
     # Gait shaping
     rew_scale_feet_air_time = _phase_cfg["rewards"]["rew_scale_feet_air_time"]
-    min_feet_air_time = _phase_cfg["rewards"]["min_feet_air_time"]
+    target_feet_air_time = _phase_cfg["rewards"]["target_feet_air_time"]
+    feet_air_time_sigma = _phase_cfg["rewards"]["feet_air_time_sigma"]
     rew_scale_foot_height_exp = _phase_cfg["rewards"]["rew_scale_foot_height_exp"]
     target_foot_height = _phase_cfg["rewards"]["target_foot_height"]
-    rew_scale_trot_symmetry = _phase_cfg["rewards"]["rew_scale_trot_symmetry"]
-    hip_sym_multiplier = _phase_cfg["rewards"]["hip_sym_multiplier"]
-    rew_scale_torque_symmetry = _phase_cfg["rewards"]["rew_scale_torque_symmetry"]
+    foot_height_sigma = _phase_cfg["rewards"]["foot_height_sigma"]
+
+    # Ground reaction forces / impact
     rew_scale_grf_balance = _phase_cfg["rewards"]["rew_scale_grf_balance"]
     rew_scale_grf_target = _phase_cfg["rewards"]["rew_scale_grf_target"]
     rew_scale_max_contact_force = _phase_cfg["rewards"]["rew_scale_max_contact_force"]
     max_contact_force_pct = _phase_cfg["rewards"]["max_contact_force_pct"]
-    rew_scale_max_air_feet = _phase_cfg["rewards"]["rew_scale_max_air_feet"]
-    max_air_feet_allowed = _phase_cfg["rewards"]["max_air_feet_allowed"]
 
     # Stability penalties
     rew_scale_flat_orientation_l2 = _phase_cfg["rewards"]["rew_scale_flat_orientation_l2"]
@@ -393,7 +392,6 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     target_base_height = _phase_cfg["rewards"]["target_base_height"]
     rew_scale_pos_deviation_l1 = _phase_cfg["rewards"]["rew_scale_pos_deviation_l1"]
     rew_scale_yaw_deviation_l1 = _phase_cfg["rewards"]["rew_scale_yaw_deviation_l1"]
-    rew_scale_stall = _phase_cfg["rewards"]["rew_scale_stall"]
 
     # Gait phase symmetry reward (all 6 leg pairs)
     rew_scale_gait_phase_sym  = _phase_cfg["rewards"]["rew_scale_gait_phase_sym"]
@@ -419,7 +417,6 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
 
     # Gait reward masking: feet_air_time only counted when ‖cmd‖ > this
     static_velocity_threshold = _phase_cfg["commands"]["static_velocity_threshold"]
-    stall_velocity_threshold = _phase_cfg["commands"]["stall_velocity_threshold"]
     max_pos_leash = _phase_cfg["commands"]["max_pos_leash"]
     max_yaw_leash = _phase_cfg["commands"]["max_yaw_leash"]
 

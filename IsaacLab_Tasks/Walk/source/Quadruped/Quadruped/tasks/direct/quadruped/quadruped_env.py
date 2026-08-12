@@ -110,15 +110,6 @@ class QuadrupedEnv(DirectRLEnv):
                 idx, _ = v.find_joints(".*_hip_joint|.*_thigh_joint|.*_calf_joint")
                 self._view_joint_dof_idx.append(torch.tensor(idx, dtype=torch.long, device=self.device))
         
-        fl_idx, _ = self.robot.find_joints("FL_.*")
-        fr_idx, _ = self.robot.find_joints("FR_.*")
-        rl_idx, _ = self.robot.find_joints("RL_.*")
-        rr_idx, _ = self.robot.find_joints("RR_.*")
-        self._fl_idx = torch.tensor(fl_idx, dtype=torch.long, device=self.device)
-        self._fr_idx = torch.tensor(fr_idx, dtype=torch.long, device=self.device)
-        self._rl_idx = torch.tensor(rl_idx, dtype=torch.long, device=self.device)
-        self._rr_idx = torch.tensor(rr_idx, dtype=torch.long, device=self.device)
-
         self.actions = torch.zeros(
             self.num_envs, self.cfg.action_space, device=self.device
         )
@@ -133,7 +124,6 @@ class QuadrupedEnv(DirectRLEnv):
         self.ref_yaw = torch.zeros(self.num_envs, device=self.device)
         self.pos_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.yaw_deviation_val = torch.zeros(self.num_envs, device=self.device)
-        self.stall_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_feet_contact = torch.zeros(
             self.num_envs, 4, dtype=torch.bool, device=self.device
@@ -657,10 +647,19 @@ class QuadrupedEnv(DirectRLEnv):
         first_contact = contact & ~self.last_feet_contact
         # Increment air time
         self.feet_air_time += self.step_dt
-        # Calculate reward for feet that just landed: (air_time - threshold) * first_contact
-        # This only rewards air time *above* the minimum threshold
+        # Potential-based shaping: treat phi(t) = exp(-(air_time-target)^2/sigma) as a potential and
+        # reward its rate of change dphi/dt every step while airborne, instead of paying phi(t) once
+        # at landing. Summed over a swing this telescopes back to phi(landing)-phi(0) (same total as
+        # the old lump-sum design for a well-timed swing), but gives dense, directional feedback:
+        # positive while air_time is approaching target, zero at the peak, negative past it -- so
+        # there's no way to "camp" near the target, the signal pushes toward landing right around it.
+        air_time_err = self.feet_air_time - self.cfg.target_feet_air_time
+        phi = torch.exp(-torch.square(air_time_err) / self.cfg.feet_air_time_sigma)
+        dphi_dt = -2.0 * air_time_err / self.cfg.feet_air_time_sigma * phi
+        # Multiply the rate by step_dt: this is what actually makes per-step rewards sum (Riemann
+        # sum) to phi(landing)-phi(0) over a swing -- the raw rate alone would overcount by 1/step_dt.
         rew_air_time = torch.sum(
-            (self.feet_air_time - self.cfg.min_feet_air_time).clamp(min=0.0) * first_contact.float(), dim=1
+            dphi_dt * self.step_dt * (~contact).float(), dim=1
         ) * (torch.norm(self.commands[:, :3], dim=1) > self.cfg.static_velocity_threshold)
         self.feet_air_time_reward_val = rew_air_time
 
@@ -683,7 +682,7 @@ class QuadrupedEnv(DirectRLEnv):
         # (exp(-square(height - target) / sigma) * ~contact)
         # Masked by command norm to avoid lifting feet when standing still
         rew_foot_height = torch.sum(
-            torch.exp(-torch.square(feet_heights - self.cfg.target_foot_height) / 0.005)
+            torch.exp(-torch.square(feet_heights - self.cfg.target_foot_height) / self.cfg.foot_height_sigma)
             * (~contact).float(),
             dim=1,
         )
@@ -692,8 +691,12 @@ class QuadrupedEnv(DirectRLEnv):
 
         self.foot_height_reward_val = rew_foot_height
 
-        # Penalty for each foot in the air (constant per-step)
-        self.feet_air_penalty_val = torch.sum((~contact).float(), dim=1)
+        # Penalty grows with how long each foot has been continuously airborne (self.feet_air_time,
+        # already tracked above -- resets to 0 on landing), instead of a flat per-airborne-foot cost.
+        # Keeps a normal step cheap while discouraging a foot getting stuck hovering; see
+        # target_feet_air_time/feet_air_time_sigma comment in training_phases.yaml for the balance
+        # against rew_scale_feet_air_time so this penalty doesn't outweigh completing a real step.
+        self.feet_air_penalty_val = torch.sum(self.feet_air_time * (~contact).float(), dim=1)
         # Extra penalty when standing still (commands == 0)
         static_mask = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.static_velocity_threshold).float()
         self.feet_air_penalty_static_val = self.feet_air_penalty_val * static_mask
@@ -832,17 +835,6 @@ class QuadrupedEnv(DirectRLEnv):
             yaw_error[exceeds_yaw_leash] = yaw_error_clamped
         self.yaw_deviation_val = torch.abs(yaw_error)
 
-        # Compute linear speed deficit (stall penalty) when commanded above stall_velocity_threshold.
-        # Uses signed projection of actual velocity onto the command direction so that backward
-        # walking at the commanded magnitude is fully penalized (not rewarded like norm-vs-norm was).
-        stall_thresh = getattr(self.cfg, "stall_velocity_threshold", 0.05)
-        cmd_speed = torch.norm(self.commands[:, :2], dim=1)  # |cmd|
-        cmd_dir = self.commands[:, :2] / cmd_speed.clamp(min=1e-6).unsqueeze(1)  # unit vector
-        signed_speed = (self.base_lin_vel[:, :2] * cmd_dir).sum(dim=1)  # projection onto cmd
-        stall_mask = (cmd_speed > stall_thresh).float()
-        self.stall_val = stall_mask * torch.clamp(cmd_speed - signed_speed, min=0.0)
-
-
         # Observations (unscaled)
         obs = torch.cat(
             (
@@ -899,18 +891,12 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_feet_air_penalty_static,
             self.cfg.rew_scale_joint_vel_l2_static,
             self.cfg.rew_scale_base_height_l2,
-            self.cfg.rew_scale_trot_symmetry,
-            self.cfg.hip_sym_multiplier,
-            self.cfg.rew_scale_torque_symmetry,
             self.cfg.rew_scale_grf_balance,
             self.cfg.rew_scale_grf_target,
             self.cfg.rew_scale_max_contact_force,
             self.cfg.rew_scale_base_acc_l2,
-            self.cfg.rew_scale_max_air_feet,
-            self.cfg.max_air_feet_allowed,
             self.cfg.rew_scale_pos_deviation_l1,
             self.cfg.rew_scale_yaw_deviation_l1,
-            self.cfg.rew_scale_stall,
             self.cfg.rew_scale_gait_phase_sym,
             self.cfg.target_base_height,
             self.cfg.static_velocity_threshold,
@@ -940,14 +926,9 @@ class QuadrupedEnv(DirectRLEnv):
             self.max_contact_force_val,
             self.pos_deviation_val,
             self.yaw_deviation_val,
-            self.stall_val,
             self.gait_phase_sym_val,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
-            self._fl_idx,
-            self._fr_idx,
-            self._rl_idx,
-            self._rr_idx,
             self.reset_terminated,
             self.step_dt,
         )
@@ -1198,18 +1179,12 @@ def compute_rewards(
     rew_scale_feet_air_penalty_static: float,
     rew_scale_joint_vel_l2_static: float,
     rew_scale_base_height_l2: float,
-    rew_scale_trot_symmetry: float,
-    hip_sym_multiplier: float,
-    rew_scale_torque_symmetry: float,
     rew_scale_grf_balance: float,
     rew_scale_grf_target: float,
     rew_scale_max_contact_force: float,
     rew_scale_base_acc_l2: float,
-    rew_scale_max_air_feet: float,
-    max_air_feet_allowed: float,
     rew_scale_pos_deviation_l1: float,
     rew_scale_yaw_deviation_l1: float,
-    rew_scale_stall: float,
     rew_scale_gait_phase_sym: float,
     target_base_height: float,
     static_velocity_threshold: float,
@@ -1239,14 +1214,9 @@ def compute_rewards(
     max_contact_force_val: torch.Tensor,
     pos_deviation_val: torch.Tensor,
     yaw_deviation_val: torch.Tensor,
-    stall_val: torch.Tensor,
     gait_phase_sym_val: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
-    fl_idx: torch.Tensor,
-    fr_idx: torch.Tensor,
-    rl_idx: torch.Tensor,
-    rr_idx: torch.Tensor,
     reset_terminated: torch.Tensor,
     step_dt: float,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
@@ -1314,9 +1284,6 @@ def compute_rewards(
         torch.square(actions - previous_actions), dim=1
     )
 
-    # Max Air Feet Penalty
-    rew_max_air_feet = rew_scale_max_air_feet * torch.clamp(feet_air_penalty_val - max_air_feet_allowed, min=0.0)
-
     # 9. Feet Air Time Reward
     # Computed in _get_observations
     rew_feet_air_time = rew_scale_feet_air_time * feet_air_time_reward_val
@@ -1337,51 +1304,11 @@ def compute_rewards(
     # 13. Base Height Penalty
     rew_base_height_l2 = rew_scale_base_height_l2 * torch.square(base_height_val - target_base_height)
 
-    # 14. Trot symmetry penalty (Diagonal legs should have symmetric actions)
-    # Hip (idx 0) needs sign flip: Go2 uses opposite signs for L/R hips
-    #   (default: L_hip=+0.1, R_hip=-0.1 for same outward abduction)
-    # Thigh/calf (idx 1:) use same sign convention across sides.
-    if rew_scale_trot_symmetry != 0.0:
-        fl_actions = actions[:, fl_idx]
-        rr_actions = actions[:, rr_idx]
-        fr_actions = actions[:, fr_idx]
-        rl_actions = actions[:, rl_idx]
-        
-        # Hip: FL_hip ≈ -RR_hip (opposite sides = opposite signs)
-        hip_sym_err = torch.square(fl_actions[:, 0] + rr_actions[:, 0]) + \
-                      torch.square(fr_actions[:, 0] + rl_actions[:, 0])
-        # Thigh + Calf: FL ≈ RR (same sign)
-        leg_sym_err = torch.sum(torch.square(fl_actions[:, 1:] - rr_actions[:, 1:]), dim=1) + \
-                      torch.sum(torch.square(fr_actions[:, 1:] - rl_actions[:, 1:]), dim=1)
-        
-        # Multiply hip error by hip_sym_multiplier to make the HAA penalty stronger 
-        # than the thigh/calf penalty, enforcing strict lateral symmetry.
-        trot_sym_err = (hip_sym_multiplier * hip_sym_err) + leg_sym_err
-        rew_trot_symmetry = rew_scale_trot_symmetry * trot_sym_err
-    else:
-        rew_trot_symmetry = torch.zeros_like(rew_alive)
-
-    # 15. Torque symmetry penalty (Diagonal legs should have symmetric torques)
-    if rew_scale_torque_symmetry != 0.0:
-        fl_torques = joint_torques[:, fl_idx]
-        rr_torques = joint_torques[:, rr_idx]
-        fr_torques = joint_torques[:, fr_idx]
-        rl_torques = joint_torques[:, rl_idx]
-        
-        torque_sym_err = torch.sum(torch.square(fl_torques[:, 1:] - rr_torques[:, 1:]), dim=1) + \
-                         torch.sum(torch.square(fr_torques[:, 1:] - rl_torques[:, 1:]), dim=1)
-        rew_torque_symmetry = rew_scale_torque_symmetry * torque_sym_err
-    else:
-        rew_torque_symmetry = torch.zeros_like(rew_alive)
-
-    # 16. Integrated Position Deviation L1 Penalty
+    # 14. Integrated Position Deviation L1 Penalty
     rew_pos_deviation = rew_scale_pos_deviation_l1 * pos_deviation_val
     rew_yaw_deviation = rew_scale_yaw_deviation_l1 * yaw_deviation_val
 
-    # 17. Linear Speed Deficit (Stall) Penalty
-    rew_stall = rew_scale_stall * stall_val
-
-    # 18. Gait Phase Symmetry (cosine-based, all 6 leg pairs, configured offsets)
+    # 15. Gait Phase Symmetry (cosine-based, all 6 leg pairs, configured offsets)
     rew_gait_phase_sym = rew_scale_gait_phase_sym * gait_phase_sym_val
 
     rew_feet_air_penalty = rew_scale_feet_air_penalty * feet_air_penalty_val
@@ -1404,7 +1331,6 @@ def compute_rewards(
     log["reward/dof_acc_l2"] = rew_dof_acc_l2.mean()
     log["reward/base_acc_l2"] = rew_base_acc_l2.mean()
     log["reward/action_rate_l2"] = rew_action_rate_l2.mean()
-    log["reward/max_air_feet"] = rew_max_air_feet.mean()
     log["reward/feet_air_time"] = rew_feet_air_time.mean()
     log["reward/flat_orientation_l2"] = rew_flat_orientation_l2.mean()
     log["reward/foot_height"] = rew_foot_height.mean()
@@ -1412,14 +1338,11 @@ def compute_rewards(
     log["reward/feet_air_penalty"] = rew_feet_air_penalty.mean()
     log["reward/feet_air_penalty_static"] = rew_feet_air_penalty_static.mean()
     log["reward/joint_vel_l2_static"] = rew_joint_vel_l2_static.mean()
-    log["reward/trot_symmetry"] = rew_trot_symmetry.mean()
-    log["reward/torque_symmetry"] = rew_torque_symmetry.mean()
     log["reward/grf_balance"] = rew_grf_balance.mean()
     log["reward/grf_target"] = rew_grf_target.mean()
     log["reward/max_contact_force"] = rew_max_contact_force.mean()
     log["reward/pos_deviation"] = rew_pos_deviation.mean()
     log["reward/yaw_deviation"] = rew_yaw_deviation.mean()
-    log["reward/stall"] = rew_stall.mean()
     log["reward/gait_phase_sym"] = rew_gait_phase_sym.mean()
     # Raw (unscaled) diagnostics -- useful to sanity-check a term is actually receiving live,
     # nonzero physical data before worrying about whether its reward *scale* is well tuned.
@@ -1438,7 +1361,6 @@ def compute_rewards(
         + rew_dof_acc_l2
         + rew_base_acc_l2
         + rew_action_rate_l2
-        + rew_max_air_feet
         + rew_feet_air_time
         + rew_flat_orientation_l2
         + rew_foot_height
@@ -1446,14 +1368,11 @@ def compute_rewards(
         + rew_feet_air_penalty
         + rew_feet_air_penalty_static
         + rew_joint_vel_l2_static
-        + rew_trot_symmetry
-        + rew_torque_symmetry
         + rew_grf_balance
         + rew_grf_target
         + rew_max_contact_force
         + rew_pos_deviation
         + rew_yaw_deviation
-        + rew_stall
         + rew_gait_phase_sym
     )
     return total_reward, log
