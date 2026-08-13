@@ -362,6 +362,14 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_feet_air_time = _phase_cfg["rewards"]["rew_scale_feet_air_time"]
     target_feet_air_time = _phase_cfg["rewards"]["target_feet_air_time"]
     feet_air_time_sigma = _phase_cfg["rewards"]["feet_air_time_sigma"]
+    # Speed-dependent swing target: target_feet_air_time above is used at/above
+    # feet_air_time_speed_hi; target_feet_air_time_slow is used at/below feet_air_time_speed_lo;
+    # linearly ramped between. Longer swing at low commanded speed means lower cadence, so the same
+    # small commanded velocity can be hit with a normal-amplitude stride instead of a tiny, same-
+    # tempo twitch -- see the "why does frequency stay ~3Hz at every speed" discussion this followed.
+    target_feet_air_time_slow = _phase_cfg["rewards"].get("target_feet_air_time_slow", target_feet_air_time)
+    feet_air_time_speed_lo = _phase_cfg["rewards"].get("feet_air_time_speed_lo", 0.1)
+    feet_air_time_speed_hi = _phase_cfg["rewards"].get("feet_air_time_speed_hi", 0.35)
     rew_scale_foot_height_exp = _phase_cfg["rewards"]["rew_scale_foot_height_exp"]
     target_foot_height = _phase_cfg["rewards"]["target_foot_height"]
     foot_height_sigma = _phase_cfg["rewards"]["foot_height_sigma"]

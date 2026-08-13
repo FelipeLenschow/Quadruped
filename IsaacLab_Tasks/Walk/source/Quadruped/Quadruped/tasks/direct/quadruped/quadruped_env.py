@@ -663,13 +663,26 @@ class QuadrupedEnv(DirectRLEnv):
         moving_mask = ((cmd_norm - ramp_lo) / (ramp_hi - ramp_lo)).clamp(0.0, 1.0)
         static_mask = 1.0 - moving_mask
 
+        # Speed-dependent swing target: ramp linearly from target_feet_air_time_slow (long swing,
+        # low cadence) at feet_air_time_speed_lo down to target_feet_air_time (the original fixed
+        # 0.25 default) at feet_air_time_speed_hi, using xy command speed only (not yaw -- this is
+        # about translational stride, not turning in place).
+        command_speed_xy = torch.norm(self.commands[:, :2], dim=1)
+        speed_lo = self.cfg.feet_air_time_speed_lo
+        speed_hi = max(self.cfg.feet_air_time_speed_hi, speed_lo + 1e-6)
+        slow_frac = 1.0 - ((command_speed_xy - speed_lo) / (speed_hi - speed_lo)).clamp(0.0, 1.0)
+        target_air_time_dyn = (
+            self.cfg.target_feet_air_time
+            + (self.cfg.target_feet_air_time_slow - self.cfg.target_feet_air_time) * slow_frac
+        ).unsqueeze(1)
+
         # Potential-based shaping: treat phi(t) = exp(-(air_time-target)^2/sigma) as a potential and
         # reward its rate of change dphi/dt every step while airborne, instead of paying phi(t) once
         # at landing. Summed over a swing this telescopes back to phi(landing)-phi(0) (same total as
         # the old lump-sum design for a well-timed swing), but gives dense, directional feedback:
         # positive while air_time is approaching target, zero at the peak, negative past it -- so
         # there's no way to "camp" near the target, the signal pushes toward landing right around it.
-        air_time_err = self.feet_air_time - self.cfg.target_feet_air_time
+        air_time_err = self.feet_air_time - target_air_time_dyn
         phi = torch.exp(-torch.square(air_time_err) / self.cfg.feet_air_time_sigma)
         dphi_dt = -2.0 * air_time_err / self.cfg.feet_air_time_sigma * phi
         # Multiply the rate by step_dt: this is what actually makes per-step rewards sum (Riemann
