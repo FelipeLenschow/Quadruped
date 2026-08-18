@@ -1,0 +1,280 @@
+{
+    "metadata": {
+        "checkpoint": "/app/Quadruped/IsaacLab_Tasks/Walk/logs/skrl/quadruped_direct/NiceGait3/checkpoints/agent_250000.pt",
+        "checkpoint_name": "agent_250000.pt",
+        "robot_type": "go2",
+        "timestamp": "2026-07-29 21:03:09"
+    },
+    "results": {
+        "0.05": {
+            "commanded_speed": 0.05,
+            "actual_speed": -0.0,
+            "foot_lift_height_cm": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "foot_swing_time_s": 0.0,
+            "step_frequency_hz": 0.0,
+            "grf_stance_N": [
+                36.43,
+                50.44,
+                32.99,
+                29.31
+            ],
+            "grf_peak_stance_N": [
+                37.85,
+                52.0,
+                39.5,
+                31.92
+            ],
+            "trot_sync_percent": 100.0,
+            "base_oscillation": {
+                "std_z_vel": 0.0,
+                "std_roll_vel": 0.01,
+                "std_pitch_vel": 0.01
+            }
+        },
+        "0.1": {
+            "commanded_speed": 0.1,
+            "actual_speed": 0.0,
+            "foot_lift_height_cm": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "foot_swing_time_s": 0.0,
+            "step_frequency_hz": 0.0,
+            "grf_stance_N": [
+                35.96,
+                51.56,
+                31.93,
+                29.73
+            ],
+            "grf_peak_stance_N": [
+                37.63,
+                52.13,
+                36.46,
+                34.42
+            ],
+            "trot_sync_percent": 100.0,
+            "base_oscillation": {
+                "std_z_vel": 0.0,
+                "std_roll_vel": 0.0,
+                "std_pitch_vel": 0.0
+            }
+        },
+        "0.15": {
+            "commanded_speed": 0.15,
+            "actual_speed": 0.0,
+            "foot_lift_height_cm": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "foot_swing_time_s": 0.0,
+            "step_frequency_hz": 0.0,
+            "grf_stance_N": [
+                37.11,
+                52.39,
+                30.86,
+                28.81
+            ],
+            "grf_peak_stance_N": [
+                38.49,
+                53.54,
+                36.23,
+                38.02
+            ],
+            "trot_sync_percent": 100.0,
+            "base_oscillation": {
+                "std_z_vel": 0.0,
+                "std_roll_vel": 0.0,
+                "std_pitch_vel": 0.0
+            }
+        },
+        "0.2": {
+            "commanded_speed": 0.2,
+            "actual_speed": 0.0,
+            "foot_lift_height_cm": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "foot_swing_time_s": 0.0,
+            "step_frequency_hz": 0.0,
+            "grf_stance_N": [
+                38.25,
+                53.52,
+                29.81,
+                27.6
+            ],
+            "grf_peak_stance_N": [
+                39.35,
+                55.59,
+                36.42,
+                41.92
+            ],
+            "trot_sync_percent": 100.0,
+            "base_oscillation": {
+                "std_z_vel": 0.0,
+                "std_roll_vel": 0.0,
+                "std_pitch_vel": 0.01
+            }
+        },
+        "0.25": {
+            "commanded_speed": 0.25,
+            "actual_speed": 0.0,
+            "foot_lift_height_cm": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "foot_swing_time_s": 0.0,
+            "step_frequency_hz": 0.0,
+            "grf_stance_N": [
+                39.66,
+                54.87,
+                28.5,
+                26.14
+            ],
+            "grf_peak_stance_N": [
+                40.52,
+                57.74,
+                36.77,
+                46.06
+            ],
+            "trot_sync_percent": 100.0,
+            "base_oscillation": {
+                "std_z_vel": 0.0,
+                "std_roll_vel": 0.0,
+                "std_pitch_vel": 0.01
+            }
+        },
+        "0.35": {
+            "commanded_speed": 0.35,
+            "actual_speed": 0.34,
+            "foot_lift_height_cm": [
+                2.72,
+                3.27,
+                2.33,
+                2.75
+            ],
+            "foot_swing_time_s": 0.15,
+            "step_frequency_hz": 1.61,
+            "grf_stance_N": [
+                47.45,
+                52.98,
+                45.45,
+                49.18
+            ],
+            "grf_peak_stance_N": [
+                82.55,
+                83.66,
+                87.65,
+                80.25
+            ],
+            "trot_sync_percent": 89.01,
+            "base_oscillation": {
+                "std_z_vel": 0.06,
+                "std_roll_vel": 0.18,
+                "std_pitch_vel": 0.35
+            }
+        },
+        "0.5": {
+            "commanded_speed": 0.5,
+            "actual_speed": 0.5,
+            "foot_lift_height_cm": [
+                4.51,
+                4.36,
+                3.33,
+                3.36
+            ],
+            "foot_swing_time_s": 0.16,
+            "step_frequency_hz": 1.92,
+            "grf_stance_N": [
+                50.78,
+                57.27,
+                49.27,
+                55.81
+            ],
+            "grf_peak_stance_N": [
+                74.09,
+                88.12,
+                90.79,
+                80.98
+            ],
+            "trot_sync_percent": 85.45,
+            "base_oscillation": {
+                "std_z_vel": 0.05,
+                "std_roll_vel": 0.23,
+                "std_pitch_vel": 0.43
+            }
+        },
+        "0.75": {
+            "commanded_speed": 0.75,
+            "actual_speed": 0.71,
+            "foot_lift_height_cm": [
+                5.27,
+                5.93,
+                4.63,
+                5.08
+            ],
+            "foot_swing_time_s": 0.16,
+            "step_frequency_hz": 2.19,
+            "grf_stance_N": [
+                51.67,
+                63.56,
+                58.58,
+                56.28
+            ],
+            "grf_peak_stance_N": [
+                81.36,
+                93.49,
+                100.48,
+                94.84
+            ],
+            "trot_sync_percent": 86.56,
+            "base_oscillation": {
+                "std_z_vel": 0.05,
+                "std_roll_vel": 0.27,
+                "std_pitch_vel": 0.49
+            }
+        },
+        "1.0": {
+            "commanded_speed": 1.0,
+            "actual_speed": 0.9,
+            "foot_lift_height_cm": [
+                5.6,
+                7.15,
+                5.33,
+                6.14
+            ],
+            "foot_swing_time_s": 0.16,
+            "step_frequency_hz": 2.41,
+            "grf_stance_N": [
+                53.33,
+                66.42,
+                63.86,
+                61.01
+            ],
+            "grf_peak_stance_N": [
+                99.59,
+                114.54,
+                133.04,
+                111.33
+            ],
+            "trot_sync_percent": 90.61,
+            "base_oscillation": {
+                "std_z_vel": 0.06,
+                "std_roll_vel": 0.25,
+                "std_pitch_vel": 0.47
+            }
+        }
+    }
+}

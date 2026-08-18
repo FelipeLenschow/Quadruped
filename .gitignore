@@ -29,6 +29,7 @@ share/python-wheels/
 **/logs/**/*.tfevents*
 !**/Walk/logs/**/*.pt
 !**/logs/**/best_agent.pt
+!**/logs/**/*mujoco_eval_report*.json
 !**/logs/**/*.yaml
 *.jit
 .launcher_last_command.json
