@@ -10,9 +10,29 @@ The `docker/` folder simply acts as a recipe book. It holds the `Dockerfile` (th
 
 Your `Quadruped` code stays exactly where it is in the root directory. When you run the Docker container, we use a "Volume Mount" (`-v $(pwd):/app`). This creates a live portal between your computer's hard drive and the container's virtual hard drive. If you edit a Python script on your laptop, the Docker container sees the change instantly.
 
-## 1. Building the Docker Image
+## 1. Getting the Image (Recommended: just pull it)
 
-You only need to do this once per machine, or if we add new `pip` or `apt` dependencies to the `Dockerfile`.
+GitHub Actions builds this `Dockerfile` for you on every change and publishes a
+**multi-arch** image (AMD64 for laptop/VDI, ARM64 for the robot) to the GitHub
+Container Registry. Docker automatically picks the right architecture, so the
+same command works everywhere:
+
+```bash
+sudo docker pull ghcr.io/felipelenschow/quadruped_env:latest
+sudo docker tag ghcr.io/felipelenschow/quadruped_env:latest quadruped_env
+```
+
+The second line re-tags it as `quadruped_env` so every command and alias below
+keeps working unchanged.
+
+*On the physical robot:* if the CMOS battery is dead and the clock is wrong, the
+pull will fail with a TLS certificate error. Fix the clock first
+(`sudo date -s "$(date -u)"` from a machine with the right time, or `sudo ntpdate pool.ntp.org`).
+
+## 1b. Building the Image Yourself (fallback)
+
+Only needed if you're offline, are testing local `Dockerfile` changes before
+pushing them, or the registry is unreachable.
 
 Run this command from the **root of your `Quadruped` project** (not inside the docker folder):
 

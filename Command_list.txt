@@ -19,3 +19,6 @@ sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o
 export ROS_DOMAIN_ID=1
 
 https://app.diagrams.net/#G1GvJtiRjVAKMMoCu5S3hGDXMBrdPyqgD7#%7B%22pageId%22%3A%22iOS9X8VqbEqsnCgDxonq%22%7D
+
+# Pull the prebuilt Docker image (multi-arch: works on laptop/VDI and robot)
+sudo docker pull ghcr.io/felipelenschow/quadruped_env:latest && sudo docker tag ghcr.io/felipelenschow/quadruped_env:latest quadruped_env

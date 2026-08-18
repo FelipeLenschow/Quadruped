@@ -2,6 +2,10 @@
 # We use 'ros-base' instead of 'desktop' because it officially supports both AMD64 (Laptop) and ARM64 (Robot)!
 FROM ros:humble-ros-base
 
+# 1.5 Link the published image to this GitHub repo (makes it show up as a
+# package on the repo page and inherit its visibility).
+LABEL org.opencontainers.image.source=https://github.com/FelipeLenschow/Quadruped
+
 # 2. Prevent interactive prompts during apt installations
 ENV DEBIAN_FRONTEND=noninteractive
 
