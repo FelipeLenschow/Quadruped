@@ -8,11 +8,17 @@
 #   - IsaacLab/source/isaaclab_tasks/.../locomotion/velocity/config/go2/rough_env_cfg.py
 #   - IsaacLab/source/isaaclab_tasks/.../locomotion/velocity/config/go2/flat_env_cfg.py
 #
-# Robot: Unitree A1 body + DCMotorCfg (PD controller, Kp=25, Kd=0.5)
-# Actuator choice: DCMotorCfg instead of ActuatorNetMLP (Go1) because:
-#   - Allows PD gain randomization via write_joint_stiffness/damping_to_sim
-#   - Matches our real-robot PD control loop (Kp/Kd are meaningful)
-#   - ActuatorNetMLP bypasses PhysX PD entirely (stiffness writes are ignored)
+# Robot: Unitree A1 body with Go1 actuators (see `robot.actuators` assignment below).
+#
+# NOTE: this block used to claim DCMotorCfg was used "so PD gains can be randomized via
+# write_joint_stiffness/damping_to_sim". Both halves were wrong. The code assigns
+# UNITREE_QUADRUPED_CFG.actuators (Go1 = ActuatorNetMLP), not DCMotorCfg; and
+# write_joint_stiffness_to_sim does not touch actuator-model gains for EITHER type -- Isaac Lab
+# zeroes the PhysX drive for all explicit actuators, so writing there just re-enables a drive that
+# is meant to stay off. PD-gain randomization now goes through the actuator model instead; see
+# _randomize_view_state in quadruped_env.py.
+#   - A1, GO2 variants  -> DCMotorCfg      (Kp=25, Kd=0.5; gains are meaningful)
+#   - Go1 variant       -> ActuatorNetMLP  (torque from a learned net; gains unused)
 
 import os
 import yaml
@@ -74,7 +80,13 @@ if _is_sequence:
                 "max_timesteps": cfg["env"]["max_timesteps"]
             })
 
-_vel_range = _phase_cfg["events"]["push_velocity_range"] if _phase_cfg["events"]["enable_pushes"] else None
+# Push terms are ALWAYS constructed, and "disabled" is expressed as a zero velocity range rather
+# than a missing term. Previously this was `... else None`, which dropped the terms entirely when
+# the *starting* phase had enable_pushes: false -- so in a phase1_to_phase2 run (phase1 disables
+# pushes) the event terms never existed, and phase2 turning them back on had nothing to turn on.
+# Phase 2's entire purpose is push hardening, and it was running with zero pushes.
+# _transition_to_next_phase() now rewrites these ranges live at each phase change.
+_vel_range = _phase_cfg["events"]["push_velocity_range"] if _phase_cfg["events"]["enable_pushes"] else [0.0, 0.0]
 
 from isaaclab_assets.robots.unitree import (
     UNITREE_A1_CFG,
@@ -251,7 +263,10 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # ── Sensors ───────────────────────────────────────────────────────────────
     contact_sensor: ContactSensorCfg = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/(.*_foot|.*_calf|.*_thigh)",
-        history_length=3,
+        # Must be >= decimation (4) so net_forces_w_history spans a whole control step -- the
+        # max_contact_force penalty takes its peak across this window to catch touchdown impacts
+        # that the single net_forces_w sample misses. Was 3, which covered only 15ms of the 20ms.
+        history_length=4,
         track_air_time=False,
     )
 
@@ -292,7 +307,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
                 "asset_cfg": SceneEntityCfg("robot_a1"),
                 "velocity_range": {"x": (_vel_range[0], _vel_range[1]), "y": (_vel_range[0], _vel_range[1])},
             },
-        ) if _vel_range else None
+        )
         
         push_quadruped = EventTerm(
             func=push_robot_heterogeneous,
@@ -302,7 +317,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
                 "asset_cfg": SceneEntityCfg("robot_quadruped"),
                 "velocity_range": {"x": (_vel_range[0], _vel_range[1]), "y": (_vel_range[0], _vel_range[1])},
             },
-        ) if _vel_range else None
+        )
         
         push_go2 = EventTerm(
             func=push_robot_heterogeneous,
@@ -312,7 +327,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
                 "asset_cfg": SceneEntityCfg("robot_go2"),
                 "velocity_range": {"x": (_vel_range[0], _vel_range[1]), "y": (_vel_range[0], _vel_range[1])},
             },
-        ) if _vel_range else None
+        )
 
     events: EventCfg = EventCfg()
 
@@ -384,7 +399,8 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_flat_orientation_l2 = _phase_cfg["rewards"]["rew_scale_flat_orientation_l2"]
     rew_scale_lin_vel_z_l2 = _phase_cfg["rewards"]["rew_scale_lin_vel_z_l2"]
     rew_scale_ang_vel_xy_l2 = _phase_cfg["rewards"]["rew_scale_ang_vel_xy_l2"]
-    rew_scale_dof_pos_l2 = _phase_cfg["rewards"]["rew_scale_dof_pos_l2"]
+    rew_scale_dof_pos_l2_walk = _phase_cfg["rewards"]["rew_scale_dof_pos_l2_walk"]
+    rew_scale_dof_pos_l2_stance = _phase_cfg["rewards"]["rew_scale_dof_pos_l2_stance"]
     rew_scale_base_acc_l2 = _phase_cfg["rewards"]["rew_scale_base_acc_l2"]
 
     # Smoothness / efficiency

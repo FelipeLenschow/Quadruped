@@ -46,7 +46,6 @@ class QuadrupedEnv(DirectRLEnv):
             self.root_pos_w = torch.zeros((self.num_envs, 3), device=self.device)
             self.root_quat_w = torch.zeros((self.num_envs, 4), device=self.device)
             self.applied_torque = torch.zeros((self.num_envs, 12), device=self.device)
-            self.joint_acc = torch.zeros((self.num_envs, 12), device=self.device)
 
             self.desired_joint_pos = torch.zeros(
                 (self.num_envs, 12), device=self.device
@@ -81,7 +80,6 @@ class QuadrupedEnv(DirectRLEnv):
             self.root_pos_w = self.robot.data.root_pos_w
             self.root_quat_w = self.robot.data.root_quat_w
             self.applied_torque = self.robot.data.applied_torque
-            self.joint_acc = self.robot.data.joint_acc
             self.desired_joint_pos = self.robot.data.default_joint_pos[:, :12].clone()
             feet_ids, _ = self.robot.find_bodies(".*_foot")
             # Articulation ordering: FL(2), FR(3), RL(0), RR(1)
@@ -125,6 +123,10 @@ class QuadrupedEnv(DirectRLEnv):
         self.pos_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.yaw_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
+        # Peak height reached so far in the current swing, per foot. Monotonic within a swing and
+        # reset on landing -- that is what lets the foot-height potential telescope (see
+        # _compute_reward_terms).
+        self.feet_height_max = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_feet_contact = torch.zeros(
             self.num_envs, 4, dtype=torch.bool, device=self.device
         )
@@ -133,9 +135,12 @@ class QuadrupedEnv(DirectRLEnv):
         self.feet_air_penalty_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_static_val = torch.zeros(self.num_envs, device=self.device)
         self.joint_vel_l2_static_val = torch.zeros(self.num_envs, device=self.device)
+        self.dof_pos_l2_walk_val = torch.zeros(self.num_envs, device=self.device)
+        self.dof_pos_l2_stance_val = torch.zeros(self.num_envs, device=self.device)
         self.grf_balance_val = torch.zeros(self.num_envs, device=self.device)
         self.grf_target_val = torch.zeros(self.num_envs, device=self.device)
         self.max_contact_force_val = torch.zeros(self.num_envs, device=self.device)
+        self.grf_peak_bw_val = torch.zeros(self.num_envs, device=self.device)
         self.robot_total_weight = torch.zeros(self.num_envs, device=self.device)  # mg per env, updated on reset
         # Strike-time buffers for contact-driven gait phase symmetry reward
         # last_strike_time: simulation time of last touchdown per foot (N, 4) [FL, FR, RL, RR]
@@ -362,27 +367,97 @@ class QuadrupedEnv(DirectRLEnv):
         
         print(f"\n{'='*50}\n[Curriculum] Transitioning to Phase: {next_phase['name']}\n{'='*50}\n")
         
-        # Update Rewards
-        r_cfg = p_cfg.get("rewards", {})
-        if r_cfg:
-            for k, v in r_cfg.items():
-                if hasattr(self.cfg, k):
-                    setattr(self.cfg, k, v)
-                    
-        # Update Domain Randomization
-        dr_cfg = p_cfg.get("domain_randomization", {})
-        if dr_cfg:
-            for k, v in dr_cfg.items():
-                if hasattr(self.cfg, k):
-                    setattr(self.cfg, k, tuple(v) if isinstance(v, list) else v)
-            
-        # Commands
-        c_cfg = p_cfg.get("commands", {})
-        if c_cfg:
-            for k, v in c_cfg.items():
-                if hasattr(self.cfg, k):
-                    setattr(self.cfg, k, v)
-            
+        def _apply(section: str, as_tuple: bool = False):
+            """Push one yaml section onto self.cfg, failing loudly on unknown keys.
+
+            This used to be guarded by `if hasattr(self.cfg, k)`, which silently dropped any key
+            the cfg class doesn't define -- so a typo in a phase override, or a yaml key that was
+            never wired into quadruped_env_cfg.py, would just never take effect and never warn.
+            """
+            for k, v in p_cfg.get(section, {}).items():
+                if not hasattr(self.cfg, k):
+                    raise AttributeError(
+                        f"[Curriculum] phase '{next_phase['name']}' sets {section}.{k}, but "
+                        f"QuadrupedEnvCfg has no such attribute. Add it to quadruped_env_cfg.py "
+                        f"or remove it from training_phases.yaml."
+                    )
+                setattr(self.cfg, k, tuple(v) if as_tuple and isinstance(v, list) else v)
+
+        _apply("rewards")
+        _apply("domain_randomization", as_tuple=True)
+        _apply("commands")
+
+        # Env block. Only a subset can meaningfully change mid-process: these are re-read from
+        # self.cfg every step. The rest are consumed once at construction (buffer sizes, scene,
+        # spawned robots, terrain) and cannot be changed without restarting -- which is exactly why
+        # launcher.py splits the curriculum across processes at the phase2->phase3 boundary.
+        # This whole block used to be skipped entirely, so observation_noise_scale silently stayed
+        # at the starting phase's value for the rest of the run (0.05 instead of the 0.1 that
+        # phases 4-6 ask for), i.e. a sim2real hardening step that never happened.
+        _RUNTIME_SETTABLE_ENV = {
+            "observation_noise_scale",
+            "base_angle_termination_thresh",
+            "action_scale",
+        }
+        # max_timesteps legitimately differs per phase (it defines the phase length) and is
+        # consumed at init to build the curriculum thresholds, so it is not a mismatch to report.
+        _EXPECTED_TO_DIFFER = {"max_timesteps"}
+        # Startup-only keys, mapped to where the resolved value actually lives on the cfg -- the
+        # yaml name and the cfg attribute name differ for most of these, so a naive
+        # getattr(self.cfg, k) would read None and warn on every transition even when nothing
+        # changed. Used only to decide whether a genuine mismatch is worth reporting.
+        _STARTUP_ONLY_ENV = {
+            "terrain": lambda c: getattr(c, "_ter", None),
+            "robot_cfg": lambda c: getattr(c, "robot_choice", None),
+            "num_envs": lambda c: getattr(getattr(c, "scene", None), "num_envs", None),
+            "episode_length_s": lambda c: getattr(c, "episode_length_s", None),
+            "obs_history_len": lambda c: getattr(c, "obs_history_len", None),
+        }
+        for k, v in p_cfg.get("env", {}).items():
+            if k in _RUNTIME_SETTABLE_ENV:
+                if not hasattr(self.cfg, k):
+                    raise AttributeError(
+                        f"[Curriculum] phase '{next_phase['name']}' sets env.{k}, but "
+                        f"QuadrupedEnvCfg has no such attribute."
+                    )
+                setattr(self.cfg, k, v)
+            elif k in _EXPECTED_TO_DIFFER:
+                continue
+            elif k in _STARTUP_ONLY_ENV:
+                current = _STARTUP_ONLY_ENV[k](self.cfg)
+                if str(current).upper() != str(v).upper():
+                    print(
+                        f"[Curriculum] WARNING: phase '{next_phase['name']}' wants env.{k} = {v}, "
+                        f"but that is fixed at process start (currently {current}). Split the "
+                        f"curriculum across processes if this phase change matters."
+                    )
+            else:
+                raise AttributeError(
+                    f"[Curriculum] phase '{next_phase['name']}' sets unrecognised env.{k}. Add it "
+                    f"to _RUNTIME_SETTABLE_ENV or _STARTUP_ONLY_ENV in _transition_to_next_phase."
+                )
+
+        # Events. The push terms are always registered (with a zero range standing in for
+        # "disabled"), so the range can be rewritten live here. Previously this section was not
+        # handled at all: push_velocity_range stayed at the starting phase's value for the whole
+        # run, and in a phase1_to_phase2 run -- where phase1 disables pushes -- phase 2 ran with no
+        # pushes whatsoever despite push hardening being its entire purpose.
+        e_cfg = p_cfg.get("events", {})
+        if e_cfg and getattr(self, "event_manager", None) is not None:
+            enabled = e_cfg.get("enable_pushes", True)
+            rng = e_cfg.get("push_velocity_range", [0.0, 0.0]) if enabled else [0.0, 0.0]
+            for term_name in ("push_a1", "push_quadruped", "push_go2"):
+                try:
+                    term_cfg = self.event_manager.get_term_cfg(term_name)
+                except (ValueError, KeyError):
+                    continue  # term not registered (e.g. non-heterogeneous setups)
+                term_cfg.params["velocity_range"] = {
+                    "x": (rng[0], rng[1]),
+                    "y": (rng[0], rng[1]),
+                }
+                self.event_manager.set_term_cfg(term_name, term_cfg)
+            print(f"[Curriculum] push velocity range -> {tuple(rng)} (enabled={enabled})")
+
         self.curriculum_phase_idx += 1
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
@@ -570,32 +645,24 @@ class QuadrupedEnv(DirectRLEnv):
             zeros = torch.zeros_like(targets)
             self.robot.set_joint_velocity_target(zeros, joint_ids=self._joint_dof_idx)
 
-    def _refresh_joint_and_base_vel(self) -> None:
-        """Refresh self.joint_vel / self.base_lin_vel from the live sim state.
+    def _refresh_state(self) -> None:
+        """Pull every sim-backed state attribute fresh from the live sim.
 
-        DirectRLEnv.step() calls _get_dones() then _get_rewards() BEFORE _get_observations()
-        (see isaaclab/envs/direct_rl_env.py), even though the physics substeps (and the
-        scene.update() that refreshes self.robot.data.*) already ran earlier in step(). So the
-        self.joint_vel / self.base_lin_vel attributes below are only refreshed by
-        _get_observations(), which means at reward-computation time they still hold the value
-        from the END of the PREVIOUS step -- identical to last_joint_vel/last_base_lin_vel
-        (captured from the same stale attributes in _pre_physics_step), making the dof_acc_l2/
-        base_acc_l2 finite-difference always evaluate to exactly zero. Calling this at the top
-        of _get_rewards() (before last_joint_vel/last_base_lin_vel get overwritten downstream)
-        pulls the genuinely fresh, current-step value straight from self.robot.data instead.
-        """
-        if getattr(self, "is_heterogeneous", False):
-            for i, view in enumerate(self.robot_views):
-                indices = self.robot_view_indices[i]
-                self.joint_vel[indices] = view.data.joint_vel[:, self._joint_dof_idx]
-                self.base_lin_vel[indices] = view.data.root_lin_vel_b
-        else:
-            self.joint_vel = self.robot.data.joint_vel[:, self._joint_dof_idx]
-            self.base_lin_vel = self.robot.data.root_lin_vel_b
+        DirectRLEnv.step() runs the physics substeps, then _get_dones(), then _get_rewards(),
+        and only calls _get_observations() LAST (see isaaclab/envs/direct_rl_env.py). All the
+        self.* state attributes below used to be written exclusively by _get_observations, so at
+        reward-computation time they still held the values from the END of the PREVIOUS step.
 
-    def _get_observations(self) -> dict:
-        """
-        Collects data from the simulation to feed into the neural network.
+        That was originally patched for just joint_vel/base_lin_vel (whose staleness made the
+        dof_acc_l2/base_acc_l2 finite differences evaluate to exactly zero, since last_joint_vel/
+        last_base_lin_vel were captured from the same stale attributes in _pre_physics_step). But
+        the partial fix left the reward function internally inconsistent: track_lin_vel_xy_exp was
+        scored against s_{t+1} while track_ang_vel_z_exp, flat_orientation_l2 and dof_torques_l2
+        were still scored against s_t. Refreshing everything in one place keeps every term on the
+        same timestep.
+
+        Called at the top of both _get_rewards() and _get_observations() -- the second call is not
+        redundant, because _reset_idx() runs between them and teleports the reset envs.
         """
         if getattr(self, "is_heterogeneous", False):
             # AGGREGATE state from partitioned views
@@ -611,7 +678,6 @@ class QuadrupedEnv(DirectRLEnv):
                 self.applied_torque[indices] = view.data.applied_torque[
                     :, self._joint_dof_idx
                 ]
-                self.joint_acc[indices] = view.data.joint_acc[:, self._joint_dof_idx]
 
                 # Handle possible body count differences
                 num_bodies = min(
@@ -630,7 +696,6 @@ class QuadrupedEnv(DirectRLEnv):
             self.root_pos_w = self.robot.data.root_pos_w
             self.root_quat_w = self.robot.data.root_quat_w
             self.applied_torque = self.robot.data.applied_torque
-            self.joint_acc = self.robot.data.joint_acc
 
         self.net_contact_forces = self._contact_sensor.data.net_forces_w
         if len(self._undesired_contact_body_ids) > 0:
@@ -638,6 +703,14 @@ class QuadrupedEnv(DirectRLEnv):
         else:
             self.net_undesired_contact_forces = torch.zeros((self.num_envs, 1, 3), device=self.device)
 
+    def _compute_reward_terms(self) -> None:
+        """Compute every per-step reward quantity (self.*_val) from freshly refreshed state.
+
+        Must be called exactly once per control step, from _get_rewards() after _refresh_state().
+        It owns stateful per-step updates -- feet_air_time accumulation/reset, last_feet_contact,
+        the gait-phase strike bookkeeping and the pos/yaw reference leash -- so calling it twice
+        in a step (or from _get_observations) would double-count them.
+        """
         # -- Update feet air time logic --
         # Check contact (force > threshold, e.g. 1.0)
         contact = (
@@ -707,16 +780,50 @@ class QuadrupedEnv(DirectRLEnv):
             # Homogeneous case
             feet_heights = self.body_pos_w[:, self._feet_ids_articulation, 2]
 
-        # Reward for reaching target height during swing
-        # (exp(-square(height - target) / sigma) * ~contact)
-        # Masked by command norm to avoid lifting feet when standing still
-        rew_foot_height = torch.sum(
-            torch.exp(-torch.square(feet_heights - self.cfg.target_foot_height) / self.cfg.foot_height_sigma)
-            * (~contact).float(),
-            dim=1,
+        # body_pos_w is world-frame Z, but target_foot_height means "clearance above the ground
+        # underneath this robot". On rough terrain the per-env terrain patch sits at a nonzero
+        # height (TerrainGenerator sets each sub-terrain origin's z to the max height of its centre
+        # region), so an uncorrected world Z biases the reward by however high that patch happens to
+        # be -- with noise_range up to 0.06m against foot_height_sigma=0.01, a correctly-lifted foot
+        # can score exp(-0.36)=0.70 instead of 1.0 purely from which patch its env landed on. The
+        # policy has no terrain sensor here and cannot compensate. base_height_val already applies
+        # exactly this correction; foot height was the inconsistent one.
+        # NOTE: this removes the per-env systematic bias, not the local roughness under each
+        # individual foot -- correcting that would need a height scan (see the Stairs task module).
+        feet_heights = feet_heights - self.scene.env_origins[:, 2].unsqueeze(1)
+
+        # Potential-based shaping on the swing's PEAK height, mirroring what feet_air_time does for
+        # swing duration. phi(h) = exp(-(h-target)^2/sigma) is the potential; the reward paid each
+        # step is its increment, so over a swing it telescopes to phi(apex) - phi(0): the total
+        # depends only on how high the foot actually got, is maximised exactly at target_foot_height,
+        # and goes negative once the apex climbs past it.
+        #
+        # The shaping has to run on feet_height_max, not on raw height. Height returns to where it
+        # started, so a potential on it telescopes to phi(land) - phi(liftoff) ~ 0 for every arc --
+        # no signal at all. feet_height_max only ever increases within a swing and resets on landing,
+        # exactly like feet_air_time, which is what makes the telescoping meaningful.
+        #
+        # Replaces a plain per-step Gaussian on instantaneous height. That version paid out every
+        # airborne step, so what it actually maximised was TIME SPENT near the target, not the peak.
+        # Since the foot must start and end a swing at the ground, a taller arc moves faster, clears
+        # the low-reward region below ~4.7cm sooner and re-enters it later, and therefore banks more
+        # in-band time -- its true optimum sat at ~16cm against a 13cm target, and it only stopped
+        # paying once the apex punched out past ~21cm. Hence the observed 16-25cm lifts.
+        #
+        # Uses the finite difference of phi rather than an analytic derivative * step_dt (the form
+        # feet_air_time uses): air_time advances by exactly step_dt each step so the Riemann sum is
+        # exact there, whereas feet_height_max advances irregularly, and differencing phi directly
+        # telescopes exactly with no integration error.
+        prev_phi = torch.exp(
+            -torch.square(self.feet_height_max - self.cfg.target_foot_height) / self.cfg.foot_height_sigma
         )
-        # Apply command mask (x, y, yaw commands)
-        rew_foot_height *= moving_mask
+        self.feet_height_max = torch.maximum(self.feet_height_max, feet_heights)
+        new_phi = torch.exp(
+            -torch.square(self.feet_height_max - self.cfg.target_foot_height) / self.cfg.foot_height_sigma
+        )
+        # Only credit feet that are actually airborne, so a foot pressed into the ground can't
+        # accrue anything, and mask by command as before.
+        rew_foot_height = torch.sum((new_phi - prev_phi) * (~contact).float(), dim=1) * moving_mask
 
         self.foot_height_reward_val = rew_foot_height
 
@@ -734,6 +841,15 @@ class QuadrupedEnv(DirectRLEnv):
         self.joint_vel_l2_static_val = (
             torch.sum(torch.square(self.joint_vel), dim=1) * static_mask
         )
+
+        # DOF position deviation, split by static/moving (same ramp as everything else above) so
+        # standing posture and walking posture can be regularized independently -- a joint
+        # configuration that's a sensible average across a whole gait cycle isn't necessarily what
+        # you want a planted, motionless stance to relax into, and tuning one scale was forcing a
+        # compromise between the two.
+        dof_pos_err = torch.sum(torch.square(self.joint_pos - self.desired_joint_pos), dim=1)
+        self.dof_pos_l2_walk_val = dof_pos_err * moving_mask
+        self.dof_pos_l2_stance_val = dof_pos_err * static_mask
 
         # GRF computations: two separate penalties
         feet_forces_z = self.net_contact_forces[:, self._feet_ids, 2].abs()  # (N, 4)
@@ -753,14 +869,36 @@ class QuadrupedEnv(DirectRLEnv):
 
         # Max contact force penalty: penalize per-foot forces exceeding a fraction of robot weight
         # Threshold = robot_total_weight * max_contact_force_pct (e.g., 0.75 = 75% of mg)
+        #
+        # Uses the PEAK force across the physics substeps of this control step, not the single
+        # instantaneous sample in net_forces_w. DirectRLEnv.step() calls scene.update() inside the
+        # decimation loop, so the contact sensor refreshes every sim substep (5ms) while rewards are
+        # computed once per control step (20ms). A touchdown impact only lasts 1-2 substeps, so
+        # reading net_forces_w alone samples a near-arbitrary phase of the contact cycle and misses
+        # most spikes entirely -- which is why this term logged ~1e-5 while the MuJoCo eval showed
+        # 2.3x-bodyweight slams. net_forces_w_history keeps the last `history_length` substeps
+        # (index 0 = most recent); with history_length == decimation it spans the whole control step.
+        # Only the peak-force term uses this: contact detection and the grf_balance/grf_target terms
+        # stay on the instantaneous value on purpose, since those describe steady stance-phase load
+        # sharing and would be distorted by folding a landing spike into them.
+        force_hist = self._contact_sensor.data.net_forces_w_history
+        if force_hist is not None and force_hist.dim() == 4:
+            feet_forces_z_peak = force_hist[:, :, self._feet_ids, 2].abs().amax(dim=1)  # (N, 4)
+        else:
+            feet_forces_z_peak = feet_forces_z
         max_force_pct = getattr(self.cfg, "max_contact_force_pct", 0.75)
         per_foot_thresh = self.robot_total_weight * max_force_pct  # (N,)
-        excess = (feet_forces_z - per_foot_thresh.unsqueeze(1)).clamp(min=0.0)  # (N, 4)
+        excess = (feet_forces_z_peak - per_foot_thresh.unsqueeze(1)).clamp(min=0.0)  # (N, 4)
         # Normalize by mg² to make dimensionless (scale-invariant across robot masses)
         self.max_contact_force_val = torch.sum(excess.square(), dim=1) / self.robot_total_weight.square().clamp(min=1.0)
+        # Diagnostic: peak foot force as a multiple of body weight, so the new measurement can be
+        # compared directly against the MuJoCo eval's grf_peak_stance_N before tuning the scale.
+        self.grf_peak_bw_val = feet_forces_z_peak.amax(dim=1) / self.robot_total_weight.clamp(min=1.0)
 
-        # Reset air time for feet in contact
+        # Reset air time and swing peak height for feet in contact. Must stay AFTER the reward
+        # computations above, so the final increment of the swing is credited before clearing.
         self.feet_air_time[contact] = 0.0
+        self.feet_height_max[contact] = 0.0
         self.last_feet_contact = contact
 
         # -- Contact-driven gait phase symmetry reward --
@@ -866,6 +1004,14 @@ class QuadrupedEnv(DirectRLEnv):
             yaw_error[exceeds_yaw_leash] = yaw_error_clamped
         self.yaw_deviation_val = torch.abs(yaw_error)
 
+    def _get_observations(self) -> dict:
+        """
+        Collects data from the simulation to feed into the neural network.
+        """
+        # Re-refresh: _reset_idx() ran between _get_rewards() and here, so reset envs have been
+        # teleported to their spawn state since _compute_reward_terms() last looked.
+        self._refresh_state()
+
         # Observations (unscaled)
         obs = torch.cat(
             (
@@ -896,9 +1042,11 @@ class QuadrupedEnv(DirectRLEnv):
         Computes the reward (score) for the current step.
         The goal is to teach the robot to stand up and retain balance.
         """
-        # Pull fresh joint_vel/base_lin_vel before computing dof_acc_l2/base_acc_l2 below -- see
-        # _refresh_joint_and_base_vel's docstring for why this can't just rely on self.joint_vel.
-        self._refresh_joint_and_base_vel()
+        # Pull all sim state fresh, then derive every per-step reward quantity from it, so the
+        # whole reward vector is evaluated on the same (current) timestep -- see _refresh_state's
+        # docstring for why neither can rely on _get_observations having run.
+        self._refresh_state()
+        self._compute_reward_terms()
 
         # Calculate undesired contacts penalty
         # If any thigh/calf/trunk sensor registers > 1.0 N force, it's a contact
@@ -911,7 +1059,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_track_ang_vel_z_exp,
             self.cfg.rew_scale_lin_vel_z_l2,
             self.cfg.rew_scale_ang_vel_xy_l2,
-            self.cfg.rew_scale_dof_pos_l2,
+            self.cfg.rew_scale_dof_pos_l2_walk,
+            self.cfg.rew_scale_dof_pos_l2_stance,
             self.cfg.rew_scale_dof_torques_l2,
             self.cfg.rew_scale_dof_acc_l2,
             self.cfg.rew_scale_action_rate_l2,
@@ -938,13 +1087,10 @@ class QuadrupedEnv(DirectRLEnv):
             self.base_lin_vel,
             self.base_ang_vel,
             self.projected_gravity,
-            self.joint_pos,
-            self.desired_joint_pos,
             self.joint_vel,
             self.last_joint_vel,
             self.last_base_lin_vel,
             self.applied_torque,
-            self.joint_acc,
             self.actions,
             self.previous_actions,
             self.feet_air_time_reward_val,
@@ -952,6 +1098,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.feet_air_penalty_val,
             self.feet_air_penalty_static_val,
             self.joint_vel_l2_static_val,
+            self.dof_pos_l2_walk_val,
+            self.dof_pos_l2_stance_val,
             self.grf_balance_val,
             self.grf_target_val,
             self.max_contact_force_val,
@@ -965,6 +1113,10 @@ class QuadrupedEnv(DirectRLEnv):
         )
         self.extras.setdefault("log", {})
         self.extras["log"].update(reward_log)
+        # Peak per-foot contact force in body weights, for comparing the substep-peak measurement
+        # against the MuJoCo eval's grf_peak_stance_N before retuning rew_scale_max_contact_force.
+        self.extras["log"]["diag/grf_peak_bw_mean"] = self.grf_peak_bw_val.mean()
+        self.extras["log"]["diag/grf_peak_bw_max"] = self.grf_peak_bw_val.max()
         return total_reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -973,6 +1125,14 @@ class QuadrupedEnv(DirectRLEnv):
         1. Died: Base hit the ground.
         2. Timeout: Episode duration exceeded limit.
         """
+        # _get_dones runs before _get_rewards, and both read projected_gravity/root_pos_w. Refresh
+        # here too, otherwise terminations would be judged on the previous step's pose while the
+        # rewards (including rew_alive, which is driven by reset_terminated) are judged on the
+        # current one. _refresh_state is a pure read from sim buffers, so the repeat call in
+        # _get_rewards is idempotent -- keeping it there leaves that method self-contained rather
+        # than silently depending on _get_dones having run first.
+        self._refresh_state()
+
         time_out = self.episode_length_buf >= self.max_episode_length - 1
 
         # Check if base is too tilted (not upright)
@@ -1015,22 +1175,35 @@ class QuadrupedEnv(DirectRLEnv):
                     # Use existing randomization logic but point to specific view/indices
                     self._randomize_view_state(subset_env_ids, view, local_indices, view_idx=i)
 
-            # CRITICAL: Reset the base environment buffers (which we bypassed)
+            # The per-view reset above bypasses super()._reset_idx(), so the base-class buffers
+            # have to be cleared by hand here. The custom buffers below are cleared for BOTH
+            # branches further down -- they are not specific to the multi-robot path.
             self.episode_length_buf[env_ids] = 0
             self.reset_buf[env_ids] = 0
-            self.feet_air_time[env_ids] = 0.0
-            self.last_joint_vel[env_ids] = 0.0
-            self.last_base_lin_vel[env_ids] = 0.0
-            self.previous_actions[env_ids] = 0.0
-            self.last_strike_time[env_ids] = 0.0
-            self.stride_duration[env_ids] = 1.0
-            self.gait_phase_sym_val[env_ids] = 0.0
-            if self.cfg.obs_history_len > 0:
-                self.obs_history_buf[env_ids] = 0.0
         else:
             super()._reset_idx(env_ids)
             # Standard Mass/Friction/State randomization
             self._randomize_view_state(env_ids, self.robot)
+
+        # Custom per-episode buffers. These used to live inside the heterogeneous branch only,
+        # which meant that in homogeneous mode (phase1/phase2, robot_cfg: GO2) none of them were
+        # ever cleared -- super()._reset_idx() only knows about episode_length_buf. Every new
+        # episode therefore started with: last_joint_vel/last_base_lin_vel from the *crashed*
+        # robot (a spurious dof_acc_l2/base_acc_l2 spike on step 1), previous_actions from the old
+        # episode (spurious action_rate_l2), feet_air_time still accumulating for a foot that was
+        # airborne at termination, and obs_history_buf feeding the policy 10 frames of the
+        # previous, falling episode. Phase 1 is exactly where the base gait is learned.
+        self.feet_air_time[env_ids] = 0.0
+        self.feet_height_max[env_ids] = 0.0
+        self.last_feet_contact[env_ids] = False
+        self.last_joint_vel[env_ids] = 0.0
+        self.last_base_lin_vel[env_ids] = 0.0
+        self.previous_actions[env_ids] = 0.0
+        self.last_strike_time[env_ids] = 0.0
+        self.stride_duration[env_ids] = 1.0
+        self.gait_phase_sym_val[env_ids] = 0.0
+        if self.cfg.obs_history_len > 0:
+            self.obs_history_buf[env_ids] = 0.0
 
     def _randomize_view_state(
         self,
@@ -1101,35 +1274,59 @@ class QuadrupedEnv(DirectRLEnv):
             env_ids=ids,
         )
 
-        # 0.2 Randomize PD gains (Kp = stiffness, Kd = damping) for DCMotorCfg actuators.
-        # NOTE: These writes have no effect when using ActuatorNetMLPCfg (Go1-style),
-        # because the net computes torques directly and bypasses PhysX PD.
-        # They ARE effective with DCMotorCfg (A1-style), which uses PhysX's PD drive.
-        if self.cfg.joint_stiffness_range[0] != 0.0 or self.cfg.joint_stiffness_range[1] != 0.0:
-            kp_noise = sample_uniform(
-                self.cfg.joint_stiffness_range[0],
-                self.cfg.joint_stiffness_range[1],
-                (len(ids), len(v_idx)),
-                self.device,
-            )
-            view.write_joint_stiffness_to_sim(
-                kp_noise,
-                joint_ids=v_idx,
-                env_ids=ids,
-            )
+        # 0.2 Randomize PD gains (Kp = stiffness, Kd = damping) around their configured defaults.
+        #
+        # This has to go through the actuator MODEL, not write_joint_stiffness_to_sim(). Isaac Lab
+        # notes on that function: "This function isn't setting the values for actuator models"
+        # (articulation.py) -- it only writes the PhysX drive gains. And for EXPLICIT actuators
+        # (DCMotorCfg on A1/GO2, ActuatorNetMLP on Go1 -- every robot here) Isaac Lab deliberately
+        # zeroes the PhysX drive at startup, because the model computes torque in Python and applies
+        # it as an effort target. So the old code did not randomize the intended gains at all: it
+        # re-enabled a PhysX PD drive that is supposed to stay off, stacked on top of the actuator's
+        # torque. Worse, it wrote the sampled value ABSOLUTELY instead of adding it to the default
+        # (unlike the joint-friction randomization above, which correctly does base + noise), so with
+        # joint_stiffness_range [-5, 5] roughly half the envs got a NEGATIVE stiffness -- a term that
+        # pushes away from the target and injects energy. That switched on at phase5 and cost 32-44%
+        # of total reward at step 100k in every chained run measured.
+        #
+        # Inert for ActuatorNetMLP (Go1): that network maps position/velocity error to torque
+        # directly and never reads stiffness/damping, so there is no PD gain to randomize on it.
+        kp_range = self.cfg.joint_stiffness_range
+        kd_range = self.cfg.joint_pd_damping_range
+        if kp_range[0] != 0.0 or kp_range[1] != 0.0 or kd_range[0] != 0.0 or kd_range[1] != 0.0:
+            # Cache the model's configured gains once, so repeated resets perturb around the
+            # original value instead of compounding on the previous episode's random draw.
+            # Mirrors the view.default_coms pattern used by the COM randomization above.
+            if not hasattr(view, "default_actuator_gains"):
+                view.default_actuator_gains = {
+                    name: (act.stiffness.clone(), act.damping.clone())
+                    for name, act in view.actuators.items()
+                }
 
-        if self.cfg.joint_pd_damping_range[0] != 0.0 or self.cfg.joint_pd_damping_range[1] != 0.0:
-            kd_noise = sample_uniform(
-                self.cfg.joint_pd_damping_range[0],
-                self.cfg.joint_pd_damping_range[1],
-                (len(ids), len(v_idx)),
-                self.device,
-            )
-            view.write_joint_damping_to_sim(
-                kd_noise,
-                joint_ids=v_idx,
-                env_ids=ids,
-            )
+            for name, actuator in view.actuators.items():
+                base_kp, base_kd = view.default_actuator_gains[name]
+                n_act_joints = base_kp.shape[1]
+
+                if kp_range[0] != 0.0 or kp_range[1] != 0.0:
+                    kp_noise = sample_uniform(
+                        kp_range[0], kp_range[1], (len(ids), n_act_joints), self.device
+                    )
+                    actuator.stiffness[ids] = torch.clamp(base_kp[ids] + kp_noise, min=0.0)
+                if kd_range[0] != 0.0 or kd_range[1] != 0.0:
+                    kd_noise = sample_uniform(
+                        kd_range[0], kd_range[1], (len(ids), n_act_joints), self.device
+                    )
+                    actuator.damping[ids] = torch.clamp(base_kd[ids] + kd_noise, min=0.0)
+
+                # Implicit actuators let PhysX run the PD, so they additionally need the new gains
+                # pushed into the sim. Explicit ones must NOT -- see the note above.
+                if actuator.is_implicit_model:
+                    view.write_joint_stiffness_to_sim(
+                        actuator.stiffness[ids], joint_ids=actuator.joint_indices, env_ids=ids
+                    )
+                    view.write_joint_damping_to_sim(
+                        actuator.damping[ids], joint_ids=actuator.joint_indices, env_ids=ids
+                    )
 
         # 0.3 Randomize Latency and Backlash
         self.env_latencies[env_ids] = torch.randint(
@@ -1199,7 +1396,8 @@ def compute_rewards(
     rew_scale_track_ang_vel_z_exp: float,
     rew_scale_lin_vel_z_l2: float,
     rew_scale_ang_vel_xy_l2: float,
-    rew_scale_dof_pos_l2: float,
+    rew_scale_dof_pos_l2_walk: float,
+    rew_scale_dof_pos_l2_stance: float,
     rew_scale_dof_torques_l2: float,
     rew_scale_dof_acc_l2: float,
     rew_scale_action_rate_l2: float,
@@ -1226,13 +1424,10 @@ def compute_rewards(
     base_lin_vel: torch.Tensor,
     base_ang_vel: torch.Tensor,
     projected_gravity: torch.Tensor,
-    joint_pos: torch.Tensor,
-    desired_joint_pos: torch.Tensor,
     joint_vel: torch.Tensor,
     last_joint_vel: torch.Tensor,
     last_base_lin_vel: torch.Tensor,
     joint_torques: torch.Tensor,
-    joint_acc: torch.Tensor,
     actions: torch.Tensor,
     previous_actions: torch.Tensor,
     feet_air_time_reward_val: torch.Tensor,
@@ -1240,6 +1435,8 @@ def compute_rewards(
     feet_air_penalty_val: torch.Tensor,
     feet_air_penalty_static_val: torch.Tensor,
     joint_vel_l2_static_val: torch.Tensor,
+    dof_pos_l2_walk_val: torch.Tensor,
+    dof_pos_l2_stance_val: torch.Tensor,
     grf_balance_val: torch.Tensor,
     grf_target_val: torch.Tensor,
     max_contact_force_val: torch.Tensor,
@@ -1319,10 +1516,10 @@ def compute_rewards(
     # Computed in _get_observations
     rew_feet_air_time = rew_scale_feet_air_time * feet_air_time_reward_val
 
-    # 10. DOF Position L2 Penalty
-    rew_dof_pos_l2 = rew_scale_dof_pos_l2 * torch.sum(
-        torch.square(joint_pos - desired_joint_pos), dim=1
-    )
+    # 10. DOF Position L2 Penalty, split by static/moving -- see dof_pos_l2_walk_val /
+    # dof_pos_l2_stance_val comment in _get_observations for why.
+    rew_dof_pos_l2_walk = rew_scale_dof_pos_l2_walk * dof_pos_l2_walk_val
+    rew_dof_pos_l2_stance = rew_scale_dof_pos_l2_stance * dof_pos_l2_stance_val
 
     # 11. Flat Orientation Penalty (Penalize Pitch/Roll)
     rew_flat_orientation_l2 = rew_scale_flat_orientation_l2 * torch.sum(
@@ -1358,7 +1555,8 @@ def compute_rewards(
     log["reward/lin_vel_z_l2"] = rew_lin_vel_z_l2.mean()
     log["reward/ang_vel_xy_l2"] = rew_ang_vel_xy_l2.mean()
     log["reward/dof_torques_l2"] = rew_dof_torques_l2.mean()
-    log["reward/dof_pos_l2"] = rew_dof_pos_l2.mean()
+    log["reward/dof_pos_l2_walk"] = rew_dof_pos_l2_walk.mean()
+    log["reward/dof_pos_l2_stance"] = rew_dof_pos_l2_stance.mean()
     log["reward/dof_acc_l2"] = rew_dof_acc_l2.mean()
     log["reward/base_acc_l2"] = rew_base_acc_l2.mean()
     log["reward/action_rate_l2"] = rew_action_rate_l2.mean()
@@ -1388,7 +1586,8 @@ def compute_rewards(
         + rew_lin_vel_z_l2
         + rew_ang_vel_xy_l2
         + rew_dof_torques_l2
-        + rew_dof_pos_l2
+        + rew_dof_pos_l2_walk
+        + rew_dof_pos_l2_stance
         + rew_dof_acc_l2
         + rew_base_acc_l2
         + rew_action_rate_l2
