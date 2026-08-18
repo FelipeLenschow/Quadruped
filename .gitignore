@@ -26,7 +26,7 @@ share/python-wheels/
 **/logs/**
 !**/logs/**/
 **/logs/**/*.mp4
-**/logs/**/*.tfevents*
+!**/logs/**/*.tfevents*
 !**/Walk/logs/**/*.pt
 !**/logs/**/best_agent.pt
 !**/logs/**/*mujoco_eval_report*.json
