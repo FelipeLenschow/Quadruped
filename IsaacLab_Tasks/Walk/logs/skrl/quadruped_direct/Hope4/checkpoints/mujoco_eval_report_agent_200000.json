@@ -1,6 +1,6 @@
 {
     "metadata": {
-        "checkpoint": "/app/Quadruped/IsaacLab_Tasks/Walk/logs/skrl/quadruped_direct/2026-08-18_03-14-16_ppo_torch_phase3_to_phase6/checkpoints/agent_200000.pt",
+        "checkpoint": "/app/Quadruped/IsaacLab_Tasks/Walk/logs/skrl/quadruped_direct/Hope4/checkpoints/agent_200000.pt",
         "checkpoint_name": "agent_200000.pt",
         "robot_type": "go2",
         "timestamp": "2026-08-18 15:59:59"
