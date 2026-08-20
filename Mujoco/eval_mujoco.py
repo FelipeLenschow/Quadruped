@@ -16,6 +16,7 @@ import argparse
 import threading
 from pipeline import LocomotionPipeline
 from Configs.config_loader import load_config
+from Controller.robot_defaults import DEFAULT_STANCE_QPOS
 
 class MujocoEvaluator(Node):
     def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False, headless=True):
@@ -84,11 +85,7 @@ class MujocoEvaluator(Node):
                 self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, act_name
             )
 
-        self.desired_qpos = np.array([
-            0.1, -0.1, 0.1, -0.1,  # hips
-            0.8, 0.8, 1.0, 1.0,  # thighs
-            -1.5, -1.5, -1.5, -1.5,  # calves
-        ], dtype=np.float32)
+        self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
 
         self.current_targets = self.desired_qpos.copy()
 

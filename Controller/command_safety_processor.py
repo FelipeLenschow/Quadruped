@@ -12,6 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from Configs.config_loader import load_config
 from Telemetry.estimator import projected_gravity_b
+from Controller.robot_defaults import DEFAULT_STANCE_QPOS
 
 # ---------------------------------------------------------------------------
 # ANSI helpers for coloured terminal output
@@ -89,11 +90,7 @@ class CommandSafetyProcessor:
         self.joint_limits_max = self.hard_max.astype(np.float64)
 
         # Nominal Standing Pose (gating fallback)
-        self.desired_qpos = np.array([
-            0.1, -0.1, 0.1, -0.1,  # hips
-            0.8, 0.8, 1.0, 1.0,    # thighs
-            -1.5, -1.5, -1.5, -1.5  # calves
-        ], dtype=np.float32)
+        self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
 
         # ------------------------------------------------------------------
         # 3. Motor Physical Parameters

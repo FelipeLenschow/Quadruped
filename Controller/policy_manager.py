@@ -9,6 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from Controller.policy_runner import PolicyRunner
 from Controller.pose_generator import PoseGenerator
 from Configs.config_loader import load_config
+from Controller.robot_defaults import DEFAULT_STANCE_QPOS
 
 
 class PolicyManager:
@@ -36,12 +37,8 @@ class PolicyManager:
         self.ctrl_cfg = self.config.get("control", {})
         self.global_action_scale = self.ctrl_cfg.get("action_scale", 0.25)
 
-        # Go2 Nominal Standing Pose (Default)
-        self.desired_qpos = np.array([
-            0.1, -0.1, 0.1, -0.1,  # hips
-            0.8, 0.8, 1.0, 1.0,    # thighs
-            -1.5, -1.5, -1.5, -1.5  # calves
-        ], dtype=np.float32)
+        # Nominal Standing Pose (Default)
+        self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
 
     def load_policy(self, name: str, checkpoint_path: str) -> bool:
         """

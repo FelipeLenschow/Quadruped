@@ -3,6 +3,12 @@ import time
 import torch
 import torch.nn as nn
 import numpy as np
+# Importable both as `Controller.policy_runner` (the drivers) and as a top-level
+# `policy_runner` (Controller/Utils/export_jit.py), so the constant is reached either way.
+try:
+    from Controller.robot_defaults import DEFAULT_STANCE_QPOS
+except ImportError:  # pragma: no cover - depends on caller's sys.path
+    from robot_defaults import DEFAULT_STANCE_QPOS
 
 
 # Rotation helper
@@ -64,24 +70,8 @@ class PolicyRunner:
         self.decimation = decimation
         self.counter = 0
 
-        # Default Pose Standards
-        self.desired_qpos = np.array(
-            [
-                0.1,
-                -0.1,
-                0.1,
-                -0.1,  # hips
-                0.8,
-                0.8,
-                1.0,
-                1.0,  # thighs
-                -1.5,
-                -1.5,
-                -1.5,
-                -1.5,  # calves
-            ],
-            dtype=np.float32,
-        )
+        # Default Pose Standards -- shared with the drivers and the safety gate.
+        self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
 
         # Joint mapping: Identity by default (matches our standardized drivers)
         self.mapping = list(range(12))
@@ -89,7 +79,6 @@ class PolicyRunner:
         self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 490))
 
         self._last_infer_time = None
-        self._episode_start = True  # Fill all history with first real obs on first step
 
         self.is_jit = checkpoint_path.endswith(".jit") or (
             checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path)
@@ -276,11 +265,12 @@ class PolicyRunner:
         self._obs_history = np.roll(self._obs_history, shift=1, axis=0)
         self._obs_history[0, :] = obs_single
 
-        # If this is the first step after a reset, all other slots are stale/zero.
-        # Replicate obs_single to fill history, matching the training-side behavior.
-        if self._episode_start:
-            self._obs_history[:] = obs_single
-            self._episode_start = False
+        # The remaining slots stay zero until real frames have shifted into them. This used to
+        # replicate obs_single across the whole buffer, on the belief that it matched training --
+        # it does not. _reset_idx() in quadruped_env.py zeroes obs_history_buf, so the first frame
+        # the policy ever sees in training is [obs_t, 0, 0, ...]. Handing it [obs_t, obs_t, ...]
+        # instead moved the first commanded joint target by up to 14 degrees, right at the
+        # pose -> policy handover.
 
         # Return flattened stacked obs
         obs = self._obs_history.flatten()
@@ -328,9 +318,11 @@ class PolicyRunner:
         return actions, inf_time
 
     def reset_history(self):
-        """Zero the observation history ring buffer (call at episode start)."""
+        """Zero the observation history ring buffer (call at episode start).
+
+        Matches _reset_idx() on the training side, which zeroes obs_history_buf.
+        """
         self._obs_history[:] = 0.0
-        self._episode_start = True  # Next build_obs call will replicate the obs to all slots
 
     def step(self, state, commands, dt=0.02, verbose=None):
         """

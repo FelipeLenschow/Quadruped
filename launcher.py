@@ -75,6 +75,26 @@ def resolve_phase_launcher(all_phases, phase_name):
 
     return deep_update(copy.deepcopy(parent_cfg), phase_node)
 
+def resolve_checkpoint_phase(ckpt_dir):
+    """Name of the phase a checkpoint finished training under, or None.
+
+    Reads the run's own params/env.yaml snapshot: the last entry of curriculum_phases is the
+    phase the policy ended on, falling back to the base phase for a single-phase run.
+    """
+    params_yaml = os.path.join(os.path.dirname(os.path.abspath(ckpt_dir)), "params", "env.yaml")
+    if not os.path.exists(params_yaml):
+        return None
+    try:
+        with open(params_yaml, "r") as f:
+            data = yaml.unsafe_load(f)
+        curriculum = data.get("curriculum_phases") or []
+        if curriculum:
+            return curriculum[-1].get("name")
+        return (data.get("p") or {}).get("name")
+    except Exception:
+        return None
+
+
 def compute_all_curriculum_segments(yaml_data, available_phases, start_phase):
     if not yaml_data or "phases" not in yaml_data or start_phase not in available_phases:
         return [start_phase]
@@ -1019,9 +1039,24 @@ def main():
             if abs_ckpt:
                 ckpt_dir = os.path.dirname(abs_ckpt)
                 config_path = os.path.join(ckpt_dir, "training_phases.yaml")
+                ros_args = []
                 if os.path.exists(config_path):
-                    reward_cmd.extend(["--ros-args", "-p", f"config_path:={config_path}"])
-                    
+                    ros_args.extend(["-p", f"config_path:={config_path}"])
+
+                # Also tell it which phase the checkpoint finished under. Without this the node
+                # falls back to its 'phase1' default and scores a phase6 policy against phase1
+                # scales (vel_tracking_sigma_exp 0.0 vs 2.0, ang_vel_xy_l2 -0.05 vs -0.15, ...),
+                # so every reward it publishes is quietly for the wrong phase.
+                phase_name = resolve_checkpoint_phase(ckpt_dir) or os.environ.get(
+                    "QUADRUPED_TRAINING_PHASE", ""
+                )
+                if phase_name:
+                    ros_args.extend(["-p", f"phase:={phase_name}"])
+                    print(f"[Launcher] Reward estimator phase: {phase_name}")
+
+                if ros_args:
+                    reward_cmd.extend(["--ros-args"] + ros_args)
+
             print("[Launcher] Starting Background Reward Estimator Node...")
             reward_proc = subprocess.Popen(reward_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
             time.sleep(0.5)

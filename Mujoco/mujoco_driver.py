@@ -25,6 +25,7 @@ import argparse
 import threading
 from pipeline import LocomotionPipeline
 from Configs.config_loader import load_config
+from Controller.robot_defaults import DEFAULT_STANCE_QPOS
 
 
 class Ros2MujocoDriver(Node):
@@ -123,23 +124,7 @@ class Ros2MujocoDriver(Node):
             )
 
         # Default Pose
-        self.desired_qpos = np.array(
-            [
-                0.1,
-                -0.1,
-                0.1,
-                -0.1,  # hips
-                0.8,
-                0.8,
-                1.0,
-                1.0,  # thighs
-                -1.5,
-                -1.5,
-                -1.5,
-                -1.5,  # calves
-            ],
-            dtype=np.float32,
-        )
+        self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
 
         # Buffer for smooth targets
         self.current_targets = self.desired_qpos.copy()
