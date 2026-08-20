@@ -26,7 +26,8 @@ default: &default
     action_latency_range_steps: [0, 0]
     motor_backlash_range: [0.0, 0.0]
     payload_mass_range: [-1.0, 3.0]
-    com_displacement_range: [0.0, 0.0]
+    com_displacement_range: [0.0, 0.0]     # fore/aft (x), may legitimately be skewed
+    com_displacement_range_y: [0.0, 0.0]   # lateral (y), keep centred on 0 -- see phase5
   events:
     enable_pushes: false
     push_velocity_range: [-0.5, 0.5]
@@ -156,6 +157,7 @@ phases:
       joint_stiffness_range: [-5.0, 5.0]
       joint_pd_damping_range: [-0.1, 0.1]
       com_displacement_range: [-0.05, 0.1]
+      com_displacement_range_y: [-0.05, 0.05]
       payload_mass_range: [-1.0, 3.0]
 
   # Phase 6: Stabilization

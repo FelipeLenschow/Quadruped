@@ -967,8 +967,15 @@ class QuadrupedEnv(DirectRLEnv):
                 total_score += score * valid.float()
                 total_weight += valid.float()
 
-            # Average over valid pairs; if no pair is valid (robot just spawned), score = 0
-            self.gait_phase_sym_val = total_score / total_weight.clamp(min=1.0) * (total_weight > 0).float()
+            # Average over valid pairs; if no pair is valid (robot just spawned), score = 0.
+            # The final moving_mask factor is the same smooth static/moving ramp every other
+            # stepping reward uses. Without it this term kept its hard cliff at
+            # static_velocity_threshold, so "keep trotting" stayed worth ~0.33/step right down to a
+            # near-zero command while the static penalties together are worth ~0.01 -- the robot
+            # marched in place and yawed away under a stand-still command.
+            self.gait_phase_sym_val = (
+                total_score / total_weight.clamp(min=1.0) * (total_weight > 0).float() * moving_mask
+            )
         else:
             self.gait_phase_sym_val = torch.zeros(self.num_envs, device=self.device)
 
@@ -1234,20 +1241,25 @@ class QuadrupedEnv(DirectRLEnv):
         self.robot_total_weight[env_ids] = total_mass_per_env.to(self.device) * 9.81
 
         # 0.5 Randomize Center of Mass (Sim2Real)
-        if self.cfg.com_displacement_range[0] != 0.0 or self.cfg.com_displacement_range[1] != 0.0:
+        _com_x_rng = self.cfg.com_displacement_range
+        _com_y_rng = self.cfg.com_displacement_range_y
+        if any(v != 0.0 for v in _com_x_rng + _com_y_rng):
             coms = view.root_physx_view.get_coms().clone()
             if not hasattr(view, "default_coms"):
                 view.default_coms = coms.clone()
 
             com_noise_x = sample_uniform(
-                self.cfg.com_displacement_range[0],
-                self.cfg.com_displacement_range[1],
+                _com_x_rng[0],
+                _com_x_rng[1],
                 (len(env_ids_cpu), 1),
                 "cpu",
             )
+            # y gets its own range on purpose. It used to reuse the x range, so a fore/aft-skewed
+            # setting like [-0.05, 0.1] also put the CoM an average 2.5cm off to one side in every
+            # env, and the optimal response to that is a permanently lopsided stance.
             com_noise_y = sample_uniform(
-                self.cfg.com_displacement_range[0],
-                self.cfg.com_displacement_range[1],
+                _com_y_rng[0],
+                _com_y_rng[1],
                 (len(env_ids_cpu), 1),
                 "cpu",
             )

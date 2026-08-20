@@ -281,6 +281,9 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # Base mass and Center of Mass (CoM) Randomization
     payload_mass_range = tuple(_phase_cfg["domain_randomization"]["payload_mass_range"])
     com_displacement_range = tuple(_phase_cfg["domain_randomization"]["com_displacement_range"])
+    com_displacement_range_y = tuple(
+        _phase_cfg["domain_randomization"].get("com_displacement_range_y", (0.0, 0.0))
+    )
 
     # Joint friction — viscous drag
     joint_friction_range = tuple(_phase_cfg["domain_randomization"]["joint_friction_range"])

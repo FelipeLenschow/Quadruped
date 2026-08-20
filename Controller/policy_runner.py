@@ -201,8 +201,14 @@ class PolicyRunner:
         self.policy.load_state_dict(net_keys, strict=False)
 
         # Load scaler
-        scaler_state = data.get("state_preprocessor") or data.get(
-            "running_standard_scaler"
+        # skrl renamed this checkpoint key from "state_preprocessor" to "observation_preprocessor"
+        # in 2.x, so both spellings have to be accepted -- runs from either version end up here.
+        # Missing it is not cosmetic: the policy then sees unnormalized observations and the base
+        # tilts past the safety limit within a couple of seconds.
+        scaler_state = (
+            data.get("observation_preprocessor")
+            or data.get("state_preprocessor")
+            or data.get("running_standard_scaler")
         )
         if scaler_state:
             # Map keys if they have '_model.' prefix
@@ -215,7 +221,11 @@ class PolicyRunner:
                 f"[PolicyRunner] Loaded obs scaler (mean[0]: {self.scaler.running_mean[0]:.3f})"
             )
         else:
+            print("[PolicyRunner] " + "!" * 62)
             print("[PolicyRunner] WARNING: No obs scaler found in checkpoint!")
+            print(f"[PolicyRunner] Checkpoint keys were: {list(data.keys())}")
+            print("[PolicyRunner] Policy will run on UNNORMALIZED observations.")
+            print("[PolicyRunner] " + "!" * 62)
 
     def build_obs(self, state, commands, last_actions, desired_qpos, mj_to_isaac):
         """
