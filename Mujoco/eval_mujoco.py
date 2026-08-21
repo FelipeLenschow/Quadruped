@@ -146,6 +146,7 @@ class MujocoEvaluator(Node):
         # The policy carries observation history and last_actions across mj_resetData, so without
         # this every velocity test starts with the previous test's state still inside the network.
         self.pipeline.reset()
+        self.current_targets = self.desired_qpos.copy()
         for i, addr in enumerate(self.isaac_qpos_addr):
             self.data.qpos[addr] = self.desired_qpos[i]
         self.data.qpos[2] = 0.50

@@ -3,6 +3,7 @@ import numpy as np
 from std_msgs.msg import String
 from Telemetry.telemetry import TelemetryManager
 from Controller.policy_manager import PolicyManager
+from Controller.robot_defaults import DEFAULT_STANCE_QPOS
 from Controller.command_safety_processor import CommandSafetyProcessor
 from Controller.distributor import Distributor
 from Configs.config_loader import load_config
@@ -72,11 +73,7 @@ class LocomotionPipeline:
             String, "/pipeline/mode", self._mode_cb, 10)
 
         # Nominal standing pose (default fallback)
-        self.desired_qpos = np.array([
-            0.1, -0.1, 0.1, -0.1,  # hips
-            0.8, 0.8, 1.0, 1.0,    # thighs
-            -1.5, -1.5, -1.5, -1.5  # calves
-        ], dtype=np.float32)
+        self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
 
         self.latest_targets = self.desired_qpos.copy()
         self.step_counter = 0
@@ -89,8 +86,20 @@ class LocomotionPipeline:
         self.mode_transition_start_targets = self.desired_qpos.copy()
 
     def reset(self):
-        """Drop per-episode policy state. Call whenever the simulation is reset."""
+        """Drop all per-episode state. Call whenever the simulation is reset.
+
+        latest_targets is the important one: step() only recomputes targets on a policy step
+        (every `decimation` calls) and returns this cached array on every other call. So once a
+        NaN lands in it, every later step returns that NaN -- across mj_resetData, across a new
+        eval run, forever -- which is why one unstable test used to abort the whole sweep at
+        t=0.00 with no chance to recover.
+        """
         self.policy_manager.reset_policy_state()
+        self.latest_targets = self.desired_qpos.copy()
+        self.step_counter = 0
+        self.mode_transition_active = False
+        self.mode_transition_start_time = None
+        self.mode_transition_start_targets = self.desired_qpos.copy()
 
     def _mode_cb(self, msg: String):
         """Handle pipeline mode switch commands from the Console."""
