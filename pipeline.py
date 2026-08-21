@@ -88,6 +88,10 @@ class LocomotionPipeline:
         self.mode_transition_duration = 3.0  # Smooth transition duration in seconds
         self.mode_transition_start_targets = self.desired_qpos.copy()
 
+    def reset(self):
+        """Drop per-episode policy state. Call whenever the simulation is reset."""
+        self.policy_manager.reset_policy_state()
+
     def _mode_cb(self, msg: String):
         """Handle pipeline mode switch commands from the Console."""
         new_mode = msg.data.strip().lower()

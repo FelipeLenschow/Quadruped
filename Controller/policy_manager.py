@@ -150,5 +150,16 @@ class PolicyManager:
         return proposed_targets
 
     @property
+    def reset_policy_state(self):
+        """Clear per-episode state on every loaded runner.
+
+        Nothing used to call this, so an eval sweep carried observation history and last_actions
+        from one velocity test into the next -- and once a test produced a NaN, every remaining
+        test in the sweep inherited it and reported frozen, identical numbers.
+        """
+        for name, policy in self.policies.items():
+            if hasattr(policy, "reset_history"):
+                policy.reset_history()
+
     def loaded_policy_names(self) -> list:
         return list(self.policies.keys())

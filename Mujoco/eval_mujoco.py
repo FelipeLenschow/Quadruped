@@ -143,6 +143,9 @@ class MujocoEvaluator(Node):
 
     def _reset_robot(self):
         mujoco.mj_resetData(self.model, self.data)
+        # The policy carries observation history and last_actions across mj_resetData, so without
+        # this every velocity test starts with the previous test's state still inside the network.
+        self.pipeline.reset()
         for i, addr in enumerate(self.isaac_qpos_addr):
             self.data.qpos[addr] = self.desired_qpos[i]
         self.data.qpos[2] = 0.50
@@ -281,6 +284,14 @@ class MujocoEvaluator(Node):
                         )
                         
                         torques = self._pd_torques(self.current_targets)
+                        if not np.all(np.isfinite(torques)):
+                            # Feeding this to MuJoCo corrupts the model state for every test that
+                            # follows, so stop this one here and say so instead.
+                            print(
+                                f"   !! non-finite torque at t={self.data.time:.2f}s "
+                                f"({axis}={speed}); aborting this test"
+                            )
+                            break
                         for i, act_idx in enumerate(self.isaac_ctrl_idx):
                             self.data.ctrl[act_idx] = torques[i]
     

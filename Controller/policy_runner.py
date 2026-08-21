@@ -79,6 +79,7 @@ class PolicyRunner:
         self.obs_dim = obs_dim or int(os.environ.get("QUADRUPED_OBS_DIM", 490))
 
         self._last_infer_time = None
+        self._episode_start = True  # Fill all history with the first real obs after a reset
 
         self.is_jit = checkpoint_path.endswith(".jit") or (
             checkpoint_path.endswith(".pt") and self._check_is_jit(checkpoint_path)
@@ -265,12 +266,19 @@ class PolicyRunner:
         self._obs_history = np.roll(self._obs_history, shift=1, axis=0)
         self._obs_history[0, :] = obs_single
 
-        # The remaining slots stay zero until real frames have shifted into them. This used to
-        # replicate obs_single across the whole buffer, on the belief that it matched training --
-        # it does not. _reset_idx() in quadruped_env.py zeroes obs_history_buf, so the first frame
-        # the policy ever sees in training is [obs_t, 0, 0, ...]. Handing it [obs_t, obs_t, ...]
-        # instead moved the first commanded joint target by up to 14 degrees, right at the
-        # pose -> policy handover.
+        if self._episode_start:
+            self._obs_history[:] = obs_single
+            self._episode_start = False
+
+        # Fill the whole buffer with the current frame on the first step after a reset.
+        #
+        # This deliberately does NOT mirror training, where _reset_idx() zeroes obs_history_buf.
+        # Feeding real zeros here was tried and is worse: the policy reads them as ten frames of
+        # impossible state and commands up to 36 degrees away from the default stance over the
+        # first eleven steps, against a steady 29 with replication. In training that transient is
+        # absorbed by a robot being respawned; at the pose -> policy handover the robot is already
+        # standing still, and a kick that size through the PD loop destabilizes it. Replicating
+        # says "the robot has been holding this pose", which is what is actually true here.
 
         # Return flattened stacked obs
         obs = self._obs_history.flatten()
@@ -318,11 +326,14 @@ class PolicyRunner:
         return actions, inf_time
 
     def reset_history(self):
-        """Zero the observation history ring buffer (call at episode start).
+        """Clear all per-episode policy state (call between episodes / eval runs).
 
-        Matches _reset_idx() on the training side, which zeroes obs_history_buf.
+        last_actions feeds straight back into the next observation, so leaving it set carries
+        the previous episode across the reset -- and carries a NaN across it permanently.
         """
         self._obs_history[:] = 0.0
+        self.last_actions[:] = 0.0
+        self._episode_start = True
 
     def step(self, state, commands, dt=0.02, verbose=None):
         """
