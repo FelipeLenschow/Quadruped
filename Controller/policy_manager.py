@@ -150,6 +150,9 @@ class PolicyManager:
         return proposed_targets
 
     @property
+    def loaded_policy_names(self) -> list:
+        return list(self.policies.keys())
+
     def reset_policy_state(self):
         """Clear per-episode state on every loaded runner.
 
@@ -160,6 +163,3 @@ class PolicyManager:
         for name, policy in self.policies.items():
             if hasattr(policy, "reset_history"):
                 policy.reset_history()
-
-    def loaded_policy_names(self) -> list:
-        return list(self.policies.keys())
