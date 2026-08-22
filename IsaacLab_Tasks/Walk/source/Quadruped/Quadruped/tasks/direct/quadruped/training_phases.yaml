@@ -165,7 +165,7 @@ phases:
       num_envs: 2000
       action_scale: 0.25
       observation_noise_scale: 0.05
-      max_timesteps: 1000000
+      max_timesteps: 500000
       episode_length_s: 20.0
       base_angle_termination_thresh: 0.7
     domain_randomization:
@@ -182,21 +182,23 @@ phases:
       rew_scale_ang_vel_xy_l2: -0.05
       rew_scale_flat_orientation_l2: -5.0
 
-      rew_scale_dof_pos_l2_walk: -0.2
-      rew_scale_dof_pos_l2_stance: -0.2
-
       rew_scale_dof_torques_l2: -0.0002
-      rew_scale_dof_acc_l2: -2.5e-7
+      rew_scale_dof_acc_l2: -3.0e-7
       rew_scale_action_rate_l2: -0.01
 
-      rew_scale_feet_air_time: 0.0
-      rew_scale_foot_height_exp: 0.2
-      target_foot_height: 0.1
+      rew_scale_foot_height_exp: 0.4
+      target_foot_height: 0.08
       foot_height_sigma: 0.005
+      # rew_scale_grf_balance: -0.4
+      # rew_scale_dof_pos_l2_walk: -0.1
 
-      rew_scale_feet_air_penalty: -0.05
-      rew_scale_feet_air_penalty_static: -5.0
-      rew_scale_joint_vel_l2_static: -0.1
+      # rew_scale_pos_deviation_l1: -0.1
+      # rew_scale_yaw_deviation_l1: -0.1
+
+      # rew_scale_dof_pos_l2_stance: -1.0
+      # rew_scale_feet_air_penalty_static: -0.4
+      # rew_scale_joint_vel_l2_static: -0.005
+
     commands:
       command_lin_vel_std: 0.5
       command_ang_vel_std: 0.5
@@ -205,5 +207,6 @@ phases:
       command_y_range: [-1.0, 1.0]
       command_yaw_range: [-1.0, 1.0]
       command_resampling_time: 10.0
-      static_velocity_threshold: 0.1
+      static_velocity_threshold: 0.02
       static_command_ramp: 0.1
+      zero_command_fraction: 0.05

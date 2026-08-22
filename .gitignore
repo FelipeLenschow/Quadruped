@@ -27,7 +27,9 @@ share/python-wheels/
 !**/logs/**/
 **/logs/**/*.mp4
 !**/logs/**/*.tfevents*
-!**/Walk/logs/**/*.pt
+# Intermediate checkpoints: with checkpoint_interval=10000 a 500k run writes 50 of these
+# (~116 MB). Only best_agent.pt is kept in the repo.
+**/logs/**/agent_[0-9]*.pt
 !**/logs/**/best_agent.pt
 !**/logs/**/*mujoco_eval_report*.json
 !**/logs/**/*.yaml
