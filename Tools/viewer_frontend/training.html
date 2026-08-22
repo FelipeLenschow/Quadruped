@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Training Curves</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root{--bg-dark:#0B0F19;--panel-bg:#131A2A;--text-main:#E2E8F0;--text-muted:#94A3B8;
+      --border-color:#1E293B;--accent:#3B82F6;--live:#10b981;--warn:#f59e0b}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Inter',-apple-system,sans-serif;
+     background:radial-gradient(circle at 50% 0%,#1e293b 0%,var(--bg-dark) 50%);
+     color:var(--text-main);display:flex;height:100vh;overflow:hidden}
+.sidebar{width:340px;flex:0 0 340px;background:rgba(19,26,42,.6);backdrop-filter:blur(20px);
+     border-right:1px solid var(--border-color);display:flex;flex-direction:column;z-index:10}
+.sidebar-header{padding:20px;border-bottom:1px solid var(--border-color)}
+.sidebar-header h2{margin:0;font-size:1.2rem;font-weight:600;color:#fff;letter-spacing:-.02em}
+.sidebar-header p{margin:6px 0 0;font-size:.8rem;color:var(--text-muted)}
+.switch{display:inline-block;margin-top:12px;font-size:.78rem;color:var(--accent);text-decoration:none;
+     border:1px solid var(--border-color);padding:5px 10px;border-radius:6px}
+.switch:hover{background:var(--border-color)}
+.filter{padding:10px 16px;border-bottom:1px solid var(--border-color)}
+.filter input{width:100%;background:var(--bg-dark);border:1px solid var(--border-color);
+     color:var(--text-main);padding:7px 10px;border-radius:6px;font-size:.82rem}
+.run-list{flex:1;overflow-y:auto;padding:8px}
+.run{padding:9px 11px;margin-bottom:5px;border-radius:8px;cursor:pointer;
+     border:1px solid transparent;background:rgba(255,255,255,.02);transition:.12s}
+.run:hover{background:rgba(255,255,255,.06)}
+.run.sel{border-color:var(--swatch,var(--accent));background:rgba(59,130,246,.10)}
+.run .nm{font-size:.84rem;font-weight:500;display:flex;align-items:center;gap:6px;
+     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.run .meta{font-size:.7rem;color:var(--text-muted);margin-top:3px;font-variant-numeric:tabular-nums}
+.dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px;background:var(--swatch,#334155)}
+.pulse{background:var(--live);animation:p 1.6s infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.toolbar{padding:12px 20px;border-bottom:1px solid var(--border-color);display:flex;
+     gap:18px;align-items:center;flex-wrap:wrap;background:rgba(19,26,42,.4)}
+.grp{display:flex;align-items:center;gap:7px}
+.grp label{font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
+.seg{display:flex;border:1px solid var(--border-color);border-radius:7px;overflow:hidden}
+.seg button{background:transparent;border:0;color:var(--text-muted);padding:6px 11px;
+     font-size:.78rem;cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff}
+select,input[type=range]{background:var(--bg-dark);border:1px solid var(--border-color);
+     color:var(--text-main);border-radius:6px;padding:5px 8px;font-size:.78rem}
+.content{flex:1;overflow-y:auto;padding:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:16px}
+.card{background:var(--panel-bg);border:1px solid var(--border-color);border-radius:12px;padding:16px}
+.card h3{margin:0 0 2px;font-size:.9rem;font-weight:600}
+.card .sub{font-size:.72rem;color:var(--text-muted);margin-bottom:10px}
+.wrap{position:relative;height:260px}
+.wide{grid-column:1/-1}
+table{width:100%;border-collapse:collapse;font-size:.78rem;font-variant-numeric:tabular-nums}
+th,td{text-align:right;padding:5px 9px;border-bottom:1px solid var(--border-color)}
+th:first-child,td:first-child{text-align:left;color:var(--text-muted);font-weight:400}
+th{color:var(--text-muted);font-weight:500;font-size:.72rem;text-transform:uppercase}
+.diff td:first-child{color:var(--warn)}
+.empty{margin:auto;text-align:center;color:var(--text-muted);font-size:.9rem;padding:80px 20px}
+.cathead{font-size:.66rem;text-transform:uppercase;letter-spacing:.06em;cursor:pointer;
+     user-select:none;margin:8px 0 5px;display:inline-block}
+.cathead:hover{color:#7dd3fc !important}
+.tag{font-size:.72rem;padding:4px 9px;border-radius:99px;border:1px solid var(--border-color);
+     cursor:pointer;color:var(--text-muted);white-space:nowrap}
+.tag.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.tip{position:fixed;z-index:999;max-width:400px;background:#0B0F19;border:1px solid #334155;
+     border-radius:9px;padding:11px 13px;font-size:.76rem;line-height:1.55;color:#CBD5E1;
+     box-shadow:0 12px 32px rgba(0,0,0,.6);pointer-events:none;opacity:0;transition:opacity .12s}
+.tip.on{opacity:1}
+.tip b{color:#fff;display:block;margin-bottom:4px;font-size:.78rem}
+.tip code{background:#131A2A;padding:1px 5px;border-radius:4px;color:#7dd3fc;font-size:.72rem}
+.tip .note{display:block;margin-top:6px;color:#94A3B8;font-style:italic}
+[data-tip]{cursor:help;border-bottom:1px dotted #475569}
+</style>
+</head>
+<body>
+<div class="tip" id="tip"></div>
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h2>Training Curves</h2>
+    <p id="hdr">loading…</p>
+    <a class="switch" href="/">← Evaluation dashboard</a>
+  </div>
+  <div class="filter"><input id="q" placeholder="filter runs…"></div>
+  <div class="run-list" id="runs"></div>
+</div>
+<div class="main">
+  <div class="toolbar">
+    <div class="grp"><label data-tip="__raw" data-tip-html="&lt;b&gt;X axis&lt;/b&gt;&lt;code&gt;Timesteps&lt;/code&gt; is one vectorised env step. &lt;code&gt;Samples&lt;/code&gt; multiplies by num_envs.&lt;span class=&quot;note&quot;&gt;A 2000-env run and a 6000-env run collect 3&times; different experience per timestep. Compare on Samples whenever num_envs differs.&lt;/span&gt;">X axis</label>
+      <div class="seg" id="xseg">
+        <button data-x="step" class="on">Timesteps</button>
+        <button data-x="samples">Samples</button>
+        <button data-x="hours">Wall-clock</button>
+      </div>
+    </div>
+    <div class="grp"><label data-tip="__raw" data-tip-html="&lt;b&gt;Values&lt;/b&gt;&lt;code&gt;Scaled&lt;/code&gt; plots what the run logged, i.e. &lt;code&gt;scale &times; raw&lt;/code&gt;. &lt;code&gt;Per-unit scale&lt;/code&gt; divides each &lt;code&gt;reward/*&lt;/code&gt; series by that run&amp;rsquo;s own rew_scale_*, so runs with different scales become comparable as behaviour.&lt;span class=&quot;note&quot;&gt;A term can look 2.8&times; bigger purely because its scale is 2.5&times; bigger. Switch before concluding the robot changed.&lt;/span&gt;">Values</label>
+      <div class="seg" id="normseg">
+        <button data-n="0" class="on">Scaled</button>
+        <button data-n="1">Per-unit scale</button>
+      </div>
+    </div>
+    <div class="grp"><label data-tip="__raw" data-tip-html="&lt;b&gt;Smoothing&lt;/b&gt;Exponential moving average over the plotted points. Visual only &mdash; the composition bars and config table always use raw latest values.">Smoothing</label>
+      <input type="range" id="sm" min="0" max="95" value="40" style="width:110px">
+      <span id="smv" style="font-size:.75rem;color:var(--text-muted);width:28px">.40</span>
+    </div>
+    <div class="grp"><label>Refresh</label>
+      <div class="seg" id="refseg">
+        <button data-r="0" class="on">Off</button>
+        <button data-r="15">15s</button>
+        <button data-r="60">60s</button>
+      </div>
+    </div>
+    <div class="grp" style="margin-left:auto">
+      <span id="status" style="font-size:.75rem;color:var(--text-muted)"></span>
+    </div>
+  </div>
+  <div class="content" id="content">
+    <div class="empty" id="empty">Select one or more runs to compare.</div>
+    <div id="dash" style="display:none">
+      <div class="card wide" style="margin-bottom:16px">
+        <h3 data-tip="__raw" data-tip-html="&lt;b&gt;Reward composition&lt;/b&gt;Every &lt;code&gt;reward/*&lt;/code&gt; term at its latest logged step, already scaled. Bars sum to the instantaneous reward mean.&lt;span class=&quot;note&quot;&gt;Use it to see which terms actually carry weight &amp;mdash; a term at 0.5% of the total is not shaping behaviour.&lt;/span&gt;">Reward composition</h3>
+        <div class="sub" id="decomp-sub">Per-step contribution of each reward term at the latest logged step.</div>
+        <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px"><span style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Trend over last</span><select id="trendwin"><option value="0.10" selected>10%</option><option value="0.25">25%</option><option value="0.50">50%</option></select></div>
+        <div class="wrap" style="height:340px"><canvas id="decomp"></canvas></div>
+      </div>
+      <div class="grid" id="grid"></div>
+      <div class="card wide" style="margin-top:16px">
+        <h3 data-tip="__raw" data-tip-html="&lt;b&gt;Config differences&lt;/b&gt;Diff of &lt;code&gt;params/env.yaml&lt;/code&gt; and &lt;code&gt;params/agent.yaml&lt;/code&gt; across the selected runs. Only keys that differ are shown.&lt;span class=&quot;note&quot;&gt;If more than one row is listed, the runs are not a controlled comparison.&lt;/span&gt;">Config differences</h3>
+        <div class="sub">Only settings that differ between the selected runs. Identical settings are hidden.</div>
+        <div id="diff"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const TIPS={
+'Reward / Total reward (mean)':['Total reward (mean)',
+ 'Sum of every reward term over a whole episode, averaged across envs.<br>'+
+ '<span class="note">Not comparable between runs whose reward scales differ &mdash; a run with a bigger '+
+ 'foot_height scale earns more for identical behaviour. Compare per-term instead.</span>'],
+'Reward / Instantaneous reward (mean)':['Instantaneous reward (mean)',
+ 'Per-step reward averaged over envs. This is the number the individual '+
+ '<code>reward/*</code> terms add up to.'],
+'Info / reward/alive':['alive',
+ 'Constant <code>rew_scale_alive</code> paid every step the episode survives. '+
+ 'Sits at ~1.0 unless the robot is terminating early.'],
+'Info / reward/track_lin_vel_xy_exp':['track_lin_vel_xy_exp',
+ 'Linear velocity tracking, <code>scale &times; exp(-err&sup2;/&sigma;)</code>.<br>'+
+ '<span class="note">Divide by rew_scale_track_lin_vel_xy_exp for a 0&ndash;1 quality score: '+
+ '1.36/1.5 = 0.91 is good tracking, 0.95/1.5 = 0.63 is poor.</span>'],
+'Info / reward/track_ang_vel_z_exp':['track_ang_vel_z_exp',
+ 'Yaw-rate tracking, same exponential form. Divide by its scale to normalise.<br>'+
+ '<span class="note">Good instantaneous tracking here does not prevent heading drift &mdash; '+
+ 'accumulated bias is only visible to pos_deviation.</span>'],
+'Info / reward/foot_height':['foot_height',
+ 'Potential-based shaping on the swing <b style="display:inline">peak</b>: pays '+
+ '<code>&phi;(h_max)</code> increments only when a foot sets a new high within its swing, '+
+ 'where <code>&phi;(h)=exp(-(h-target)&sup2;/&sigma;)</code>.<br>'+
+ 'Telescopes to <code>&phi;(apex)-&phi;(0)</code> per swing, so the logged per-step mean is small.<br>'+
+ '<span class="note">Rough apex read at scale 0.5, 2&nbsp;Hz: 0.011&rarr;2cm, 0.028&rarr;4cm, '+
+ '0.047&rarr;6cm, 0.069&rarr;10cm (the ceiling). Symmetric &mdash; 5cm and 15cm score alike.</span>'],
+'Info / reward/feet_air_time':['feet_air_time',
+ 'Potential-based shaping on swing duration, paid as <code>d&phi;/dt</code> while airborne. '+
+ 'Positive approaching target_feet_air_time, negative past it.<br>'+
+ '<span class="note">Reads 0.0000 when the scale is 0.</span>'],
+'Info / reward/feet_air_penalty':['feet_air_penalty',
+ 'Penalty summing <b style="display:inline">accumulated air time</b> over airborne feet &mdash; '+
+ 'not a count of feet.<br><span class="note">cp7 counted feet instead, making it ~16&times; '+
+ 'stronger at the same scale. That constant tax is what caused its low-speed dead zone.</span>'],
+'Info / reward/feet_air_penalty_static':['feet_air_penalty_static',
+ 'Same quantity gated by static_mask, so it only bites near zero command.<br>'+
+ '<span class="note">Near 0.0000 means zero commands are barely being sampled &mdash; check '+
+ 'zero_command_fraction. The stance branch is then untrained.</span>'],
+'Info / reward/joint_vel_l2_static':['joint_vel_l2_static',
+ 'Penalises joint motion while the command is ~zero. Targets marching in place.<br>'+
+ '<span class="note">Also ~0 if zero_command_fraction is 0.</span>'],
+'Info / reward/dof_pos_l2_walk':['dof_pos_l2_walk',
+ 'Deviation from the default joint pose, weighted by moving_mask.'],
+'Info / reward/dof_pos_l2_stance':['dof_pos_l2_stance',
+ 'Same deviation weighted by static_mask (1 - moving_mask).<br>'+
+ '<span class="note">A reliable probe for whether the stance branch is training at all.</span>'],
+'Info / reward/dof_acc_l2':['dof_acc_l2',
+ 'Joint-acceleration penalty = <code>scale &times; joint_acc_sum_sq_mean</code>.<br>'+
+ '<span class="note">Often the largest single penalty. Heavier values damp leg swing, '+
+ 'which suppresses foot clearance.</span>'],
+'Info / reward/action_rate_l2':['action_rate_l2','Penalises step-to-step change in actions. Smoothness term.'],
+'Info / reward/dof_torques_l2':['dof_torques_l2','Squared-torque penalty. Energy proxy.'],
+'Info / reward/flat_orientation_l2':['flat_orientation_l2',
+ 'Penalises trunk tilt.<br><span class="note">Strong values tax the lateral CoM shift a '+
+ 'single-leg-lift walk needs, pushing the policy toward a trot.</span>'],
+'Info / reward/lin_vel_z_l2':['lin_vel_z_l2','Penalises vertical base velocity (bouncing).'],
+'Info / reward/ang_vel_xy_l2':['ang_vel_xy_l2','Penalises roll/pitch rate.'],
+'Info / reward/base_acc_l2':['base_acc_l2','Penalises base linear acceleration.'],
+'Info / reward/grf_balance':['grf_balance',
+ 'CV&sup2; of vertical foot forces across feet in contact.<br>'+
+ '<span class="note">A trot zeroes this for free (diagonal pair, symmetric about the CoM). '+
+ 'A 3-foot walking stance cannot, so this term structurally forbids a walk gait.</span>'],
+'Info / reward/grf_target':['grf_target',
+ 'Squared deviation of each contacting foot from <code>mg/n</code>.<br>'+
+ '<span class="note">Same trot bias as grf_balance &mdash; mg/n is only achievable when the '+
+ 'support polygon is symmetric about the CoM.</span>'],
+'Info / reward/max_contact_force':['max_contact_force',
+ 'Penalises per-foot peak force above <code>mg &times; max_contact_force_pct</code>, using the '+
+ 'peak across physics substeps so touchdown spikes are caught.'],
+'Info / reward/pos_deviation':['pos_deviation',
+ 'Distance from a virtual reference that integrates the commanded velocity, clamped at '+
+ '<code>max_pos_leash</code> (0.4&nbsp;m).<br><span class="note">The only term that sees '+
+ 'accumulated drift; velocity tracking is blind to it. Settling near -0.05..-0.15 is healthy; '+
+ 'pinned at -0.4 means the leash is saturated and the policy is not recovering.</span>'],
+'Info / reward/yaw_deviation':['yaw_deviation',
+ 'Heading error against the integrated reference yaw, clamped at max_yaw_leash.<br>'+
+ '<span class="note">Usually redundant with pos_deviation, which already catches heading '+
+ 'drift because it rotates the reference.</span>'],
+'Info / reward/gait_phase_sym':['gait_phase_sym',
+ 'Cosine score on measured footfall phase offsets against the six gait_phase_offset_* targets.<br>'+
+ '<span class="note">Defaults encode a trot. Gated by a hard boolean on command norm, unlike '+
+ 'the other stepping terms &mdash; turning this on at a large scale can freeze the gait.</span>'],
+'Info / reward/undesired_contacts':['undesired_contacts','Penalises contact on non-foot bodies.'],
+'Info / reward/base_height_l2':['base_height_l2','Squared error against target_base_height.'],
+'Info / diag/joint_acc_sum_sq_mean':['joint_acc_sum_sq_mean (diagnostic)',
+ 'Raw sum of squared joint accelerations &mdash; not scaled, not a reward.<br>'+
+ '<span class="note">Multiply by rew_scale_dof_acc_l2 to get the penalty. High values mean '+
+ 'fast leg swing: good for clearance, a wear and sim2real risk on hardware.</span>'],
+'Info / diag/base_acc_sum_sq_mean':['base_acc_sum_sq_mean (diagnostic)','Raw base acceleration magnitude, before scaling.'],
+'Info / diag/grf_peak_bw_mean':['grf_peak_bw_mean (diagnostic)',
+ 'Peak foot force per control step in multiples of body weight, averaged over envs.'],
+'Info / diag/grf_peak_bw_max':['grf_peak_bw_max (diagnostic)',
+ 'Worst-case foot impact in body weights across all envs.<br>'+
+ '<span class="note">Values above ~2 are hard landings. Nothing restrains this when '+
+ 'max_contact_force is 0.</span>'],
+'Episode / Total timesteps (mean)':['Episode length (mean)',
+ 'Mean steps survived. Ceiling is <code>episode_length_s / 0.02</code> = 1000 at 20&nbsp;s.<br>'+
+ '<span class="note">Well below the ceiling means the robot is falling and hitting the '+
+ 'termination threshold.</span>'],
+'Policy / Standard deviation':['Policy standard deviation',
+ 'Spread of the Gaussian policy &mdash; how much it still explores.<br>'+
+ '<span class="note">Collapse toward ~0.05 means it has committed. With entropy_loss_scale at 0 '+
+ 'nothing pushes back, so an early collapse can lock in a mediocre gait.</span>'],
+'Learning / Learning rate':['Learning rate',
+ 'Set by KLAdaptiveLR, not a schedule: it falls when policy KL exceeds kl_threshold.<br>'+
+ '<span class="note">Pinned at the floor means something is spiking KL &mdash; usually a '+
+ 'discontinuous reward term.</span>'],
+'Loss / Value loss':['Value loss',
+ 'Critic error. Naturally rises as returns grow, so trends matter more than levels.<br>'+
+ '<span class="note">Between runs at similar reward, lower means the observation predicts '+
+ 'returns better &mdash; the usual payoff of longer obs history.</span>'],
+'Loss / Policy loss':['Policy loss','Clipped surrogate objective. Near zero by construction; not a progress signal.'],
+'Loss / Entropy loss':['Entropy loss','Only non-zero when entropy_loss_scale > 0.']
+};
+function tipFor(tag){
+  if(TIPS[tag]) return TIPS[tag];
+  const mm=tag.match(/^(.*)\((max|min)\)\s*$/);
+  if(mm){
+    const base=TIPS[mm[1]+'(mean)'];
+    const which=mm[2]==='max'?'best':'worst';
+    if(base) return [base[0].replace('(mean)','('+mm[2]+')'),
+      'The '+which+' single environment, not the average.<br>'+base[1]+
+      '<span class="note">The min series is the useful one for spotting envs that fall over; '+
+      'it lags the mean and is noisy by nature.</span>'];
+  }
+  const hit=Object.keys(TIPS).find(k=>short(k)===short(tag));
+  if(hit) return TIPS[hit];
+  if(tag.startsWith('Info / reward/'))
+    return [short(tag),'Reward term, already multiplied by its scale and averaged over envs.'];
+  if(tag.startsWith('Info / diag/'))
+    return [short(tag),'Raw diagnostic &mdash; not part of the reward sum.'];
+  return [short(tag),'No description available for this series.'];
+}
+const tipEl=()=>document.getElementById('tip');
+function showTip(html,target){
+  const t=tipEl(); t.innerHTML=html; t.classList.add('on');
+  const r=target.getBoundingClientRect(), w=Math.min(400,innerWidth-24);
+  t.style.width=w+'px';
+  t.style.left=Math.max(12,Math.min(r.left,innerWidth-w-12))+'px';
+  const h=t.offsetHeight;
+  t.style.top=(r.bottom+8+h>innerHeight? Math.max(12,r.top-h-8) : r.bottom+8)+'px';
+}
+function hideTip(){ tipEl().classList.remove('on'); }
+document.addEventListener('mouseover',e=>{
+  const el=e.target.closest('[data-tip]');
+  if(!el) return;
+  const tag=el.dataset.tip;
+  if(tag==='__raw'){ showTip(el.dataset.tipHtml,el); return; }
+  const [title,body]=tipFor(tag);
+  showTip('<b>'+title+'</b>'+body,el);
+});
+document.addEventListener('mouseout',e=>{ if(e.target.closest('[data-tip]')) hideTip(); });
+window.addEventListener('scroll',hideTip,true);
+// Grouping used by the composition chart, the metric picker and the chart grid.
+// First match wins, so Task is tested before the generic velocity/joint patterns.
+const CATS=[
+ ['Task',              t=>/track_lin_vel|track_ang_vel|^alive$|pos_deviation|yaw_deviation/.test(t)],
+ ['Gait',              t=>/foot_height|feet_air|gait_phase/.test(t)],
+ ['Stability',         t=>/flat_orientation|lin_vel_z_l2|ang_vel_xy_l2|base_acc_l2|base_height_l2/.test(t)],
+ ['Effort & smoothness', t=>/dof_acc|dof_torques|action_rate|dof_pos_l2|joint_vel_l2/.test(t)],
+ ['Contact forces',    t=>/grf_|max_contact_force|undesired_contacts/.test(t)],
+ ['Training',          t=>/^(Reward|Loss|Policy|Learning|Episode) \//.test(t)||/joint_acc_sum|base_acc_sum/.test(t)],
+];
+const CAT_ORDER=CATS.map(c=>c[0]).concat('Other');
+function catOf(tag){
+  const n=short(tag);
+  for(const [name,f] of CATS) if(f(tag)||f(n)) return name;
+  return 'Other';
+}
+function toggleCat(tags){
+  const all=tags.every(t=>activeTags.includes(t));
+  tags.forEach(t=>{
+    const i=activeTags.indexOf(t);
+    if(all){ if(i>=0) activeTags.splice(i,1); }
+    else   { if(i<0)  activeTags.push(t); }
+  });
+  renderCharts(); renderDecomp();
+}
+function byCat(tags){
+  const g={}; tags.forEach(t=>{(g[catOf(t)]=g[catOf(t)]||[]).push(t);});
+  return CAT_ORDER.filter(c=>g[c]).map(c=>[c,g[c]]);
+}
+const COLORS=['#3b82f6','#10b981','#f43f5e','#8b5cf6','#f59e0b','#06b6d4','#ec4899','#84cc16'];
+let RUNS=[], sel=[], colorOf={}, data={}, charts={}, xmode='step', smooth=.40, timer=null, norm=0;
+
+// "Info / reward/foot_height" -> that run's rew_scale_foot_height_exp.
+// Exact match first, then prefix: the logged name and the config key do not always agree.
+function scaleFor(tag,id){
+  if(!tag.startsWith('Info / reward/')) return null;
+  const n=tag.slice('Info / reward/'.length).trim(), cfg=data[id]?.config||{};
+  if(('rew_scale_'+n) in cfg) return cfg['rew_scale_'+n];
+  const k=Object.keys(cfg).find(k=>k.startsWith('rew_scale_'+n));
+  return k?cfg[k]:null;
+}
+const DEFAULT_TAGS=['Reward / Total reward (mean)','Info / reward/track_lin_vel_xy_exp',
+  'Info / reward/foot_height','Info / diag/joint_acc_sum_sq_mean',
+  'Policy / Standard deviation','Loss / Value loss'];
+let activeTags=[...DEFAULT_TAGS];
+
+const fmt=n=>n==null?'—':(Math.abs(n)>=1e5?n.toExponential(2):(Math.abs(n)>=100?n.toFixed(0):n.toFixed(4)));
+const short=t=>t.replace('Info / reward/','').replace('Info / diag/','').replace('Reward / ','')
+                 .replace('Policy / ','').replace('Loss / ','').trim();
+
+function fail(msg,detail){
+  document.getElementById('hdr').innerHTML='<span style="color:#f43f5e">'+msg+'</span>';
+  const e=document.getElementById('empty');
+  e.style.display='block';
+  e.innerHTML='<div style="color:#f43f5e;font-weight:600;margin-bottom:8px">'+msg+'</div>'+
+              '<div style="max-width:520px;margin:0 auto;line-height:1.6">'+detail+'</div>';
+  document.getElementById('dash').style.display='none';
+}
+async function loadRuns(){
+  let res;
+  try{ res=await fetch('/api/runs'); }
+  catch(err){ return fail('Cannot reach the viewer server',
+    'The page loaded but /api/runs did not respond. Is eval_viewer.py still running?'); }
+  if(!res.ok){
+    return fail('Server is running an old build of eval_viewer.py',
+      '/api/runs returned '+res.status+'. This page needs the training endpoints, which only '+
+      'exist in the current file on disk. Stop the running server and start it again:'+
+      '<pre style="text-align:left;background:#0B0F19;border:1px solid #1E293B;border-radius:8px;'+
+      'padding:12px;margin-top:12px;font-size:.78rem;overflow-x:auto">'+
+      'source ~/env_isaacsim/bin/activate\npython Tools/eval_viewer.py</pre>');
+  }
+  let r;
+  try{ r=await res.json(); }
+  catch(err){ return fail('Bad response from /api/runs','Expected JSON, got something else. '+
+    'Most likely an older server build is answering on this port.'); }
+  RUNS=r.runs||[];
+  if(!RUNS.length){
+    return fail('No training runs found',
+      'The server found no events.out.tfevents* files under logs/ or IsaacLab_Tasks/.');
+  }
+  const noTags=RUNS.every(x=>!x.tags||!x.tags.length);
+  if(!r.has_tensorboard||noTags){
+    return fail('tensorboard is not importable in this environment',
+      'Runs were found, but no scalars could be read, so there is nothing to plot. '+
+      'Start the viewer from the Isaac venv:'+
+      '<pre style="text-align:left;background:#0B0F19;border:1px solid #1E293B;border-radius:8px;'+
+      'padding:12px;margin-top:12px;font-size:.78rem;overflow-x:auto">'+
+      'source ~/env_isaacsim/bin/activate\npython Tools/eval_viewer.py</pre>');
+  }
+  document.getElementById('hdr').textContent=RUNS.length+' runs indexed';
+  document.getElementById('empty').textContent='Select one or more runs to compare.';
+  renderRuns();
+}
+function renderRuns(){
+  const q=(document.getElementById('q').value||'').toLowerCase();
+  const el=document.getElementById('runs'); el.innerHTML='';
+  RUNS.filter(r=>r.name.toLowerCase().includes(q)||(r.module||'').toLowerCase().includes(q))
+      .forEach(r=>{
+    const on=sel.includes(r.id);
+    const d=document.createElement('div');
+    d.className='run'+(on?' sel':'');
+    if(on) d.style.setProperty('--swatch',colorOf[r.id]);
+    const age=(Date.now()/1000-r.last_write);
+    d.innerHTML=`<div class="nm"><span class="dot ${r.live?'pulse':''}"></span>${r.name}</div>
+      <div class="meta">${r.module||'—'} · ${(r.last_step/1000).toFixed(0)}k steps ·
+      ${r.num_envs||'?'} envs · obs ${r.obs_dim||'?'}${r.live?' · LIVE':' · '+relTime(age)}</div>`;
+    d.onclick=()=>toggle(r.id);
+    el.appendChild(d);
+  });
+}
+function relTime(s){ if(s<3600)return Math.round(s/60)+'m ago';
+  if(s<86400)return Math.round(s/3600)+'h ago'; return Math.round(s/86400)+'d ago';}
+
+function toggle(id){
+  const i=sel.indexOf(id);
+  if(i>=0){sel.splice(i,1); delete colorOf[id];}
+  else{
+    if(sel.length>=COLORS.length) return;
+    sel.push(id);
+    const used=new Set(Object.values(colorOf));
+    colorOf[id]=COLORS.find(c=>!used.has(c))||COLORS[0];
+  }
+  renderRuns(); refresh();
+}
+
+async function refresh(){
+  if(!sel.length){document.getElementById('dash').style.display='none';
+    document.getElementById('empty').style.display='block'; return;}
+  document.getElementById('status').textContent='loading…';
+  let r;
+  try{
+    const res=await fetch('/api/scalars?runs='+encodeURIComponent(sel.join('|')));
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    r=await res.json();
+  }catch(err){
+    document.getElementById('status').innerHTML=
+      '<span style="color:#f43f5e">scalars failed: '+err.message+'</span>';
+    return;
+  }
+  data=r.runs;
+  document.getElementById('empty').style.display='none';
+  document.getElementById('dash').style.display='block';
+  document.getElementById('status').textContent='updated '+new Date().toLocaleTimeString();
+  renderCharts(); renderDecomp(); renderDiff();
+}
+
+function allTags(){
+  const s=new Set(); sel.forEach(id=>Object.keys(data[id]?.series||{}).forEach(t=>s.add(t)));
+  return [...s].sort();
+}
+// x-axis conversion is the whole point: a "step" is num_envs samples, and that differs per run.
+function toXY(series,id,tag){
+  const ne=data[id]?.num_envs||1, t0=series.length?series[0][1]:0;
+  let k=1;
+  if(norm&&tag){ const sc=scaleFor(tag,id); if(sc!==null&&Math.abs(sc)>1e-12) k=1/sc; }
+  return series.map(([st,w,v])=>({
+    x: xmode==='step'?st : xmode==='samples'?st*ne : (w-t0)/3600, y:v*k }));
+}
+function ema(pts,a){ if(a<=0)return pts; let acc=null;
+  return pts.map(p=>{acc=acc===null?p.y:acc*a+p.y*(1-a); return {x:p.x,y:acc};}); }
+
+// Grid is split into the same categories as the composition chart.
+function renderCharts(){
+  const host=document.getElementById('grid');
+  Object.keys(charts).forEach(k=>{ if(k!=='__d'){charts[k].destroy(); delete charts[k];} });
+  host.innerHTML='';
+  const xlabel=xmode==='step'?'Timesteps':xmode==='samples'?'Environment samples':'Hours';
+  // Every category with data gets a section whether or not anything in it is charted,
+  // so a metric can always be switched back on from the place its chart belongs.
+  byCat(allTags()).forEach(([cat,all])=>{
+    all=all.slice().sort();
+    const on=all.filter(t=>activeTags.includes(t));
+    const sec=document.createElement('div');
+    sec.style.cssText='grid-column:1/-1;border-bottom:1px solid var(--border-color);'+
+                      'padding-bottom:8px;margin:10px 0 2px;display:flex;align-items:center;'+
+                      'gap:8px;flex-wrap:wrap';
+    const h=document.createElement('span');
+    h.className='cathead'; h.style.margin='0';
+    h.style.color=on.length?'var(--accent)':'var(--text-muted)';
+    h.innerHTML=cat+' <span style="opacity:.75">'+on.length+'/'+all.length+'</span>';
+    h.title='Show or hide every chart in this group';
+    h.onclick=()=>toggleCat(all);
+    sec.appendChild(h);
+    all.forEach(t=>{
+      const b=document.createElement('span');
+      b.className='tag'+(activeTags.includes(t)?' on':'');
+      b.textContent=short(t);
+      b.onclick=()=>{const i=activeTags.indexOf(t); i>=0?activeTags.splice(i,1):activeTags.push(t);
+        renderCharts(); renderDecomp();};
+      sec.appendChild(b);
+    });
+    host.appendChild(sec);
+    on.forEach(tag=>{
+      const card=document.createElement('div'); card.className='card';
+      const uniq=[...new Set(sel.map(id=>scaleFor(tag,id)).filter(v=>v!==null))];
+      let note=tag;
+      if(uniq.length) note += norm
+        ? ' &mdash; divided by rew_scale ('+uniq.join(', ')+')'
+        : (uniq.length>1
+            ? ' &mdash; <span style="color:#f59e0b">scales differ: '+uniq.join(' vs ')+
+              ' &mdash; not directly comparable</span>'
+            : ' &mdash; scale '+uniq[0]);
+      card.innerHTML=`<h3 data-tip="${tag.replace(/"/g,'&quot;')}">${short(tag)}</h3>
+                      <div class="sub">${note}</div>
+                      <div class="wrap"><canvas></canvas></div>`;
+      host.appendChild(card);
+      const ds=sel.filter(id=>data[id]?.series[tag]).map(id=>({
+        label:RUNS.find(r=>r.id===id)?.name||id,
+        data:ema(toXY(data[id].series[tag],id,tag),smooth),
+        borderColor:colorOf[id],backgroundColor:colorOf[id],
+        borderWidth:2,pointRadius:0,tension:.25,
+        borderDash:data[id].live?[6,3]:[]}));
+      charts[tag]=new Chart(card.querySelector('canvas'),{type:'line',data:{datasets:ds},
+        options:{responsive:true,maintainAspectRatio:false,animation:false,
+          interaction:{mode:'nearest',axis:'x',intersect:false},
+          plugins:{legend:{labels:{color:'#94A3B8',boxWidth:10,font:{size:10}}}},
+          scales:{x:{type:'linear',title:{display:true,text:xlabel,color:'#64748B',font:{size:10}},
+                     ticks:{color:'#64748B',font:{size:10},maxTicksLimit:6},
+                     grid:{color:'rgba(148,163,184,.08)'}},
+                  y:{ticks:{color:'#64748B',font:{size:10}},grid:{color:'rgba(148,163,184,.08)'}}}}});
+    });
+  });
+}
+
+// Draws trend directly on the bars: a tick where the term was at the start of the window,
+// and an arrow + % just past the bar end. Keeps one bar per run so the composition still reads.
+const trendPlugin={id:'trend',afterDatasetsDraw(chart){
+  const ctx=chart.ctx, xs=chart.scales.x, base=xs.getPixelForValue(0);
+  chart.data.datasets.forEach((ds,di)=>{
+    const meta=chart.getDatasetMeta(di);
+    if(meta.hidden) return;
+    if(!ds.showTrend) return;          // finished runs: bars only, no tick or percentage
+    meta.data.forEach((bar,i)=>{
+      const t=ds.trend&&ds.trend[i]; if(!t) return;
+      const h=(bar.height||14)*0.5;
+      // tick at the previous value
+      const wx=xs.getPixelForValue(t.was);
+      const drewTick=wx>=xs.left&&wx<=xs.right&&Math.abs(wx-bar.x)>=1.5;
+      if(drewTick){
+        ctx.save(); ctx.strokeStyle='rgba(226,232,240,.75)'; ctx.lineWidth=2;
+        ctx.beginPath(); ctx.moveTo(wx,bar.y-h); ctx.lineTo(wx,bar.y+h); ctx.stroke(); ctx.restore();
+      }
+      // arrow + pct, anchored past whichever mark is further from zero. Anchoring on the bar
+      // tip alone put the text under the tick whenever a term moved toward zero (any shrinking
+      // penalty), because then `was` sits further out than `now`.
+      const dir=bar.x>=base?1:-1;
+      const anchor=drewTick?(dir>0?Math.max(bar.x,wx):Math.min(bar.x,wx)):bar.x;
+      ctx.save();
+      ctx.fillStyle=t.flat?'#94A3B8':(t.d>0?'#10b981':'#f43f5e');
+      ctx.font='600 12px Inter, sans-serif';
+      ctx.textAlign=dir>0?'left':'right'; ctx.textBaseline='middle';
+      const label=(t.flat?'\u2192':(t.d>0?'\u25B2':'\u25BC'))+(t.pct===null?'':' '+(t.pct>0?'+':'')+t.pct.toFixed(0)+'%');
+      ctx.fillText(label,anchor+dir*8,bar.y);
+      ctx.restore();
+    });
+  });
+  // Term names sit at the zero baseline on the side the bar does NOT extend to, so each
+  // label is adjacent to the bar it names instead of parked on the far axis.
+  const m0=chart.getDatasetMeta(0);
+  if(!m0) return;
+  const ys=chart.scales.y;
+  chart.$labelBoxes=[];
+  const full=chart.data.$tags||[];
+  chart.data.labels.forEach((name,i)=>{
+    let sum=0,n=0;
+    chart.data.datasets.forEach(d=>{ if(typeof d.data[i]==='number'){sum+=d.data[i];n++;} });
+    if(!n) return;
+    const dir=(sum/n)>=0?1:-1;               // bar direction
+    const y=ys.getPixelForValue(i);
+    ctx.save();
+    const on=full[i]&&activeTags.includes(full[i]);
+    ctx.font=(on?'600 ':'')+'12px Inter, sans-serif';
+    ctx.fillStyle=on?'#7dd3fc':'#CBD5E1'; ctx.textBaseline='middle';
+    ctx.textAlign=dir>0?'right':'left';      // label on the opposite side
+    let tx=base-dir*7;
+    const w=ctx.measureText(name).width;
+    if(dir>0) tx=Math.max(tx,xs.left+w+2);   // keep inside the plot area
+    else      tx=Math.min(tx,xs.right-w-2);
+    ctx.fillText(name,tx,y);
+    const x0=dir>0?tx-w:tx, x1=dir>0?tx:tx+w;
+    if(on){                                   // underline what is charted below
+      ctx.strokeStyle='#7dd3fc'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(x0,y+8); ctx.lineTo(x1,y+8); ctx.stroke();
+    }
+    chart.$labelBoxes.push({x0:x0-4,x1:x1+4,y0:y-10,y1:y+10,tag:full[i]});
+    ctx.restore();
+  });
+  // category rules: a light line across the plot with the group name sitting in its gap
+  const cats=chart.data.$cats||[];
+  chart.$catBoxes=[];
+  ctx.save();
+  ctx.font='600 10px Inter, sans-serif'; ctx.textBaseline='middle'; ctx.textAlign='left';
+  cats.forEach((c,i)=>{
+    if(i>0&&cats[i-1]===c) return;
+    const mine=full.filter((t,k)=>cats[k]===c);
+    const nOn=mine.filter(t=>activeTags.includes(t)).length;
+    const yTop=ys.getPixelForValue(i);
+    const yPrev=i>0?ys.getPixelForValue(i-1):null;
+    const ly=yPrev===null?Math.max(ys.top+7,yTop-16):(yTop+yPrev)/2;
+    const txt=c.toUpperCase()+'  '+nOn+'/'+mine.length;
+    const w=ctx.measureText(txt).width;
+    ctx.fillStyle=nOn?'#7dd3fc':'#64748B'; ctx.fillText(txt,xs.left,ly);
+    ctx.strokeStyle='rgba(148,163,184,.18)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(xs.left+w+8,ly); ctx.lineTo(xs.right,ly); ctx.stroke();
+    chart.$catBoxes.push({x0:xs.left-4,x1:xs.left+w+4,y0:ly-9,y1:ly+9,tags:mine});
+  });
+  ctx.restore();
+}};
+function trendOf(series,win){
+  // mean of the last few points vs a same-width window at the start of the span,
+  // so one noisy sample cannot flip the arrow
+  if(!series||series.length<4) return null;
+  const n=series.length, span=Math.max(3,Math.floor(n*win)), k=Math.max(2,Math.floor(span/4));
+  const tail=series.slice(-k), head=series.slice(-span,-span+k);
+  if(!head.length) return null;
+  const m=a=>a.reduce((x,e)=>x+e[2],0)/a.length;
+  const now=m(tail), was=m(head), d=now-was;
+  const pct=Math.abs(was)>1e-9?100*d/Math.abs(was):null;
+  return {now,was,d,pct,flat:Math.abs(d)<1e-4&&(pct===null||Math.abs(pct)<2),
+          fromStep:series[Math.max(0,n-span)][0],toStep:series[n-1][0]};
+}
+function renderDecomp(){
+  const win=parseFloat(document.getElementById('trendwin').value);
+  const tags=allTags().filter(t=>t.startsWith('Info / reward/'));
+  const mag=t=>Math.max(...sel.map(id=>{const x=data[id]?.series[t];return x&&x.length?Math.abs(x[x.length-1][2]):0;}));
+  const nz=tags.filter(t=>mag(t)>1e-9);
+  const live=byCat(nz).flatMap(([,ts])=>ts.sort((a,b)=>mag(b)-mag(a)));
+  const cats=live.map(catOf);
+  let span=null;
+  const ds=sel.map(id=>{
+    const tr=live.map(t=>{const r=trendOf(data[id]?.series[t],win); if(r&&!span)span=r; return r;});
+    // Bar end uses the same windowed mean as the tick and the arrow, so the gap you read
+    // off the chart IS the reported change. Using the last raw sample here made them
+    // disagree by up to 50% on the small penalty terms.
+    return {label:RUNS.find(r=>r.id===id)?.name||id,
+            data:live.map((t,i)=>{
+              if(tr[i]) return tr[i].now;
+              const x=data[id]?.series[t]; return x&&x.length?x[x.length-1][2]:0;}),
+            backgroundColor:colorOf[id], trend:tr, showTrend:!!data[id]?.live};
+  });
+  // room for the labels that sit past the bar ends
+  const vals=ds.flatMap(d=>d.data); const lo=Math.min(0,...vals), hi=Math.max(0,...vals);
+  const pad=(hi-lo)*0.22||0.1;
+  document.getElementById('decomp').parentElement.style.height=Math.max(320,live.length*34+110)+'px';
+  document.getElementById('decomp-sub').innerHTML =
+    'Per-step contribution of each reward term, largest first, averaged over the end of the trend window. '+
+    'Click a term name to toggle its chart below, or a category rule to toggle the whole group '+
+    '\u2014 charted terms are underlined. '+
+    'Trend marks are drawn for live runs only. The pale tick shows where a term sat at the start of the window; '+
+    '<span style="color:#10b981">\u25B2</span> = contributing more reward (a shrinking penalty counts as up), '+
+    '<span style="color:#f43f5e">\u25BC</span> = less'+
+    (span?`, over steps ${span.fromStep.toLocaleString()}\u2013${span.toStep.toLocaleString()}`:'')+'.'+
+    (norm?' <span style="color:#f59e0b">Always scaled \u2014 these bars are what the policy optimises.</span>':'');
+  if(charts.__d)charts.__d.destroy();
+  charts.__d=new Chart(document.getElementById('decomp'),{type:'bar',
+    data:{labels:live.map(short),datasets:ds,$tags:live,$cats:cats},plugins:[trendPlugin],
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,animation:false,
+      layout:{padding:{right:8,left:8,top:18}},
+      onClick:(evt,els,chart)=>{
+        const inBox=b=>evt.x>=b.x0&&evt.x<=b.x1&&evt.y>=b.y0&&evt.y<=b.y1;
+        const c=(chart.$catBoxes||[]).find(inBox);
+        if(c){ toggleCat(c.tags); return; }
+        const b=(chart.$labelBoxes||[]).find(inBox);
+        if(!b||!b.tag) return;
+        const i=activeTags.indexOf(b.tag);
+        i>=0?activeTags.splice(i,1):activeTags.push(b.tag);
+        renderCharts(); renderDecomp();
+      },
+      onHover:(evt,els,chart)=>{
+        const inBox=b=>evt.x>=b.x0&&evt.x<=b.x1&&evt.y>=b.y0&&evt.y<=b.y1;
+        const hit=(chart.$labelBoxes||[]).some(inBox)||(chart.$catBoxes||[]).some(inBox);
+        chart.canvas.style.cursor=hit?'pointer':'default';
+      },
+      plugins:{legend:{labels:{color:'#94A3B8',boxWidth:12,font:{size:12}}},
+        tooltip:{callbacks:{afterLabel:c=>{const t=c.dataset.trend&&c.dataset.trend[c.dataIndex];
+          return t?`was ${t.was.toFixed(4)}  \u2192  now ${t.now.toFixed(4)}`:'';}}}},
+      scales:{x:{min:lo-pad,max:hi+pad,ticks:{color:'#64748B',font:{size:12}},grid:{color:'rgba(148,163,184,.08)'}},
+              y:{ticks:{display:false},grid:{display:false}}}}});
+}
+function renderDiff(){
+  const keys=new Set(); sel.forEach(id=>Object.keys(data[id]?.config||{}).forEach(k=>keys.add(k)));
+  const rows=[...keys].filter(k=>{
+    const vals=sel.map(id=>JSON.stringify(data[id]?.config?.[k]));
+    return new Set(vals).size>1;
+  }).sort();
+  const el=document.getElementById('diff');
+  if(!rows.length){el.innerHTML='<div class="sub">No differences — these runs share the same configuration.</div>';return;}
+  let h='<table class="diff"><tr><th>setting</th>'+
+        sel.map(id=>`<th style="color:${colorOf[id]}">${RUNS.find(r=>r.id===id)?.name||id}</th>`).join('')+'</tr>';
+  rows.forEach(k=>{h+=`<tr><td>${k}</td>`+sel.map(id=>{
+    const v=data[id]?.config?.[k];
+    return `<td>${v===undefined?'—':(Array.isArray(v)?'['+v.join(', ')+']':v)}</td>`;}).join('')+'</tr>';});
+  el.innerHTML=h+'</table>';
+}
+
+document.getElementById('normseg').onclick=e=>{if(!e.target.dataset.n)return;
+  [...e.currentTarget.children].forEach(b=>b.classList.remove('on'));
+  e.target.classList.add('on'); norm=+e.target.dataset.n; renderCharts(); renderDecomp();};
+document.getElementById('trendwin').onchange=()=>renderDecomp();
+document.getElementById('q').oninput=renderRuns;
+document.getElementById('xseg').onclick=e=>{if(!e.target.dataset.x)return;
+  [...e.currentTarget.children].forEach(b=>b.classList.remove('on'));
+  e.target.classList.add('on'); xmode=e.target.dataset.x; renderCharts();};
+document.getElementById('sm').oninput=e=>{smooth=e.target.value/100;
+  document.getElementById('smv').textContent=smooth.toFixed(2).slice(1); renderCharts();};
+document.getElementById('refseg').onclick=e=>{if(!e.target.dataset.r)return;
+  [...e.currentTarget.children].forEach(b=>b.classList.remove('on'));
+  e.target.classList.add('on');
+  if(timer)clearInterval(timer); timer=null;
+  const s=+e.target.dataset.r;
+  if(s)timer=setInterval(()=>{loadRuns();refresh();},s*1000);};
+loadRuns();
+</script>
+</body>
+</html>
