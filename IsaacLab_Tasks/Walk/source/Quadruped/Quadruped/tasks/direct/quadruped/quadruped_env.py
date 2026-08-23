@@ -901,12 +901,21 @@ class QuadrupedEnv(DirectRLEnv):
         self.feet_height_max[contact] = 0.0
         self.last_feet_contact = contact
 
-        # -- Contact-driven gait phase symmetry reward --
+        # -- Contact-driven gait phase symmetry PENALTY --
         # Mirrors the strike-time logic used in eval_mujoco.py.
         # On each foot's touchdown we record the event time and compute the stride duration
         # (time between consecutive touchdowns). The phase of foot B relative to foot A is:
         #   phase = ((t_B - last_strike_A) % stride_A) / stride_A  → [0, 1]
-        # We then score how close this is to the target offset via cosine distance.
+        #
+        # This accumulates MISMATCH (1 - cosine score), not match, so rew_scale_gait_phase_sym
+        # must be NEGATIVE. As a positive reward it paid the robot for *having* a gait, which
+        # is an incentive to step more than the task needs; as a penalty it costs nothing to
+        # stand still and only charges for stepping in the wrong pattern.
+        #
+        # A pair only contributes when it is actually stepping (valid), and the whole term is
+        # scaled by moving_mask like every other stepping term -- it used to gate on a bare
+        # boolean (cmd_norm > static_velocity_threshold), which put a cliff at the threshold
+        # while foot_height/feet_air_time ramped smoothly over [threshold, static_command_ramp].
         if self.cfg.rew_scale_gait_phase_sym != 0.0:
             # Current simulation time for all envs  (N,)
             t_now = self.episode_length_buf.float() * self.step_dt  # proxy: steps * dt
@@ -918,8 +927,14 @@ class QuadrupedEnv(DirectRLEnv):
                 if landing.any():
                     prev_t = self.last_strike_time[landing, foot]
                     new_dur = t_now[landing] - prev_t
-                    # Only update stride if the duration looks physically plausible (> 0.1s)
-                    valid = new_dur > 0.1
+                    # Plausible gait period only. The upper bound matters: without it, a robot
+                    # that steps, pauses, then steps again records the PAUSE as its stride, and
+                    # every later phase is normalised against that -- which produced a ~0.96/1.0
+                    # spurious mismatch held for 1.5x the pause length. Measured cadence in the
+                    # MuJoCo sweeps is 0.5-3.2 Hz, so anything slower than MAX_STRIDE_S is a gap,
+                    # not a stride, and the previous good estimate is kept instead.
+                    MAX_STRIDE_S = 1.5
+                    valid = (new_dur > 0.1) & (new_dur < MAX_STRIDE_S)
                     if valid.any():
                         update_mask = landing.clone()
                         update_mask[landing] = valid
@@ -928,17 +943,22 @@ class QuadrupedEnv(DirectRLEnv):
 
             # Compute phase of foot B relative to foot A for each of the 6 pairs
             # phase_rel(A, B) = ((t_now - last_strike_A) % stride_A) / stride_A  → [0, 1]
-            # Only valid when stride_A is known (> 0.1s) and robot is moving
+            # Coarse pre-filter only: the smooth moving_mask below is what actually shapes the
+            # term, so this threshold no longer creates a discontinuity at its own boundary.
             moving = cmd_norm > self.cfg.static_velocity_threshold  # (N,) bool
 
             def _phase_rel(ref_foot, other_foot):
-                """Phase of other_foot relative to ref_foot. Returns score in [0,1] and validity mask."""
+                """Phase of other_foot relative to ref_foot, in [0,1], plus a validity mask."""
                 dur = self.stride_duration[:, ref_foot]          # (N,)
                 
-                # Check if the foot has struck recently (prevent reward farming by standing still)
-                time_since_strike = t_now - self.last_strike_time[:, ref_foot]
-                active_stepping = time_since_strike < (dur * 1.5)
-                
+                # Both feet must have struck recently. Checking only the reference foot let a
+                # pair count as valid while the OTHER foot's strike time was seconds stale, so
+                # the "relative phase" was measured against an event from a previous gait.
+                time_since_ref   = t_now - self.last_strike_time[:, ref_foot]
+                time_since_other = t_now - self.last_strike_time[:, other_foot]
+                window = dur * 1.5
+                active_stepping = (time_since_ref < window) & (time_since_other < window)
+
                 valid = (dur > 0.1) & moving & active_stepping
                 time_diff = self.last_strike_time[:, other_foot] - self.last_strike_time[:, ref_foot]
                 phase = (time_diff % dur.clamp(min=1e-4)) / dur.clamp(min=1e-4)            # [0, 1]
@@ -959,16 +979,23 @@ class QuadrupedEnv(DirectRLEnv):
                 (1, 2, self.cfg.gait_phase_offset_diag2),  # FR vs RL
             ]
 
-            total_score = torch.zeros(self.num_envs, device=self.device)
+            total_mismatch = torch.zeros(self.num_envs, device=self.device)
             total_weight = torch.zeros(self.num_envs, device=self.device)
             for ref, other, target in pairs:
                 phase, valid = _phase_rel(ref, other)
-                score = _cosine_score(phase, target)
-                total_score += score * valid.float()
+                score = _cosine_score(phase, target)          # 1 = on target, 0 = half a cycle off
+                total_mismatch += (1.0 - score) * valid.float()
                 total_weight += valid.float()
 
-            # Average over valid pairs; if no pair is valid (robot just spawned), score = 0
-            self.gait_phase_sym_val = total_score / total_weight.clamp(min=1.0) * (total_weight > 0).float()
+            # Mean mismatch over the pairs that are actually stepping. Zero when no pair is
+            # valid -- a robot that is not stepping has no gait to be wrong about, so standing
+            # still must cost nothing here. Then ramped by moving_mask so the term fades out
+            # toward zero command instead of switching off at a threshold.
+            self.gait_phase_sym_val = (
+                total_mismatch / total_weight.clamp(min=1.0)
+                * (total_weight > 0).float()
+                * moving_mask
+            )
         else:
             self.gait_phase_sym_val = torch.zeros(self.num_envs, device=self.device)
 

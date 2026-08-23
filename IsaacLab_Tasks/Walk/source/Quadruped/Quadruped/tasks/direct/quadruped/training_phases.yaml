@@ -199,7 +199,7 @@ phases:
       # rew_scale_feet_air_penalty_static: -0.4
       # rew_scale_joint_vel_l2_static: -0.005
 
-      # rew_scale_gait_phase_sym: 0.0
+      rew_scale_gait_phase_sym: -0.15
       # rew_scale_max_contact_force: -1.5
 
 
@@ -210,7 +210,7 @@ phases:
       command_x_range: [-1.0, 1.0]
       command_y_range: [-1.0, 1.0]
       command_yaw_range: [-1.0, 1.0]
-      command_resampling_time: 10.0
+      command_resampling_time: 6.0
       static_velocity_threshold: 0.02
       static_command_ramp: 0.1
       zero_command_fraction: 0.05
