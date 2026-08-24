@@ -77,14 +77,8 @@ def _flatten_cfg(env_cfg, agent_cfg):
 
 
 def _find_event_files():
-    pats = [
-        os.path.join(BASE_DIR, "logs", "**", "events.out.tfevents*"),
-        os.path.join(BASE_DIR, "IsaacLab_Tasks", "**", "events.out.tfevents*"),
-    ]
-    files = []
-    for p in pats:
-        files.extend(glob.glob(p, recursive=True))
-    return sorted(set(files))
+    pat = os.path.join(MODULE_DIR, "**", "events.out.tfevents*")
+    return sorted(set(glob.glob(pat, recursive=True)))
 
 
 def _canon_tag(tag):
@@ -161,6 +155,13 @@ PORT = int(os.environ.get("VIEWER_PORT", "8000"))
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 FRONTEND_DIR = os.path.join(BASE_DIR, "Tools", "viewer_frontend")
 
+# Index only this task module. Each IsaacLab_Tasks/<module> is an independent copy of the task with
+# its own rewards and its own logs, so indexing all of them charts unrelated reward functions on
+# shared axes -- and every extra run costs a tfevents parse on each /api/runs call. Override with
+# VIEWER_MODULE=Stairs (etc.) to point the dashboard at another one.
+VIEWER_MODULE = os.environ.get("VIEWER_MODULE", "Walk")
+MODULE_DIR = os.path.join(BASE_DIR, "IsaacLab_Tasks", VIEWER_MODULE)
+
 class EvalReportHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=FRONTEND_DIR, **kwargs)
@@ -228,15 +229,9 @@ class EvalReportHandler(SimpleHTTPRequestHandler):
             
             reports = []
             
-            # Search for mujoco_eval_report*.json recursively in logs/
-            search_pattern = os.path.join(BASE_DIR, "logs", "**", "*mujoco_eval_report*.json")
-            # Also search specifically in checkpoints folders if pattern above misses
-            search_pattern2 = os.path.join(BASE_DIR, "IsaacLab_Tasks", "**", "*mujoco_eval_report*.json")
-            
-            all_files = glob.glob(search_pattern, recursive=True) + glob.glob(search_pattern2, recursive=True)
-            
-            # Remove duplicates
-            all_files = list(set(all_files))
+            # Search for mujoco_eval_report*.json under the selected task module only.
+            search_pattern = os.path.join(MODULE_DIR, "**", "*mujoco_eval_report*.json")
+            all_files = sorted(set(glob.glob(search_pattern, recursive=True)))
             
             for file_path in all_files:
                 try:
@@ -301,6 +296,7 @@ def main():
     
     print("="*60)
     print(f"🚀 Policy Evaluation Dashboard running!")
+    print(f"📦 Module      {VIEWER_MODULE}  (set VIEWER_MODULE to change)")
     print(f"🔗 Evaluation  http://localhost:{PORT}/")
     print(f"📈 Training    http://localhost:{PORT}/training.html")
     if not HAS_TB:
