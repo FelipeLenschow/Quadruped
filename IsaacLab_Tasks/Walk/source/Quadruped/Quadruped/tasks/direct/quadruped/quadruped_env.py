@@ -124,14 +124,18 @@ class QuadrupedEnv(DirectRLEnv):
         self.yaw_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
         # Peak height reached so far in the current swing, per foot. Monotonic within a swing and
-        # reset on landing -- that is what lets the foot-height potential telescope (see
-        # _compute_reward_terms).
+        # reset on landing -- so on the step a foot lands it still holds that swing's apex, which is
+        # what the foot-height penalty is charged on (see _compute_reward_terms).
         self.feet_height_max = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_feet_contact = torch.zeros(
             self.num_envs, 4, dtype=torch.bool, device=self.device
         )
+        # Vertical foot velocity from the PREVIOUS control step, per foot. The landing-impact
+        # penalty is charged on this, not on the current step's value -- see _compute_reward_terms.
+        self.last_feet_vel_z = torch.zeros(self.num_envs, 4, device=self.device)
         self.feet_air_time_reward_val = torch.zeros(self.num_envs, device=self.device)
-        self.foot_height_reward_val = torch.zeros(self.num_envs, device=self.device)
+        self.foot_height_penalty_val = torch.zeros(self.num_envs, device=self.device)
+        self.foot_landing_vel_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_static_val = torch.zeros(self.num_envs, device=self.device)
         self.joint_vel_l2_static_val = torch.zeros(self.num_envs, device=self.device)
@@ -141,6 +145,11 @@ class QuadrupedEnv(DirectRLEnv):
         self.grf_target_val = torch.zeros(self.num_envs, device=self.device)
         self.max_contact_force_val = torch.zeros(self.num_envs, device=self.device)
         self.grf_peak_bw_val = torch.zeros(self.num_envs, device=self.device)
+        # Diagnostics for the landing-impact penalty: |vz| summed over the feet that touched down
+        # this step, and how many did. Kept as sum+count so the log can report a true mean per
+        # LANDING EVENT rather than per env.
+        self.foot_landing_speed_sum = torch.zeros(self.num_envs, device=self.device)
+        self.foot_landing_count = torch.zeros(self.num_envs, device=self.device)
         self.robot_total_weight = torch.zeros(self.num_envs, device=self.device)  # mg per env, updated on reset
         # Strike-time buffers for contact-driven gait phase symmetry reward
         # last_strike_time: simulation time of last touchdown per foot (N, 4) [FL, FR, RL, RR]
@@ -708,8 +717,10 @@ class QuadrupedEnv(DirectRLEnv):
 
         Must be called exactly once per control step, from _get_rewards() after _refresh_state().
         It owns stateful per-step updates -- feet_air_time accumulation/reset, last_feet_contact,
-        the gait-phase strike bookkeeping and the pos/yaw reference leash -- so calling it twice
-        in a step (or from _get_observations) would double-count them.
+        last_feet_vel_z, the gait-phase strike bookkeeping and the pos/yaw reference leash -- so
+        calling it twice in a step (or from _get_observations) would double-count them (and would
+        overwrite last_feet_vel_z with the post-impact velocity the landing penalty exists to
+        avoid reading).
         """
         # -- Update feet air time logic --
         # Check contact (force > threshold, e.g. 1.0)
@@ -718,6 +729,12 @@ class QuadrupedEnv(DirectRLEnv):
         )
         # First contact this step: currently contact AND NOT previously contact
         first_contact = contact & ~self.last_feet_contact
+        # Feet that completed a real swing this step. _reset_idx clears last_feet_contact to False,
+        # so on step 1 of an episode every foot already standing on the ground reads as
+        # first_contact -- a landing that never happened. episode_length_buf is incremented before
+        # _get_rewards, so it is exactly 1 on that step. Both per-landing penalties below
+        # (foot height, landing velocity) gate on this rather than on first_contact directly.
+        landed = first_contact & (self.episode_length_buf > 1).unsqueeze(1)
         # Increment air time
         self.feet_air_time += self.step_dt
 
@@ -792,40 +809,85 @@ class QuadrupedEnv(DirectRLEnv):
         # individual foot -- correcting that would need a height scan (see the Stairs task module).
         feet_heights = feet_heights - self.scene.env_origins[:, 2].unsqueeze(1)
 
-        # Potential-based shaping on the swing's PEAK height, mirroring what feet_air_time does for
-        # swing duration. phi(h) = exp(-(h-target)^2/sigma) is the potential; the reward paid each
-        # step is its increment, so over a swing it telescopes to phi(apex) - phi(0): the total
-        # depends only on how high the foot actually got, is maximised exactly at target_foot_height,
-        # and goes negative once the apex climbs past it.
+        # -- Swing-apex height PENALTY, charged once per swing at touchdown --
+        # This accumulates MISMATCH (1 - Gaussian score), not match, so rew_scale_foot_height_exp
+        # must be NEGATIVE -- the same conversion gait_phase_sym went through, for the same reason.
+        # As a positive reward the term paid the robot for lifting its feet, which is an incentive
+        # to step higher (and more often) than the task needs: cp7's dense per-step Gaussian on
+        # instantaneous height had its true optimum at ~16cm against a 13cm target (a taller arc
+        # moves faster, clears the low-reward band sooner and re-enters it later, so it banks more
+        # in-band time), and the potential-based version that replaced it still paid out for every
+        # well-timed swing. As a penalty it costs nothing to stand still and only charges for
+        # stepping at the wrong height -- above target (jumping) and below it (scuffing) alike.
+        # Nothing pushes the feet UP any more; feet_air_time is what pays for taking a step at all.
         #
-        # The shaping has to run on feet_height_max, not on raw height. Height returns to where it
-        # started, so a potential on it telescopes to phi(land) - phi(liftoff) ~ 0 for every arc --
-        # no signal at all. feet_height_max only ever increases within a swing and resets on landing,
-        # exactly like feet_air_time, which is what makes the telescoping meaningful.
+        # 1 - exp(-(apex-target)^2/sigma) is bounded in [0, 1], so one wild apex costs at most a
+        # single unit of scale and cannot swamp the rest of the reward the way an unbounded squared
+        # error would.
         #
-        # Replaces a plain per-step Gaussian on instantaneous height. That version paid out every
-        # airborne step, so what it actually maximised was TIME SPENT near the target, not the peak.
-        # Since the foot must start and end a swing at the ground, a taller arc moves faster, clears
-        # the low-reward region below ~4.7cm sooner and re-enters it later, and therefore banks more
-        # in-band time -- its true optimum sat at ~16cm against a 13cm target, and it only stopped
-        # paying once the apex punched out past ~21cm. Hence the observed 16-25cm lifts.
-        #
-        # Uses the finite difference of phi rather than an analytic derivative * step_dt (the form
-        # feet_air_time uses): air_time advances by exactly step_dt each step so the Riemann sum is
-        # exact there, whereas feet_height_max advances irregularly, and differencing phi directly
-        # telescopes exactly with no integration error.
-        prev_phi = torch.exp(
-            -torch.square(self.feet_height_max - self.cfg.target_foot_height) / self.cfg.foot_height_sigma
-        )
+        # feet_height_max is the running peak of the current swing (monotonic within a swing, reset
+        # on landing further down), so on the step a foot touches down it holds that swing's apex.
+        # Charging there -- rather than every airborne step -- keeps the cost a function of the apex
+        # ALONE: a slow high-clearance swing and a quick one with the same apex pay the same, so
+        # this term never bids against feet_air_time / target_feet_air_time over swing duration.
+        # That is the same one-payment-per-swing accounting the potential-based version telescoped
+        # to, minus the payout.
         self.feet_height_max = torch.maximum(self.feet_height_max, feet_heights)
-        new_phi = torch.exp(
+        foot_height_mismatch = 1.0 - torch.exp(
             -torch.square(self.feet_height_max - self.cfg.target_foot_height) / self.cfg.foot_height_sigma
         )
-        # Only credit feet that are actually airborne, so a foot pressed into the ground can't
-        # accrue anything, and mask by command as before.
-        rew_foot_height = torch.sum((new_phi - prev_phi) * (~contact).float(), dim=1) * moving_mask
+        # Only feet that landed THIS step are charged (`landed`, computed above). Masked by command
+        # like every other gait-shaping term, so a robot told to hold still pays nothing even if it
+        # does shuffle a foot -- target_foot_height is meaningless when it is not supposed to step.
+        self.foot_height_penalty_val = (
+            torch.sum(foot_height_mismatch * landed.float(), dim=1) * moving_mask
+        )
 
-        self.foot_height_reward_val = rew_foot_height
+        # -- Landing impact PENALTY: vertical foot speed at touchdown, charged once per landing --
+        # Target is a foot set down at zero vertical speed. Mismatch again, so
+        # rew_scale_foot_landing_vel must be NEGATIVE.
+        #
+        # MEASURED ON THE PREVIOUS STEP'S VELOCITY, deliberately. By the time a contact force
+        # crosses the threshold, the physics has already resolved the collision over that control
+        # step's substeps, so the foot's velocity at the end of the step is POST-impact -- near
+        # zero for exactly the hard landings this is meant to catch. Reading it one control step
+        # earlier gives the pre-impact approach speed. It runs up to one step early (a free-falling
+        # foot gains ~0.2 m/s over a 0.02 s step), so this slightly under-reports the true impact
+        # speed, but it is the right quantity: the current-step value would report ~0 for a slam.
+        #
+        # Complements rew_scale_max_contact_force, which charges the resulting force spike. This
+        # one is the cause rather than the effect, and is far better conditioned -- foot speed is
+        # smooth in the actions, whereas a contact force spike is a near-discontinuous function of
+        # them, sensitive to solver stiffness and to the sensor's history window.
+        #
+        # NOT masked by moving_mask, unlike foot height / feet_air_time. Those shape a gait that is
+        # only wanted when a command is given; "land softly" holds unconditionally, and gating it
+        # would make hard landings free at zero command -- exactly the push-recovery case where the
+        # feet come down hardest. This follows max_contact_force, which is likewise ungated.
+        if getattr(self, "is_heterogeneous", False):
+            all_feet_vel_z = torch.zeros((self.num_envs, 4), device=self.device)
+            for i, view in enumerate(self.robot_views):
+                indices = self.robot_view_indices[i]
+                feet_ids = self.robot_feet_ids[i]  # relative to Articulation (FL, FR, RL, RR)
+                all_feet_vel_z[indices] = view.data.body_lin_vel_w[:, feet_ids, 2]
+            feet_vel_z = all_feet_vel_z
+        else:
+            feet_vel_z = self.robot.data.body_lin_vel_w[:, self._feet_ids_articulation, 2]
+
+        # Squared, so an upward-moving foot at touchdown (a scuff into a bump, or a skimming
+        # re-contact) is charged the same as one dropping. No env-origin correction is needed the
+        # way it is for height -- a velocity has no terrain offset.
+        landing_mismatch = 1.0 - torch.exp(
+            -torch.square(self.last_feet_vel_z) / self.cfg.foot_landing_vel_sigma
+        )
+        self.foot_landing_vel_val = torch.sum(landing_mismatch * landed.float(), dim=1)
+        # Raw touchdown speed in m/s -- what you actually tune foot_landing_vel_sigma and the scale
+        # against, since the mismatch itself is a saturating unitless number.
+        self.foot_landing_speed_sum = torch.sum(self.last_feet_vel_z.abs() * landed.float(), dim=1)
+        self.foot_landing_count = landed.float().sum(dim=1)
+        # Stored AFTER the charge above, so the buffer holds the pre-impact value on the step a
+        # foot lands. Cleared per-episode in _reset_idx alongside last_feet_contact.
+        self.last_feet_vel_z = feet_vel_z.clone()
 
         # Penalty grows with how long each foot has been continuously airborne (self.feet_air_time,
         # already tracked above -- resets to 0 on landing), instead of a flat per-airborne-foot cost.
@@ -1094,6 +1156,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_feet_air_time,
             self.cfg.rew_scale_flat_orientation_l2,
             self.cfg.rew_scale_foot_height_exp,
+            self.cfg.rew_scale_foot_landing_vel,
             self.cfg.rew_scale_feet_air_penalty,
             self.cfg.rew_scale_feet_air_penalty_static,
             self.cfg.rew_scale_joint_vel_l2_static,
@@ -1121,7 +1184,8 @@ class QuadrupedEnv(DirectRLEnv):
             self.actions,
             self.previous_actions,
             self.feet_air_time_reward_val,
-            self.foot_height_reward_val,
+            self.foot_height_penalty_val,
+            self.foot_landing_vel_val,
             self.feet_air_penalty_val,
             self.feet_air_penalty_static_val,
             self.joint_vel_l2_static_val,
@@ -1144,6 +1208,13 @@ class QuadrupedEnv(DirectRLEnv):
         # against the MuJoCo eval's grf_peak_stance_N before retuning rew_scale_max_contact_force.
         self.extras["log"]["diag/grf_peak_bw_mean"] = self.grf_peak_bw_val.mean()
         self.extras["log"]["diag/grf_peak_bw_max"] = self.grf_peak_bw_val.max()
+        # Mean vertical foot speed at touchdown, over every foot that landed anywhere in the batch
+        # this step. Reads 0 on the rare step where nothing landed, so read it as a running average
+        # in TensorBoard, not step by step.
+        n_landings = self.foot_landing_count.sum()
+        self.extras["log"]["diag/foot_landing_speed_mps"] = (
+            self.foot_landing_speed_sum.sum() / n_landings.clamp(min=1.0)
+        )
         return total_reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1223,6 +1294,7 @@ class QuadrupedEnv(DirectRLEnv):
         self.feet_air_time[env_ids] = 0.0
         self.feet_height_max[env_ids] = 0.0
         self.last_feet_contact[env_ids] = False
+        self.last_feet_vel_z[env_ids] = 0.0
         self.last_joint_vel[env_ids] = 0.0
         self.last_base_lin_vel[env_ids] = 0.0
         self.previous_actions[env_ids] = 0.0
@@ -1431,6 +1503,7 @@ def compute_rewards(
     rew_scale_feet_air_time: float,
     rew_scale_flat_orientation_l2: float,
     rew_scale_foot_height_exp: float,
+    rew_scale_foot_landing_vel: float,
     rew_scale_feet_air_penalty: float,
     rew_scale_feet_air_penalty_static: float,
     rew_scale_joint_vel_l2_static: float,
@@ -1458,7 +1531,8 @@ def compute_rewards(
     actions: torch.Tensor,
     previous_actions: torch.Tensor,
     feet_air_time_reward_val: torch.Tensor,
-    foot_height_reward_val: torch.Tensor,
+    foot_height_penalty_val: torch.Tensor,
+    foot_landing_vel_val: torch.Tensor,
     feet_air_penalty_val: torch.Tensor,
     feet_air_penalty_static_val: torch.Tensor,
     joint_vel_l2_static_val: torch.Tensor,
@@ -1553,8 +1627,11 @@ def compute_rewards(
         torch.square(projected_gravity[:, :2]), dim=1
     )
 
-    # 12. Foot Height Reward
-    rew_foot_height = rew_scale_foot_height_exp * foot_height_reward_val
+    # 12. Foot Height Penalty (swing-apex mismatch -- rew_scale_foot_height_exp must be NEGATIVE)
+    rew_foot_height = rew_scale_foot_height_exp * foot_height_penalty_val
+
+    # 12b. Landing Impact Penalty (touchdown vertical-speed mismatch -- scale must be NEGATIVE)
+    rew_foot_landing_vel = rew_scale_foot_landing_vel * foot_landing_vel_val
 
     # 13. Base Height Penalty
     rew_base_height_l2 = rew_scale_base_height_l2 * torch.square(base_height_val - target_base_height)
@@ -1590,6 +1667,7 @@ def compute_rewards(
     log["reward/feet_air_time"] = rew_feet_air_time.mean()
     log["reward/flat_orientation_l2"] = rew_flat_orientation_l2.mean()
     log["reward/foot_height"] = rew_foot_height.mean()
+    log["reward/foot_landing_vel"] = rew_foot_landing_vel.mean()
     log["reward/base_height_l2"] = rew_base_height_l2.mean()
     log["reward/feet_air_penalty"] = rew_feet_air_penalty.mean()
     log["reward/feet_air_penalty_static"] = rew_feet_air_penalty_static.mean()
@@ -1621,6 +1699,7 @@ def compute_rewards(
         + rew_feet_air_time
         + rew_flat_orientation_l2
         + rew_foot_height
+        + rew_foot_landing_vel
         + rew_base_height_l2
         + rew_feet_air_penalty
         + rew_feet_air_penalty_static

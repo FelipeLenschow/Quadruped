@@ -397,7 +397,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.actions[sl],
                 self.previous_actions[sl],
                 self.feet_air_time_reward_val[sl],
-                zero_val, # foot_height_reward_val
+                zero_val, # foot_height_penalty_val
                 self.feet_air_penalty_val[sl],
                 zero_val, # feet_air_penalty_static_val
                 zero_val, # joint_vel_l2_static_val

@@ -385,9 +385,17 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     target_feet_air_time_slow = _phase_cfg["rewards"].get("target_feet_air_time_slow", target_feet_air_time)
     feet_air_time_speed_lo = _phase_cfg["rewards"].get("feet_air_time_speed_lo", 0.1)
     feet_air_time_speed_hi = _phase_cfg["rewards"].get("feet_air_time_speed_hi", 0.35)
+    # NEGATIVE scale: this weights a PENALTY on how far the swing apex ended up from
+    # target_foot_height, charged once per foot per landing (the historical values in the table
+    # above are from when it was a positive lift reward, hence the "was encouraging jumping" note).
     rew_scale_foot_height_exp = _phase_cfg["rewards"]["rew_scale_foot_height_exp"]
     target_foot_height = _phase_cfg["rewards"]["target_foot_height"]
     foot_height_sigma = _phase_cfg["rewards"]["foot_height_sigma"]
+    # Landing impact: NEGATIVE scale on the foot's vertical speed at touchdown (target is zero --
+    # set the foot down, don't drop it). Charged once per landing, on the pre-impact velocity.
+    # .get() so a phase yaml predating this term still loads.
+    rew_scale_foot_landing_vel = _phase_cfg["rewards"].get("rew_scale_foot_landing_vel", 0.0)
+    foot_landing_vel_sigma = _phase_cfg["rewards"].get("foot_landing_vel_sigma", 0.6)
 
     # Ground reaction forces / impact
     rew_scale_grf_balance = _phase_cfg["rewards"]["rew_scale_grf_balance"]

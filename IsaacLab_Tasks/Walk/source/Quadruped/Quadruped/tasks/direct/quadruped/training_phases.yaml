@@ -15,7 +15,8 @@
 # so keys may not be deleted -- only zeroed. A few keys must keep non-zero values even
 # in the "all off" default because the reward math still executes before being scaled:
 #   - feet_air_time_sigma / foot_height_sigma: appear in a divisor. sigma=0 makes
-#     dphi_dt = -2*err/0 * phi = inf*0 = NaN, and 0.0 * NaN is still NaN.
+#     dphi_dt = -2*err/0 * phi = inf*0 = NaN (and 1 - exp(-err^2/0) likewise), and
+#     0.0 * NaN is still NaN.
 #   - num_envs / episode_length_s / command ranges / target_*: structural, not weights.
 #
 # Usage: export QUADRUPED_TRAINING_PHASE=phase1   (single phase)
@@ -50,7 +51,10 @@ default: &default
     rew_scale_track_ang_vel_z_exp: 0.0
 
     rew_scale_feet_air_time: 0.0
+    # Penalty on the swing apex's distance from target_foot_height -- must be NEGATIVE.
     rew_scale_foot_height_exp: 0.0
+    # Penalty on the foot's vertical speed at touchdown -- must be NEGATIVE.
+    rew_scale_foot_landing_vel: 0.0
 
     rew_scale_flat_orientation_l2: 0.0
     rew_scale_lin_vel_z_l2: 0.0
@@ -87,6 +91,9 @@ default: &default
     feet_air_time_speed_hi: 0.35
     target_foot_height: 0.10
     foot_height_sigma: 0.01
+    # Divisor, so it must stay non-zero even here (see header note). 0.6 puts the knee of
+    # 1 - exp(-vz^2/sigma) at ~0.8 m/s: 0.3 m/s -> 0.14, 0.8 -> 0.66, 1.5+ -> saturated.
+    foot_landing_vel_sigma: 0.6
     target_base_height: 0.25
     max_contact_force_pct: 1.0
 
@@ -135,10 +142,12 @@ phases:
   #
   # APPROXIMATED (reward math changed since cp7; yaml only supplies the scale):
   #   - foot_height_exp: cp7 paid a DENSE per-step Gaussian on instantaneous height
-  #     (sigma 0.005, up to ~0.4/step with two feet up). It is now potential-based on
-  #     the swing PEAK and telescopes to ~0 over a cycle. At 0.2 it will contribute
-  #     roughly 40x less than it did in cp7. Raise toward ~5.0 to recover comparable
-  #     gait pressure -- 0.2 is kept here for literal fidelity.
+  #     (sigma 0.005, up to ~0.4/step with two feet up) -- a REWARD for lifting, whose
+  #     true optimum sat at ~16cm against a 13cm target. The term is now a PENALTY on
+  #     the swing APEX, charged once at touchdown: -|scale| * (1 - Gaussian(apex)), in
+  #     [-|scale|, 0] per foot per swing. cp7's positive lift incentive is therefore not
+  #     reproduced at all -- what remains is feet_air_time paying for the step and this
+  #     term charging for taking it at the wrong height.
   #   - feet_air_penalty / _static: cp7 counted airborne FEET; the term now sums
   #     accumulated AIR TIME (~0.06 s per foot mid-swing), so these are ~16x weaker
   #     than cp7 at the same scale. Multiply by ~16 to match cp7's actual pressure.
@@ -160,7 +169,7 @@ phases:
     inherits: default
     env:
       obs_history_len: 0
-      robot_cfg: RANDOM
+      # robot_cfg: RANDOM
       terrain: rough
       num_envs: 2000
       action_scale: 0.25
@@ -186,21 +195,20 @@ phases:
       rew_scale_dof_acc_l2: -3.0e-7
       rew_scale_action_rate_l2: -0.01
 
-      rew_scale_foot_height_exp: 0.4
-      target_foot_height: 0.08
-      foot_height_sigma: 0.005
-      # rew_scale_grf_balance: -0.4
-      # rew_scale_dof_pos_l2_walk: -0.1
 
-      # rew_scale_pos_deviation_l1: -0.1
-      # rew_scale_yaw_deviation_l1: -0.1
+      # rew_scale_foot_height_exp: -0.4
+      # target_foot_height: 0.08
+      # foot_height_sigma: 0.005
 
-      rew_scale_dof_pos_l2_stance: -0.5
-      # rew_scale_feet_air_penalty_static: -0.4
-      # rew_scale_joint_vel_l2_static: -0.005
+      # rew_scale_foot_landing_vel: -0.3
+      # foot_landing_vel_sigma: 0.6
 
-      rew_scale_gait_phase_sym: -0.15
-      # rew_scale_max_contact_force: -1.5
+      # # rew_scale_pos_deviation_l1: -0.1
+      # # rew_scale_yaw_deviation_l1: -0.1
+
+      # rew_scale_dof_pos_l2_stance: -0.5
+
+      # rew_scale_gait_phase_sym: -0.15
 
 
     commands:
