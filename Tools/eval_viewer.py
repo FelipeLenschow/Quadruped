@@ -87,6 +87,15 @@ def _find_event_files():
     return sorted(set(files))
 
 
+def _canon_tag(tag):
+    """skrl >= 2.1.0 logs environment_info keys bare ("reward/alive"); older skrl prefixed them
+    ("Info / reward/alive"). Normalise historical runs to the prefixed spelling so runs recorded
+    on either machine chart together. New runs are already prefixed at the source, in train.py."""
+    if tag.startswith(("reward/", "diag/")):
+        return f"Info / {tag}"
+    return tag
+
+
 def _read_scalars(events_path):
     """Cached scalar read. Re-reads only when the file grows, so live runs stay current."""
     try:
@@ -103,7 +112,7 @@ def _read_scalars(events_path):
     try:
         ea = EventAccumulator(events_path, size_guidance={"scalars": 0})
         ea.Reload()
-        data = {t: [[e.step, e.wall_time, float(e.value)] for e in ea.Scalars(t)]
+        data = {_canon_tag(t): [[e.step, e.wall_time, float(e.value)] for e in ea.Scalars(t)]
                 for t in ea.Tags()["scalars"]}
     except Exception as e:
         print(f"[viewer] failed reading {events_path}: {e}")

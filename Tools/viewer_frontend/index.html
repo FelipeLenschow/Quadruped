@@ -383,6 +383,13 @@
                     </div>
                     <div class="chart-container"><canvas id="chartPhaseDiag"></canvas></div>
                 </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Foot Landing Velocity</div>
+                        <div class="card-desc">Vertical foot speed at touchdown, sampled pre-impact (lower is a softer set-down). Blank for runs evaluated before this metric existed.</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartLandingVel"></canvas></div>
+                </div>
             </div>
 
             <!-- ================= POSITION DRIFT ================= -->
@@ -611,6 +618,7 @@
                 renderSimpleLineChart(selectedReports, 'chartPhaseFront', 'phase_diff_front_percent', 'Phase Offset (%)');
                 renderSimpleLineChart(selectedReports, 'chartPhaseRight', 'phase_diff_right_percent', 'Phase Offset (%)');
                 renderSimpleLineChart(selectedReports, 'chartPhaseDiag', 'phase_diff_diag_percent', 'Phase Offset (%)');
+                renderChartEnvelope(selectedReports, 'chartLandingVel', 'foot_landing_vel_ms', 'Landing Speed (m/s)');
             }
             else if (currentCategory === 'position') {
                 renderSimpleLineChart(selectedReports, 'chartErrX', ['position_error', 'x_m'], 'Forward Drift (m)');

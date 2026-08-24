@@ -83,6 +83,7 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
+import inspect
 import random
 import time
 import numpy as np
@@ -213,7 +214,13 @@ def main(
 
     print(f"[INFO] Loading model checkpoint from: {resume_path}")
     runner.agent.load(resume_path)
-    runner.agent.set_running_mode("eval")
+    # skrl 2.1 replaced Agent.set_running_mode(mode) with enable_training_mode(enabled, ...).
+    if hasattr(runner.agent, "enable_training_mode"):
+        runner.agent.enable_training_mode(False, apply_to_models=True)
+    else:
+        runner.agent.set_running_mode("eval")
+    # skrl 2.1 also made `states` a required positional argument of Agent.act.
+    _act_needs_states = "states" in inspect.signature(runner.agent.act).parameters
 
     # Evaluation Config
     speeds = [0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50, 0.75, 1.00]
@@ -274,7 +281,11 @@ def main(
                 unwrapped_env.command_timer[:] = 0.0
 
             with torch.inference_mode():
-                outputs = runner.agent.act(obs, timestep=0, timesteps=0)
+                outputs = (
+                    runner.agent.act(obs, None, timestep=0, timesteps=0)
+                    if _act_needs_states
+                    else runner.agent.act(obs, timestep=0, timesteps=0)
+                )
                 if hasattr(env, "possible_agents"):
                     actions = {a: outputs[-1][a].get("mean_actions", outputs[0][a]) for a in env.possible_agents}
                 else:

@@ -256,6 +256,13 @@ class MujocoEvaluator(Node):
                     
                     last_contact = [0.0, 0.0, 0.0, 0.0]
                     current_swing_time = [0.0, 0.0, 0.0, 0.0]
+
+                    # Touchdown impact speed, per foot. prev_foot_z/last_foot_vz finite-difference
+                    # the foot's height while it is airborne so the landing can be charged against
+                    # the last PRE-impact sample -- see the append below.
+                    landing_vels = [[], [], [], []]
+                    prev_foot_z = [None, None, None, None]
+                    last_foot_vz = [0.0, 0.0, 0.0, 0.0]
                     
                     last_strike_time = [0.0, 0.0, 0.0, 0.0]
                     stride_duration = [0.0, 0.0, 0.0, 0.0]
@@ -302,6 +309,14 @@ class MujocoEvaluator(Node):
                                 if is_contact:
                                     if current_swing_time[foot_idx] > 0:
                                         swing_times[foot_idx].append(current_swing_time[foot_idx])
+                                        # Vertical foot speed on the last airborne sample, i.e.
+                                        # BEFORE the collision is resolved. Reading it once contact
+                                        # is detected reports the post-impact velocity (~0) for
+                                        # exactly the hard landings this is meant to catch. Gated on
+                                        # the same 0.05 s swing filter as valid_swing_times so
+                                        # contact chatter does not register as a landing.
+                                        if current_swing_time[foot_idx] > 0.05:
+                                            landing_vels[foot_idx].append(abs(last_foot_vz[foot_idx]))
                                         current_swing_time[foot_idx] = 0.0
                                         
                                         t = self.data.time
@@ -333,6 +348,9 @@ class MujocoEvaluator(Node):
                                             if is_match1 or is_match2:
                                                 mujoco.mj_contactForce(self.model, self.data, c_i, force)
                                                 foot_force += abs(force[0])
+                                    # Drop the airborne height history so the next swing starts
+                                    # its finite difference fresh instead of across the stance.
+                                    prev_foot_z[foot_idx] = None
                                     stance_force_sum[foot_idx] += foot_force
                                     stance_force_count[foot_idx] += 1
                                     max_grf_stance_N[foot_idx] = max(max_grf_stance_N[foot_idx], foot_force)
@@ -343,6 +361,11 @@ class MujocoEvaluator(Node):
                                         z_height = self.data.geom_xpos[self.foot_geom_ids[foot_idx]][2]
                                         # Normalize relative to ground (floor is at 0.0). We also need to subtract nominal foot radius if we want exact clearance, but relative height is fine.
                                         max_foot_heights[foot_idx] = max(max_foot_heights[foot_idx], z_height)
+                                        if prev_foot_z[foot_idx] is not None:
+                                            last_foot_vz[foot_idx] = (
+                                                z_height - prev_foot_z[foot_idx]
+                                            ) / 0.001
+                                        prev_foot_z[foot_idx] = z_height
     
                             last_contact = contact
                                 
@@ -382,6 +405,10 @@ class MujocoEvaluator(Node):
                     avg_grf = [
                         stance_force_sum[i] / max(1, stance_force_count[i]) for i in range(4)
                     ]
+
+                    avg_landing_vel = [
+                        float(np.mean(v)) if v else 0.0 for v in landing_vels
+                    ]
                     
                     std_z = float(np.std(base_z_vels)) if base_z_vels else 0.0
                     std_roll = float(np.std(base_roll_vels)) if base_roll_vels else 0.0
@@ -399,6 +426,7 @@ class MujocoEvaluator(Node):
                         "step_frequency_hz": [round(float(f), 2) for f in step_freqs],
                         "grf_stance_N": [round(float(x), 2) for x in avg_grf],
                         "grf_peak_stance_N": [round(float(x), 2) for x in max_grf_stance_N],
+                        "foot_landing_vel_ms": [round(v, 2) for v in avg_landing_vel],
                         "phase_diff_front_percent": round(float(avg_phase_front), 2),
                         "phase_diff_right_percent": round(float(avg_phase_right), 2),
                         "phase_diff_diag_percent": round(float(avg_phase_diag), 2),
@@ -418,6 +446,7 @@ class MujocoEvaluator(Node):
                     print(f"   => Foot Lift Height (FL,FR,RL,RR): {[round(v, 4) for v in avg_foot_height_max]} m")
                     print(f"   => Average Swing Time: {avg_swing_time:.3f} s (Freq: {avg_step_freq:.2f} Hz)")
                     print(f"   => Peak Stance GRF (FL,FR,RL,RR): {[round(v, 1) for v in max_grf_stance_N]} N")
+                    print(f"   => Landing Vel (FL,FR,RL,RR): {[round(v, 2) for v in avg_landing_vel]} m/s")
                     print(f"   => Phases (Front, Right, Diag): {avg_phase_front:.1f}%, {avg_phase_right:.1f}%, {avg_phase_diag:.1f}%")
 
             if self.checkpoint:

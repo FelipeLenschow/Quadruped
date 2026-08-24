@@ -97,6 +97,7 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
+import inspect
 import os
 import random
 import time
@@ -256,8 +257,14 @@ def main(
 
     print(f"[INFO] Loading model checkpoint from: {resume_path}")
     runner.agent.load(resume_path)
-    # set agent to evaluation mode
-    runner.agent.set_running_mode("eval")
+    # set agent to evaluation mode.
+    # skrl 2.1 replaced Agent.set_running_mode(mode) with enable_training_mode(enabled, ...).
+    if hasattr(runner.agent, "enable_training_mode"):
+        runner.agent.enable_training_mode(False, apply_to_models=True)
+    else:
+        runner.agent.set_running_mode("eval")
+    # skrl 2.1 also made `states` a required positional argument of Agent.act.
+    _act_needs_states = "states" in inspect.signature(runner.agent.act).parameters
 
     # reset environment
     obs, _ = env.reset()
@@ -269,7 +276,11 @@ def main(
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
-            outputs = runner.agent.act(obs, timestep=0, timesteps=0)
+            outputs = (
+                runner.agent.act(obs, None, timestep=0, timesteps=0)
+                if _act_needs_states
+                else runner.agent.act(obs, timestep=0, timesteps=0)
+            )
             # - multi-agent (deterministic) actions
             if hasattr(env, "possible_agents"):
                 actions = {
