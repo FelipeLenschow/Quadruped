@@ -152,13 +152,26 @@ const TIPS={
  'Yaw-rate tracking, same exponential form. Divide by its scale to normalise.<br>'+
  '<span class="note">Good instantaneous tracking here does not prevent heading drift &mdash; '+
  'accumulated bias is only visible to pos_deviation.</span>'],
-'Info / reward/foot_height':['foot_height',
- 'Potential-based shaping on the swing <b style="display:inline">peak</b>: pays '+
- '<code>&phi;(h_max)</code> increments only when a foot sets a new high within its swing, '+
- 'where <code>&phi;(h)=exp(-(h-target)&sup2;/&sigma;)</code>.<br>'+
- 'Telescopes to <code>&phi;(apex)-&phi;(0)</code> per swing, so the logged per-step mean is small.<br>'+
- '<span class="note">Rough apex read at scale 0.5, 2&nbsp;Hz: 0.011&rarr;2cm, 0.028&rarr;4cm, '+
- '0.047&rarr;6cm, 0.069&rarr;10cm (the ceiling). Symmetric &mdash; 5cm and 15cm score alike.</span>'],
+'Info / reward/foot_height_reward':['foot_height_reward',
+ 'Swing-apex height <b style="display:inline">reward</b>, charged once per foot at touchdown: '+
+ '<code>scale &times; exp(-(apex-target)&sup2;/&sigma;)</code>, scale POSITIVE.<br>'+
+ 'The lift incentive &mdash; early phases use this so the robot has a reason to pick a foot up '+
+ 'at all. Divide by rew_scale_foot_height_reward for landings-scored-per-step.<br>'+
+ '<span class="note">Pays per landing, so it also rewards stepping high and often. That is what '+
+ 'foot_height_penalty exists to take back later.</span>'],
+'Info / reward/foot_height_penalty':['foot_height_penalty',
+ 'Same apex measurement, opposite side: <code>scale &times; (1 - exp(-(apex-target)&sup2;/&sigma;))</code>, '+
+ 'scale NEGATIVE, charged once per foot at touchdown.<br>'+
+ 'Costs nothing to stand still and charges for an apex wrong in EITHER direction &mdash; '+
+ 'too high (jumping) and too low (scuffing) alike.<br>'+
+ '<span class="note">Symmetric, so 5cm and 15cm against a 10cm target cost the same. Bounded at '+
+ '|scale| per foot per swing.</span>'],
+'Info / reward/foot_height':['foot_height (legacy)',
+ 'Older runs only. Potential-based shaping on the swing peak, paid as <code>&phi;(h_max)</code> '+
+ 'increments where <code>&phi;(h)=exp(-(h-target)&sup2;/&sigma;)</code>, telescoping to '+
+ '<code>&phi;(apex)-&phi;(0)</code> per swing.<br>'+
+ '<span class="note">Replaced by the foot_height_reward / foot_height_penalty pair, which score '+
+ 'the apex once at touchdown. Not comparable term-for-term.</span>'],
 'Info / reward/feet_air_time':['feet_air_time',
  'Potential-based shaping on swing duration, paid as <code>d&phi;/dt</code> while airborne. '+
  'Positive approaching target_feet_air_time, negative past it.<br>'+
@@ -318,7 +331,7 @@ function byCat(tags){
 const COLORS=['#3b82f6','#10b981','#f43f5e','#8b5cf6','#f59e0b','#06b6d4','#ec4899','#84cc16'];
 let RUNS=[], sel=[], colorOf={}, data={}, charts={}, xmode='step', smooth=.40, timer=null, norm=0;
 
-// "Info / reward/foot_height" -> that run's rew_scale_foot_height_exp.
+// "Info / reward/foot_height_penalty" -> that run's rew_scale_foot_height_penalty.
 // Exact match first, then prefix: the logged name and the config key do not always agree.
 function scaleFor(tag,id){
   if(!tag.startsWith('Info / reward/')) return null;
@@ -327,7 +340,10 @@ function scaleFor(tag,id){
   const k=Object.keys(cfg).find(k=>k.startsWith('rew_scale_'+n));
   return k?cfg[k]:null;
 }
+// Both foot_height tags are listed (only one is non-zero in any given phase) plus the legacy
+// single tag, so a run from either side of the rename opens with its foot-height chart shown.
 const DEFAULT_TAGS=['Reward / Total reward (mean)','Info / reward/track_lin_vel_xy_exp',
+  'Info / reward/foot_height_reward','Info / reward/foot_height_penalty',
   'Info / reward/foot_height','Info / diag/joint_acc_sum_sq_mean',
   'Policy / Standard deviation','Loss / Value loss'];
 let activeTags=[...DEFAULT_TAGS];

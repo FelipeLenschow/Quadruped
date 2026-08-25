@@ -81,6 +81,9 @@ class RewardEstimatorNode(Node):
         self.last_time = time.time()
         
         self.feet_air_time = np.zeros(4)
+        # Peak height of the current swing, per foot -- the foot-height terms are scored on this
+        # at touchdown, mirroring feet_height_max in quadruped_env.py.
+        self.feet_height_max = np.zeros(4)
         self.last_contact = np.zeros(4)
         
         # Reward names in order
@@ -146,19 +149,33 @@ class RewardEstimatorNode(Node):
         target_air_time = self.rew_cfg.get('target_feet_air_time', 0.2)
         air_time_reward = 0.0
         
+        # Swing-apex height, scored once per landing like the env does (match for the lift reward,
+        # 1 - match for the penalty). Accumulated here, scaled below.
+        target_foot_height = self.rew_cfg.get('target_foot_height', 0.12)
+        foot_height_sigma = self.rew_cfg.get('foot_height_sigma', 0.01)
+        foot_height_match = 0.0
+        foot_height_mismatch = 0.0
+
         for i in range(4):
             is_contact = self.contact[i] > 0.5
             was_contact = self.last_contact[i] > 0.5
-            
+
+            self.feet_height_max[i] = max(self.feet_height_max[i], foot_heights_z[i])
+
             # First contact this step
             if is_contact and not was_contact:
                 air_time_reward += max(0.0, self.feet_air_time[i] - target_air_time)
-                
+                err_sq = (self.feet_height_max[i] - target_foot_height) ** 2
+                match = np.exp(-err_sq / foot_height_sigma)
+                foot_height_match += match
+                foot_height_mismatch += 1.0 - match
+
             if not is_contact:
                 self.feet_air_time[i] += dt
             else:
                 self.feet_air_time[i] = 0.0
-                
+                self.feet_height_max[i] = 0.0
+
         self.last_contact = self.contact.copy()
 
         # --- REWARD CALCULATIONS ---
@@ -182,15 +199,18 @@ class RewardEstimatorNode(Node):
         is_moving = np.linalg.norm(self.commands[:3]) > self.cmd_cfg.get('static_velocity_threshold', 0.001)
         rewards.append(self.rew_cfg.get('rew_scale_feet_air_time', 1.0) * air_time_reward * float(is_moving))
         
-        # 4. Foot Height
-        target_foot_height = self.rew_cfg.get('target_foot_height', 0.12)
-        foot_height_reward = 0.0
-        for i in range(4):
-            if self.contact[i] < 0.5: # foot in the air
-                err_sq = (foot_heights_z[i] - target_foot_height)**2
-                foot_height_reward += np.exp(-err_sq / 0.005)
-                
-        rewards.append(self.rew_cfg.get('rew_scale_foot_height_exp', 0.0) * foot_height_reward * float(is_moving))
+        # 4. Foot Height -- both directions of the same swing-apex score, as in the env:
+        #    rew_scale_foot_height_penalty  (NEGATIVE) charges the mismatch,
+        #    rew_scale_foot_height_reward (POSITIVE) pays the match.
+        #    This used to score instantaneous height every airborne step against a hardcoded
+        #    sigma, which paid out with the sign of a scale that is now a penalty weight.
+        #    Published as one "foot_height" entry -- reward_names and PlotJuggler/reward_layout.xml
+        #    index this list positionally, so the two directions are summed rather than split.
+        rewards.append(
+            (self.rew_cfg.get('rew_scale_foot_height_penalty', 0.0) * foot_height_mismatch
+             + self.rew_cfg.get('rew_scale_foot_height_reward', 0.0) * foot_height_match)
+            * float(is_moving)
+        )
         
         # 5. Flat Orientation
         rewards.append(self.rew_cfg.get('rew_scale_flat_orientation_l2', -5.0) * np.sum(self.gyro[:2]**2))

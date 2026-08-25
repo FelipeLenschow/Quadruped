@@ -356,7 +356,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     #   track_lin_vel_xy_exp          1.0      1.5      1.0       ↓ back to Go2 (was chasing speed)
     #   track_ang_vel_z_exp           0.5      0.75     0.5       ↓ back to Go2
     #   feet_air_time                 0.25     0.25     0.125     ↓ less aggressive lifting
-    #   foot_height_exp               —        0.5      0.3       ↓ was encouraging jumping
+    #   foot_height (reward form)     —        0.5      0.3       ↓ was encouraging jumping
     #   flat_orientation_l2           -2.5     -2.5     -5.0      ↑ stronger body-level penalty
     #   lin_vel_z_l2                  -2.0     -2.0     -4.0      ↑ stop vertical bouncing
     #   ang_vel_xy_l2                 -0.05    -0.05    -0.5      ↑↑ 10× (main fix for rocking)
@@ -388,7 +388,13 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # NEGATIVE scale: this weights a PENALTY on how far the swing apex ended up from
     # target_foot_height, charged once per foot per landing (the historical values in the table
     # above are from when it was a positive lift reward, hence the "was encouraging jumping" note).
-    rew_scale_foot_height_exp = _phase_cfg["rewards"]["rew_scale_foot_height_exp"]
+    rew_scale_foot_height_penalty = _phase_cfg["rewards"]["rew_scale_foot_height_penalty"]
+    # POSITIVE scale on the SAME swing-apex measurement, paying the Gaussian match instead of
+    # charging the mismatch: the lift incentive, for early phases where the robot has no reason to
+    # pick a foot up yet. Turn it off (and the penalty on) once the gait exists -- as a payout it
+    # rewards stepping high and often, which is the exploit the penalty form exists to remove.
+    # .get() so a phase yaml predating this term still loads.
+    rew_scale_foot_height_reward = _phase_cfg["rewards"].get("rew_scale_foot_height_reward", 0.0)
     target_foot_height = _phase_cfg["rewards"]["target_foot_height"]
     foot_height_sigma = _phase_cfg["rewards"]["foot_height_sigma"]
     # Landing impact: NEGATIVE scale on the foot's vertical speed at touchdown (target is zero --

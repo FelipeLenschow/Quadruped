@@ -1,27 +1,3 @@
-# Quadruped Training Phases Configuration
-#
-# Design rationale (rebuilt 2026-08-18):
-#   - default: EVERYTHING OFF. Every reward scale is 0.0, all domain randomization is
-#     zeroed, pushes are off, and all command shaping fractions are 0.0. A phase that
-#     inherits `default` and sets nothing trains against a reward of exactly 0.
-#   - Phase 1: reconstruction of the cp7 run (2026-03-25), the fastest/cleanest policy
-#     this project has produced. See the block comment on phase1 for what is exact,
-#     what is approximated, and what could not be reproduced from yaml.
-#   - There are no further phases. cp7 had no curriculum -- rough terrain, DR, noise
-#     and pushes were all on from step 0, which phase1 reproduces. Add a phase2 only
-#     once phase1 has a measured baseline and you know what it should harden.
-#
-# NOTE: quadruped_env_cfg.py hard-indexes almost every key below (_phase_cfg["x"]["y"]),
-# so keys may not be deleted -- only zeroed. A few keys must keep non-zero values even
-# in the "all off" default because the reward math still executes before being scaled:
-#   - feet_air_time_sigma / foot_height_sigma: appear in a divisor. sigma=0 makes
-#     dphi_dt = -2*err/0 * phi = inf*0 = NaN (and 1 - exp(-err^2/0) likewise), and
-#     0.0 * NaN is still NaN.
-#   - num_envs / episode_length_s / command ranges / target_*: structural, not weights.
-#
-# Usage: export QUADRUPED_TRAINING_PHASE=phase1   (single phase)
-#        export QUADRUPED_TRAINING_PHASE=phase1_onward  (sequential curriculum)
-
 default: &default
   env:
     obs_history_len: 0
@@ -51,9 +27,8 @@ default: &default
     rew_scale_track_ang_vel_z_exp: 0.0
 
     rew_scale_feet_air_time: 0.0
-    # Penalty on the swing apex's distance from target_foot_height -- must be NEGATIVE.
-    rew_scale_foot_height_exp: 0.0
-    # Penalty on the foot's vertical speed at touchdown -- must be NEGATIVE.
+    rew_scale_foot_height_penalty: 0.0
+    rew_scale_foot_height_reward: 0.0
     rew_scale_foot_landing_vel: 0.0
 
     rew_scale_flat_orientation_l2: 0.0
@@ -122,59 +97,15 @@ default: &default
     yaw_only_command_fraction: 0.0
 
 phases:
-  # ══════════════════════════════════════════════════════════════════════════
-  # Phase 1 — cp7 reconstruction (original run: 2026-03-25_00-18-53_ppo_torch)
-  #
-  # Source of truth: logs/skrl/quadruped_direct/cp7/params/env.yaml, whose reward
-  # block matches the code at commit 970e983 exactly.
-  #
-  # EXACT reproductions:
-  #   - 15 active reward terms, at cp7's literal scales
-  #   - dof_pos_l2: cp7 applied -0.2 unconditionally. moving_mask + static_mask == 1
-  #     by construction, so setting BOTH walk and stance to -0.2 is exact.
-  #   - feet_air_time: cp7 used (air_time - 0.5).clamp(min=0) at scale 0.01. Measured
-  #     swing time was 0.12 s, so the term was IDENTICALLY ZERO for the whole run.
-  #     0.0 here is the faithful reproduction, not a simplification.
-  #   - Hard static/moving switch at 0.1: threshold == ramp makes ramp_hi = 0.100001.
-  #   - obs_history_len 0 -> observation_space = 49 (cp7 had no history).
-  #   - robot_cfg RANDOM -> A1 + Go1 + Go2 in thirds, matching cp7's three push events.
-  #   - Rough terrain, DR, obs noise and pushes all ON from step 0 (cp7 had no curriculum).
-  #
-  # APPROXIMATED (reward math changed since cp7; yaml only supplies the scale):
-  #   - foot_height_exp: cp7 paid a DENSE per-step Gaussian on instantaneous height
-  #     (sigma 0.005, up to ~0.4/step with two feet up) -- a REWARD for lifting, whose
-  #     true optimum sat at ~16cm against a 13cm target. The term is now a PENALTY on
-  #     the swing APEX, charged once at touchdown: -|scale| * (1 - Gaussian(apex)), in
-  #     [-|scale|, 0] per foot per swing. cp7's positive lift incentive is therefore not
-  #     reproduced at all -- what remains is feet_air_time paying for the step and this
-  #     term charging for taking it at the wrong height.
-  #   - feet_air_penalty / _static: cp7 counted airborne FEET; the term now sums
-  #     accumulated AIR TIME (~0.06 s per foot mid-swing), so these are ~16x weaker
-  #     than cp7 at the same scale. Multiply by ~16 to match cp7's actual pressure.
-  #
-  # NOT REPRODUCIBLE FROM YAML:
-  #   - Actuator model. cp7's A1 used ActuatorNetMLP; ROBOT_VARIANTS now gives
-  #     A1/GO2 DCMotorCfg (Kp=25, Kd=0.5) and ActuatorNetMLP only to Go1.
-  #   - cp7's joint_damping_range [0.01, 0.1] has no current equivalent.
-  #     joint_pd_damping_range is a PD-gain delta with different semantics (and the
-  #     code notes that randomization was buggy), so it is left at zero.
-  #   - Contact sensor now also covers calf/thigh with history_length 4 (cp7: foot
-  #     only, history 3). Only affects undesired_contacts, which is 0.0 here.
-  #
-  # KNOWN LIMITATION OF THE TARGET: cp7's own MuJoCo eval shows actual_speed 0.00 for
-  # every command from 0.05 to 0.25 m/s -- it stands still below ~0.35 m/s. This
-  # baseline reproduces a policy that does not do low-speed locomotion.
-  # ══════════════════════════════════════════════════════════════════════════
   phase1:
     inherits: default
     env:
       obs_history_len: 0
-      # robot_cfg: RANDOM
       terrain: rough
       num_envs: 2000
       action_scale: 0.25
       observation_noise_scale: 0.05
-      max_timesteps: 500000
+      max_timesteps: 300000
       episode_length_s: 20.0
       base_angle_termination_thresh: 0.7
     domain_randomization:
@@ -195,21 +126,9 @@ phases:
       rew_scale_dof_acc_l2: -3.0e-7
       rew_scale_action_rate_l2: -0.01
 
-
-      # rew_scale_foot_height_exp: -0.4
-      # target_foot_height: 0.08
-      # foot_height_sigma: 0.005
-
-      # rew_scale_foot_landing_vel: -0.3
-      # foot_landing_vel_sigma: 0.6
-
-      # # rew_scale_pos_deviation_l1: -0.1
-      # # rew_scale_yaw_deviation_l1: -0.1
-
-      # rew_scale_dof_pos_l2_stance: -0.5
-
-      # rew_scale_gait_phase_sym: -0.15
-
+      rew_scale_foot_height_reward: 0.4
+      target_foot_height: 0.08
+      foot_height_sigma: 0.005
 
     commands:
       command_lin_vel_std: 0.5
@@ -222,3 +141,23 @@ phases:
       static_velocity_threshold: 0.02
       static_command_ramp: 0.1
       zero_command_fraction: 0.05
+
+  phase2:
+    inherits: phase1
+    env:
+      max_timesteps: 300000
+    rewards:
+      rew_scale_foot_height_reward: 0.0
+      rew_scale_foot_height_penalty: -0.4
+      target_foot_height: 0.08
+      foot_height_sigma: 0.005
+
+      rew_scale_foot_landing_vel: -0.3
+      foot_landing_vel_sigma: 0.6
+
+      rew_scale_dof_pos_l2_stance: -0.5
+
+      rew_scale_gait_phase_sym: -0.15
+
+      # rew_scale_pos_deviation_l1: -0.1
+      # rew_scale_yaw_deviation_l1: -0.1
