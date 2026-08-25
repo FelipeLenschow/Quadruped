@@ -202,6 +202,37 @@ def main(
     elif hasattr(env_cfg, "max_timesteps") and getattr(env_cfg, "max_timesteps") is not None:
         agent_cfg["trainer"]["timesteps"] = env_cfg.max_timesteps
     agent_cfg["trainer"]["close_environment_at_exit"] = False
+
+    # ── Control-rate compensation for the discount factors ────────────────────────
+    # Per-step reward is already normalised by the control period (see reward_dt_ref in
+    # quadruped_env_cfg.py), which keeps per-SECOND reward invariant when the control rate
+    # changes. That is only half the problem: gamma and GAE lambda discount per STEP, so a
+    # 200 Hz torque run at gamma 0.99 looks 4x less far ahead in wall-clock time than a
+    # 50 Hz position run at the same value -- 0.5 s of horizon instead of 2.0 s.
+    #
+    # Re-exponentiating by the period ratio holds the effective horizon dt/(1-gamma) constant:
+    # gamma 0.99 -> 0.99^0.25 = 0.99749 at 200 Hz, which is 1.99 s against the original 2.0 s.
+    # A position-mode run has step_dt == reward_dt_ref, so nothing changes there.
+    _ref_dt = float(getattr(env_cfg, "reward_dt_ref", 0.0) or 0.0)
+    _step_dt = float(env_cfg.sim.dt) * int(env_cfg.decimation)
+    if _ref_dt > 0.0 and abs(_step_dt - _ref_dt) > 1e-12:
+        _ratio = _step_dt / _ref_dt
+        print(
+            f"[INFO] Control rate {1.0 / _step_dt:.0f} Hz against a {1.0 / _ref_dt:.0f} Hz "
+            f"reference -- rescaling discount factors by ^{_ratio:g}:"
+        )
+        for _key in ("discount_factor", "lambda"):
+            if _key not in agent_cfg["agent"]:
+                continue
+            _old = float(agent_cfg["agent"][_key])
+            _new = _old ** _ratio
+            agent_cfg["agent"][_key] = _new
+            _horizon_old = _ref_dt / (1.0 - _old)
+            _horizon_new = _step_dt / (1.0 - _new)
+            print(
+                f"[INFO]   {_key}: {_old:g} -> {_new:.6f} "
+                f"(horizon {_horizon_old:.2f} s -> {_horizon_new:.2f} s)"
+            )
     # configure the ML framework into the global skrl variable
     if args_cli.ml_framework.startswith("jax"):
         skrl.config.jax.backend = "jax" if args_cli.ml_framework == "jax" else "numpy"

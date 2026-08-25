@@ -2,6 +2,31 @@ default: &default
   env:
     obs_history_len: 0
     robot_cfg: GO2
+    # "position" -> action is a residual on the nominal stance, tracked by the actuator PD
+    #               at 200 Hz while the policy runs at 50 Hz (decimation 4).
+    # "torque"   -> action IS joint effort, no PD loop, policy runs at 200 Hz (decimation 1)
+    #               and the actuator's PD gains are zeroed. Go2/A1 only -- Go1's
+    #               ActuatorNetMLP cannot be driven by a commanded effort.
+    # Cannot change mid-curriculum: it fixes decimation and the actuator gains at startup.
+    control_mode: position
+    # Torque mode only. N·m per unit of policy output, before the actuator's torque-speed
+    # clamp. Scale to the actuator envelope, not to action_scale. Isaac Lab's DCMotorCfg
+    # gives Go2 effort_limit 23.5 N·m and A1 33.5 N·m; Chen et al. use 10.0 on A1, so the
+    # equivalent for Go2 is 10 * 23.5/33.5 ~= 7. At 7.0 a 3-sigma action reaches ~21 N·m,
+    # just inside the limit, which is the balance that scale is meant to strike.
+    torque_scale: 7.0
+    # Per-step reward is normalised to this control period so per-second reward does not
+    # change with the control rate -- without it a 200 Hz run banks 4x the return per second
+    # and torque-vs-position is not a matched comparison. 0.02 = the 50 Hz position period,
+    # so position runs scale by exactly 1.0. Set 0.0 to disable.
+    reward_dt_ref: 0.02
+    # Torque mode only. Restoring stiffness (N·m per rad) for the soft joint-limit barrier
+    # that stands in for position mode's target clamp.
+    joint_limit_barrier_stiffness: 25.0
+    # Base height on reset. Omit to get the mode default: 0.50 for position (the PD holds the
+    # stance through the drop) or 0.35 for torque (limp legs cannot survive a 0.2 m drop, so
+    # the robot is spawned already standing). Lower it further if it still lands hard.
+    # spawn_height: 0.35
     terrain: flat
     num_envs: 2000
     action_scale: 0.25
@@ -161,3 +186,202 @@ phases:
 
       # rew_scale_pos_deviation_l1: -0.1
       # rew_scale_yaw_deviation_l1: -0.1
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # Torque-control counterpart to the phase1 -> phase2 curriculum.
+  #
+  # Everything except the control mode is deliberately IDENTICAL to the position phases --
+  # same reward scales, same DR, same commands, same terrain, same curriculum shape. That is
+  # the point: the one published hardware comparison (Chen et al., Humanoids 2023) had to
+  # modify the reward function between its two arms and says so, so a matched run is exactly
+  # the gap worth filling.
+  #
+  # What differs is forced by the mode, not chosen:
+  #   - decimation 1 (200 Hz) instead of 4 (50 Hz)
+  #   - actuator PD gains zeroed; the action becomes joint effort
+  #   - per-step reward scaled by 0.25 via reward_dt_ref, so per-SECOND reward still matches
+  #
+  # max_timesteps is 4x the position phases so that both curricula see the same amount of
+  # simulated experience: 1.2M agent steps at decimation 1 is 1.2M physics steps, the same
+  # physics work as 300k agent steps at decimation 4. Wall clock is a bit longer than the
+  # ~12 h position run because there are 4x as many policy forward passes, not because the
+  # physics got more expensive.
+  #
+  # Joint limits are still enforced: _joint_limit_barrier in quadruped_env.py replaces the
+  # position-target clamp with a one-sided restoring torque, so the reward set stays exactly
+  # matched to the position phases instead of having to carry limit safety. Stiffness is
+  # env.joint_limit_barrier_stiffness (default 25.0, the position mode's Kp).
+  #
+  # Expect the learning curve to sit BELOW the position run for a long time before crossing
+  # -- Chen et al. see torque trailing every position baseline until ~600 iterations. Judging
+  # this early against phase2 will give the wrong answer.
+  #
+  # Go2 or A1 only: Go1's ActuatorNetMLP cannot be driven by a commanded effort, and RANDOM
+  # mixes it in. Run as: QUADRUPED_TRAINING_PHASE=phase1_torque_to_phase2_torque
+  # ══════════════════════════════════════════════════════════════════════════
+  phase0_torque:
+    inherits: default
+    env:
+      control_mode: torque
+      torque_scale: 7.0
+      terrain: rough
+      num_envs: 2000
+      action_scale: 0.25
+      observation_noise_scale: 0.05
+      max_timesteps: 150000
+      episode_length_s: 10.0
+      base_angle_termination_thresh: 0.7
+    events:
+      enable_pushes: false
+    rewards:
+      # Raised from the 1.0 used elsewhere, and it is load-bearing. Velocity tracking is
+      # deliberately OFF here (see below), and it was the only other positive reward -- with
+      # alive at 1.0, every state is negative until the policy can actually stand, so
+      # terminating (which stops accumulation at 0) beats living and the agent learns to end
+      # episodes fast. That is the exact failure this phase exists to avoid. 3.0 keeps a
+      # standing robot clearly positive: +3.00 standing, -1.70 collapsed.
+      rew_scale_alive: 3.0
+
+      # NO velocity tracking in this phase. With commands pinned to zero it scores "hold
+      # still", which sounds right and is not: a FALLEN robot is perfectly still, so the two
+      # tracking terms were handing +2.25/step to a collapsed heap -- 69% of the +3.25 a
+      # perfect stand scored. And it is not a harmless constant: a robot struggling to push
+      # up has nonzero v_xy and LOSES tracking reward, so the term actively rewarded giving
+      # up. Tracking starts in phase1_torque, where a nonzero command makes it mean something.
+      #
+      # Cost: nothing penalises horizontal drift here, so the policy may stand and slide a
+      # little. Acceptable for a bootstrap; phase1_torque fixes it immediately.
+
+      rew_scale_flat_orientation_l2: -5.0
+      rew_scale_lin_vel_z_l2: -2.0
+      rew_scale_ang_vel_xy_l2: -0.05
+
+      # -100, not -1. This is an L2 on a quantity whose entire realistic range is 0.15-0.30 m,
+      # so (z - 0.25)^2 tops out near 0.01: at -1.0 a full collapse cost -0.01 and the term
+      # did nothing whatsoever. -100 makes a 9 cm shortfall cost -0.81 -- the same order as
+      # the other terms instead of three magnitudes below them.
+      rew_scale_base_height_l2: -100.0
+      target_base_height: 0.25
+      # Holding the stance IS the task here, so 4x the -0.5 phase2 uses. Summed over 12
+      # joints: 0.15 rad/joint -> -0.54, 0.40 rad/joint -> -3.84.
+      rew_scale_dof_pos_l2_stance: -2.0
+
+      rew_scale_dof_torques_l2: -0.0002
+      rew_scale_dof_acc_l2: -3.0e-7
+      rew_scale_action_rate_l2: -0.01
+      # Feet left unpenalised: stepping to recover balance is allowed.
+    commands:
+      command_x_range: [0.0, 0.0]
+      command_y_range: [0.0, 0.0]
+      command_yaw_range: [0.0, 0.0]
+      zero_command_fraction: 1.0
+      command_resampling_time: 10.0
+      static_velocity_threshold: 0.02
+      static_command_ramp: 0.1
+
+  phase1_torque:
+    inherits: default
+    env:
+      control_mode: torque
+      torque_scale: 7.0
+      terrain: rough
+      num_envs: 2000
+      action_scale: 0.25
+      observation_noise_scale: 0.05
+      max_timesteps: 1200000
+      episode_length_s: 20.0
+      base_angle_termination_thresh: 0.7
+    domain_randomization:
+      joint_friction_range: [0.03, 0.3]
+    events:
+      enable_pushes: true
+      push_velocity_range: [-0.4, 0.4]
+    rewards:
+      rew_scale_alive: 1.0
+      rew_scale_track_lin_vel_xy_exp: 1.5
+      rew_scale_track_ang_vel_z_exp: 0.75
+
+      rew_scale_lin_vel_z_l2: -2.0
+      rew_scale_ang_vel_xy_l2: -0.05
+      rew_scale_flat_orientation_l2: -5.0
+
+      rew_scale_dof_torques_l2: -0.0002
+      rew_scale_dof_acc_l2: -3.0e-7
+      rew_scale_action_rate_l2: -0.01
+
+      rew_scale_foot_height_reward: 0.4
+      target_foot_height: 0.08
+      foot_height_sigma: 0.005
+    commands:
+      command_lin_vel_std: 0.5
+      command_ang_vel_std: 0.5
+      vel_tracking_sigma_exp: 0.0
+      command_x_range: [-1.0, 1.0]
+      command_y_range: [-1.0, 1.0]
+      command_yaw_range: [-1.0, 1.0]
+      command_resampling_time: 6.0
+      static_velocity_threshold: 0.02
+      static_command_ramp: 0.1
+      zero_command_fraction: 0.05
+      # MOVED FROM env: the cfg reads this from the commands block
+      # (quadruped_env_cfg.py: _phase_cfg["commands"]["standby_duration_s"]), so under env it
+      # was silently ignored -- and _transition_to_next_phase raises on unrecognised env keys,
+      # so it would also have killed the phase0->phase1 transition.
+      # Suppresses termination for the first 3 s of each episode so a hard landing does not
+      # end the episode. It ALSO forces zero velocity commands for that window, which is a
+      # real divergence from phase1's command distribution -- see check_arm_parity.py.
+      standby_duration_s: 3.0
+
+  phase2_torque:
+    inherits: default
+    env:
+      control_mode: torque
+      torque_scale: 7.0
+      terrain: rough
+      num_envs: 2000
+      action_scale: 0.25
+      observation_noise_scale: 0.05
+      max_timesteps: 1200000
+      episode_length_s: 20.0
+      base_angle_termination_thresh: 0.7
+    domain_randomization:
+      joint_friction_range: [0.03, 0.3]
+    events:
+      enable_pushes: true
+      push_velocity_range: [-0.4, 0.4]
+    rewards:
+      rew_scale_alive: 1.0
+      rew_scale_track_lin_vel_xy_exp: 1.5
+      rew_scale_track_ang_vel_z_exp: 0.75
+
+      rew_scale_lin_vel_z_l2: -2.0
+      rew_scale_ang_vel_xy_l2: -0.05
+      rew_scale_flat_orientation_l2: -5.0
+
+      rew_scale_dof_torques_l2: -0.0002
+      rew_scale_dof_acc_l2: -3.0e-7
+      rew_scale_action_rate_l2: -0.01
+
+      rew_scale_foot_height_penalty: -0.4
+      target_foot_height: 0.08
+      foot_height_sigma: 0.005
+
+      rew_scale_foot_landing_vel: -0.3
+      foot_landing_vel_sigma: 0.6
+
+      rew_scale_dof_pos_l2_stance: -0.5
+
+      rew_scale_gait_phase_sym: -0.15
+    commands:
+      command_lin_vel_std: 0.5
+      command_ang_vel_std: 0.5
+      vel_tracking_sigma_exp: 0.0
+      command_x_range: [-1.0, 1.0]
+      command_y_range: [-1.0, 1.0]
+      command_yaw_range: [-1.0, 1.0]
+      command_resampling_time: 6.0
+      static_velocity_threshold: 0.02
+      static_command_ramp: 0.1
+      zero_command_fraction: 0.05
+      # NOT set here, matching where you put it. If the landing grace is wanted for the whole
+      # torque arm rather than just phase1, add standby_duration_s: 3.0 to this block too.

@@ -411,6 +411,9 @@ class QuadrupedEnv(DirectRLEnv):
             "observation_noise_scale",
             "base_angle_termination_thresh",
             "action_scale",
+            "torque_scale",
+            "reward_dt_ref",
+            "joint_limit_barrier_stiffness",
         }
         # max_timesteps legitimately differs per phase (it defines the phase length) and is
         # consumed at init to build the curriculum thresholds, so it is not a mismatch to report.
@@ -425,6 +428,9 @@ class QuadrupedEnv(DirectRLEnv):
             "num_envs": lambda c: getattr(getattr(c, "scene", None), "num_envs", None),
             "episode_length_s": lambda c: getattr(c, "episode_length_s", None),
             "obs_history_len": lambda c: getattr(c, "obs_history_len", None),
+            # decimation and the actuator PD gains are both baked in at construction, so the
+            # control mode cannot be switched mid-run -- it needs a separate train invocation.
+            "control_mode": lambda c: getattr(c, "control_mode", None),
         }
         for k, v in p_cfg.get("env", {}).items():
             if k in _RUNTIME_SETTABLE_ENV:
@@ -602,14 +608,88 @@ class QuadrupedEnv(DirectRLEnv):
         self.ref_pos_xy[:, 0] += vx_world * self.step_dt
         self.ref_pos_xy[:, 1] += vy_world * self.step_dt
 
+    def _joint_limit_barrier(
+        self, torques: torch.Tensor, view, joint_ids, q: torch.Tensor
+    ) -> torch.Tensor:
+        """One-sided restoring torque that keeps joints off their mechanical stops.
+
+        In position mode `torch.clamp(targets, lower, upper)` makes limit violation
+        structurally impossible. Torque mode has no target to clamp, so the same guarantee
+        has to be re-established in the same place -- the action path -- rather than handed
+        to the reward function. Doing it here matters for the experiment as well as for the
+        robot: it leaves the reward set byte-identical between the position and torque
+        curricula, which is the entire point of running them against each other.
+
+        Two parts, both active only outside the soft limits:
+          1. Any commanded torque still pushing the joint further out is dropped.
+          2. A spring proportional to the overshoot pulls it back, at a stiffness chosen to
+             match the position mode's Kp so the boundary feels the same in both modes.
+
+        No damping term: blocking the driving torque already removes the energy source, so
+        the spring has nothing to fight. Add one here if a barrier oscillation ever shows up.
+        """
+        lower = view.data.soft_joint_pos_limits[0, joint_ids, 0]
+        upper = view.data.soft_joint_pos_limits[0, joint_ids, 1]
+        over_hi = (q - upper).clamp(min=0.0)
+        over_lo = (lower - q).clamp(min=0.0)
+
+        torques = torch.where(over_hi > 0.0, torques.clamp(max=0.0), torques)
+        torques = torch.where(over_lo > 0.0, torques.clamp(min=0.0), torques)
+        return torques + self.cfg.joint_limit_barrier_stiffness * (over_lo - over_hi)
+
+    def _apply_torque_action(self, delayed_actions: torch.Tensor) -> None:
+        """Drive the joints with commanded effort, bypassing the PD loop entirely.
+
+        Deliberately absent, relative to the position path:
+          - No nominal-pose offset. There is no well-defined "nominal torque" the way there is
+            a nominal stance, so the action is the whole command, not a residual on one.
+          - No backlash deadband. That model is expressed in position units and means nothing
+            applied to an effort command.
+
+        Joint limits are still enforced, just structurally rather than by clamping a target --
+        see _joint_limit_barrier. The actuator model's torque-speed clamp then applies on top,
+        so the commanded effort also stays bounded by what the motor could actually deliver at
+        its current speed.
+        """
+        torques = delayed_actions * self.cfg.torque_scale
+
+        if getattr(self, "is_heterogeneous", False):
+            for i, view in enumerate(self.robot_views):
+                indices = self.robot_view_indices[i]
+                if len(indices) == 0:
+                    continue
+                v_idx = self._view_joint_dof_idx[i]
+                view_torques = self._joint_limit_barrier(
+                    torques[indices], view, v_idx, view.data.joint_pos[indices][:, v_idx]
+                )
+                view.set_joint_effort_target(view_torques, joint_ids=v_idx)
+        else:
+            torques = self._joint_limit_barrier(
+                torques,
+                self.robot,
+                self._joint_dof_idx,
+                self.robot.data.joint_pos[:, self._joint_dof_idx],
+            )
+            self.robot.set_joint_effort_target(torques, joint_ids=self._joint_dof_idx)
+
     def _apply_action(self) -> None:
         """
         Applies the neural network action to the robot joints.
-        Mode: Absolute Position Control (PD)
+
+        Mode "position" (default): absolute position control -- the action is a residual on
+        the nominal stance, tracked by the actuator model's PD loop.
+
+        Mode "torque": the action IS the joint effort, with no PD loop anywhere in the path.
+        See the CONTROL_MODE note in quadruped_env_cfg.py for why the three changes (rate,
+        zeroed actuator gains, no position clamp) only make sense together.
         """
         # Fetch delayed action
         env_indices = torch.arange(self.num_envs, device=self.device)
         delayed_actions = self.action_history[env_indices, self.env_latencies, :]
+
+        if self.cfg.control_mode == "torque":
+            self._apply_torque_action(delayed_actions)
+            return
 
         # 1. Compute Targets
         targets = delayed_actions * self.cfg.action_scale + self.desired_joint_pos
@@ -1235,6 +1315,13 @@ class QuadrupedEnv(DirectRLEnv):
         self.extras["log"]["diag/foot_landing_speed_mps"] = (
             self.foot_landing_speed_sum.sum() / n_landings.clamp(min=1.0)
         )
+        # Normalise per-step reward to the reference control period, so that per-*second*
+        # reward is invariant to the control rate. Without this a 200 Hz torque run collects
+        # 4x the return per second of a 50 Hz position run purely from stepping more often,
+        # and the two action spaces are not being scored on the same thing. Position mode
+        # (step_dt == reward_dt_ref == 0.02) scales by exactly 1.0 and is unaffected.
+        if self.cfg.reward_dt_ref > 0.0:
+            total_reward = total_reward * (self.step_dt / self.cfg.reward_dt_ref)
         return total_reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:

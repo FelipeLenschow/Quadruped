@@ -183,6 +183,58 @@ TC_ALL = TerrainImporterCfg(
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  CONTROL MODE (position + PD  vs  direct joint torque)                      ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+#
+# "position" (default, unchanged behaviour): the policy outputs a residual on the nominal
+#   stance, `target = a * action_scale + q_default`, tracked by the actuator model's PD at
+#   200 Hz while the policy runs at 50 Hz (decimation 4).
+#
+# "torque": the policy outputs joint effort directly, `tau = a * torque_scale`, with no PD
+#   loop at all. Three things have to change together for that to mean anything:
+#     1. The policy must run at the rate the PD loop was running at -- 200 Hz, decimation 1.
+#        Chen et al. (Humanoids 2023) treat this as load-bearing, not incidental: a torque
+#        held open-loop for a 20 ms control step is what makes torque control "unstable".
+#     2. The actuator model's own PD gains must be zeroed, or the DCMotor keeps adding
+#        stiffness * (q_target - q) on top of our effort -- and q_target is whatever was
+#        last written (the default pose), i.e. a large unwanted spring.
+#     3. Nothing clamps joint positions any more (see _apply_action). Configuration sanity
+#        has to come from the dof_pos_l2 reward terms instead -- Chen et al. use L1 pose
+#        regularisation on hip and thigh at -1.0 for exactly this reason.
+#
+# Go1 is excluded: its ActuatorNetMLP maps a position-error history to torque, so there is
+# no meaningful way to drive it with a commanded effort.
+
+CONTROL_MODE: str = str(_phase_cfg["env"].get("control_mode", "position")).lower()
+if CONTROL_MODE not in ("position", "torque"):
+    raise ValueError(
+        f"env.control_mode must be 'position' or 'torque', got {CONTROL_MODE!r}"
+    )
+TORQUE_CONTROL: bool = CONTROL_MODE == "torque"
+
+
+def _strip_pd_gains(actuator_cfgs: dict) -> dict:
+    """Zero an actuator model's PD gains so only the commanded effort reaches the joint.
+
+    With stiffness and damping at 0, IdealPDActuator.compute reduces to
+    `computed_effort = control_action.joint_efforts`, and DCMotor._clip_effort then applies
+    the torque-speed envelope on top. That clamp is deliberately kept: it is a more faithful
+    limit than the fixed ±33 N·m clamp used in the torque-control literature, and it is what
+    keeps the commanded torque physically realisable at the joint's current speed.
+
+    ActuatorNetMLP entries (Go1) are left untouched -- that model maps a position-error
+    history to torque and has no gains to zero. Torque mode refuses to select Go1 outright,
+    see the robot_choice guard below; skipping here just avoids raising while building the
+    variant list for a robot the run will never spawn.
+    """
+    return {
+        k: (v if type(v).__name__.startswith("ActuatorNetMLP")
+            else v.replace(stiffness=0.0, damping=0.0))
+        for k, v in actuator_cfgs.items()
+    }
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  ROBOT VARIANTS (for heterogeneous multi-robot training)                    ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
@@ -193,6 +245,11 @@ ROBOT_VARIANTS: list[ArticulationCfg] = [
 ]
 for variant in ROBOT_VARIANTS:
     variant.prim_path = "/World/envs/env_.*/Robot"
+    # These are what _setup_scene actually builds the articulation from (it deep-copies the
+    # matching ROBOT_VARIANTS entry), so this -- not QuadrupedEnvCfg.robot -- is where the
+    # gains have to be zeroed for torque mode to take effect.
+    if TORQUE_CONTROL:
+        variant.actuators = _strip_pd_gains(variant.actuators)
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -205,14 +262,48 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     _yaml_rob = _phase_cfg["env"]["robot_cfg"]
     _rob = _yaml_rob.upper() if _yaml_rob else os.environ.get("QUADRUPED_ROBOT", os.environ.get("FORCE_ROBOT", "RANDOM")).upper()
     robot_choice: str = _rob
+    if TORQUE_CONTROL and (_rob in ("RANDOM", "") or "GO1" in _rob or "QUADRUPED" in _rob):
+        raise ValueError(
+            f"control_mode: torque cannot be used with robot_cfg={_rob!r}. Go1 drives its "
+            f"joints through an ActuatorNetMLP, which derives torque from a joint-position-"
+            f"error history -- there is nothing for a commanded effort to drive -- and RANDOM "
+            f"mixes Go1 in with the other two. Set env.robot_cfg to GO2 or A1."
+        )
+
+    # ── Control mode ──────────────────────────────────────────────────────────
+    control_mode: str = CONTROL_MODE
+    # N·m per unit of policy output, applied before the actuator's own torque-speed clamp.
+    # Scale this to the actuator envelope, not to action_scale. Isaac Lab's DCMotorCfg gives
+    # Go2 effort_limit 23.5 N·m and A1 33.5 N·m; Chen et al. use 10.0 on A1, so ~7 is the
+    # Go2 equivalent. Ignored in position mode.
+    torque_scale: float = float(_phase_cfg["env"].get("torque_scale", 7.0))
+    # Torque mode only. Restoring stiffness (N·m per rad of overshoot) for the soft joint
+    # limit barrier that replaces position mode's target clamp -- see _joint_limit_barrier.
+    # Defaults to the position mode's Kp so the limit feels the same in both modes.
+    joint_limit_barrier_stiffness: float = float(
+        _phase_cfg["env"].get("joint_limit_barrier_stiffness", 25.0)
+    )
 
     # ── Simulation ────────────────────────────────────────────────────────────
-    decimation = 4
+    # Torque control replaces the PD loop, so the policy has to run at the PD loop's rate:
+    # sim dt 0.005 with decimation 1 -> 200 Hz, versus 50 Hz for position control.
+    decimation = 1 if TORQUE_CONTROL else 4
     episode_length_s = _phase_cfg["env"]["episode_length_s"]
     obs_history_len = _phase_cfg["env"]["obs_history_len"]
+
+    # Per-step reward is normalised to this control period so that per-*second* reward is
+    # unchanged when the control rate changes -- otherwise a 200 Hz run collects 4x the
+    # return per second of wall-clock and the torque/position comparison is not matched.
+    # 0.02 is the 50 Hz position-mode period, so position runs are scaled by exactly 1.0
+    # and behave bit-identically to before. Set to 0.0 to disable the normalisation.
+    # NOTE: this does not fix the discount horizon -- gamma=0.99 spans 4x less time at
+    # 200 Hz. Consider raising gamma in the skrl agent cfg for torque runs.
+    reward_dt_ref: float = float(_phase_cfg["env"].get("reward_dt_ref", 0.02))
     sim: SimulationCfg = SimulationCfg(
         dt=0.005, 
-        render_interval=decimation,
+        # Physics steps per render. Pinned to 4 rather than `decimation` so the viewer still
+        # runs at ~50 Hz in torque mode instead of trying to draw every 200 Hz physics step.
+        render_interval=4,
         physx=sim_utils.PhysxCfg(
             gpu_max_rigid_contact_count=2**24,       # ~16.7M contacts
             gpu_max_rigid_patch_count=2**23,         # ~8.3M patches
@@ -246,8 +337,18 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # with DCMotorCfg actuators: Kp=25 Nm/rad, Kd=0.5 Nm·s/rad, τ_max=33.5 Nm
     robot: ArticulationCfg = UNITREE_A1_CFG.copy()
     robot.prim_path = "/World/envs/env_.*/Robot"
+    # Go1's ActuatorNetMLP. This template is not what gets spawned -- _setup_scene builds
+    # every articulation from ROBOT_VARIANTS -- so it is left as-is even in torque mode, and
+    # the torque-mode gain zeroing happens on the variants above instead.
     robot.actuators = UNITREE_QUADRUPED_CFG.actuators.copy()
-    spawn_height = 0.50
+    # Height the base is teleported to on reset. 0.50 assumes the PD loop holds the default
+    # stance through the ~0.2 m drop so the robot lands on its feet. Torque mode has no PD,
+    # and at policy init the commanded torques are random, so the legs are effectively limp:
+    # dropped from 0.50 the robot lands on its belly, trips base_height < 0.15 and dies on
+    # the first step of every episode. Spawn it standing instead.
+    spawn_height = float(
+        _phase_cfg["env"].get("spawn_height", 0.35 if TORQUE_CONTROL else 0.50)
+    )
 
     # ── Scene ─────────────────────────────────────────────────────────────────
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
@@ -266,7 +367,9 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
         # Must be >= decimation (4) so net_forces_w_history spans a whole control step -- the
         # max_contact_force penalty takes its peak across this window to catch touchdown impacts
         # that the single net_forces_w sample misses. Was 3, which covered only 15ms of the 20ms.
-        history_length=4,
+        # Spans one control step: 4 physics substeps at 50 Hz, 1 at 200 Hz. Kept at >=3 so the
+        # touchdown-impact peak still has a window to look back over in torque mode.
+        history_length=max(3, decimation),
         track_air_time=False,
     )
 
