@@ -159,5 +159,8 @@ phases:
 
       rew_scale_gait_phase_sym: -0.15
 
-      # rew_scale_pos_deviation_l1: -0.1
-      # rew_scale_yaw_deviation_l1: -0.1
+      rew_scale_pos_deviation_l1: -0.1
+      rew_scale_yaw_deviation_l1: -0.1
+
+      rew_scale_grf_balance: -0.2
+
