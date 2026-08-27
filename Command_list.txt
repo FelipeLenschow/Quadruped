@@ -14,6 +14,13 @@ export ROS_DOMAIN_ID=42
 
 sudo ip route add default via 192.168.123.40 dev eth0
 
+
+sudo ip addr add 10.13.3.18/24 dev eth0
+sudo ip route add default via 10.13.3.254
+sudo rm -f /etc/resolv.conf
+echo "nameserver 192.146.156.1" | sudo tee /etc/resolv.conf
+echo "10.13.3.190 gitlab.perro.tru.ca" | sudo tee -a /etc/hosts
+
 source venv_robot/bin/activate
 
 sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
@@ -21,5 +28,8 @@ export ROS_DOMAIN_ID=1
 
 https://app.diagrams.net/#G1GvJtiRjVAKMMoCu5S3hGDXMBrdPyqgD7#%7B%22pageId%22%3A%22iOS9X8VqbEqsnCgDxonq%22%7D
 
-# Pull the prebuilt Docker image (multi-arch: works on laptop/VDI and robot)
-sudo docker pull ghcr.io/felipelenschow/quadruped_env:latest && sudo docker tag ghcr.io/felipelenschow/quadruped_env:latest quadruped_env
+fast-discovery-server -i 0 -l 10.42.0.1 -p 11811
+
+export ROS_DISCOVERY_SERVER=10.42.0.1:11811
+export ROS_SUPER_CLIENT=TRUE
+ros2 daemon stop

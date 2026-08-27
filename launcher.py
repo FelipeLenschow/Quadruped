@@ -5,6 +5,7 @@ import glob
 import subprocess
 import json
 import platform
+import socket
 import yaml
 from datetime import datetime
 
@@ -16,6 +17,56 @@ CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__fil
 # Global Environment Detection
 IS_DOCKER = os.path.exists("/.dockerenv")
 IS_ROBOT = platform.machine().lower() in ["aarch64", "arm64"]
+
+def discovery_server_address():
+    """The configured FastDDS discovery server address ("host:port")."""
+    server = "10.42.0.1:11811"
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            net = (yaml.safe_load(f) or {}).get("network", {}) or {}
+        server = str(net.get("discovery_server", server))
+    except Exception:
+        pass
+    return server
+
+
+def resolve_discovery_server():
+    """Return the FastDDS discovery server address, or None to use plain multicast.
+
+    The robot's WiFi AP drops multicast, so DDS discovery never completes over
+    wireless even though ping is fine — `ros2 topic list` just comes back empty.
+    A discovery server on the robot replaces multicast with unicast client/server.
+    On cable multicast works, so this stays off there.
+
+    config.yaml -> network.discovery_mode: auto (default) | on | off
+    """
+    server, mode = discovery_server_address(), "auto"
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            net = (yaml.safe_load(f) or {}).get("network", {}) or {}
+        mode = str(net.get("discovery_mode", mode)).lower()
+    except Exception:
+        pass
+
+    if mode == "off":
+        return None
+    if mode == "on":
+        return server
+
+    # auto: only when this machine sits on the server's subnet, i.e. it joined the
+    # robot's hotspot rather than the wired network. connect() on a UDP socket
+    # sends nothing — it just resolves which local address the route would use.
+    try:
+        host, port = server.split(":")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(0.2)
+        sock.connect((host, int(port)))
+        local_ip = sock.getsockname()[0]
+        sock.close()
+    except Exception:
+        return None
+    return server if local_ip.rsplit(".", 1)[0] == host.rsplit(".", 1)[0] else None
+
 
 def ckpt_display_name(path):
     """Extract the run folder name from a full checkpoint path."""
@@ -256,6 +307,7 @@ def run_cli_menu():
         print("  [M] MCAP Log & Replay")
         print("  [R] RQT Graph")
         print("  [F] TF2 Tree")
+        print("  [D] Discovery Server (needed for ROS 2 over WiFi)")
     else:
         print("  [X] Play MuJoCo (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Gazebo (REQUIRES DOCKER OR PY3.10)")
@@ -272,6 +324,7 @@ def run_cli_menu():
         print("  [X] MCAP Log & Replay (REQUIRES DOCKER OR PY3.10)")
         print("  [X] RQT Graph (REQUIRES DOCKER OR PY3.10)")
         print("  [X] TF2 Tree (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Discovery Server (REQUIRES DOCKER OR PY3.10)")
 
     action_map = {
         "0": "repeat",
@@ -298,13 +351,15 @@ def run_cli_menu():
         "R": "rqt_graph",
         "f": "tf2_tree",
         "F": "tf2_tree",
+        "d": "discovery_server",
+        "D": "discovery_server",
     }
     
     default_action = "0" if last_cmd else "4"
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-7, K, V, C, T, P, M, R, F] (default {default_action}): ").strip() or default_action
+    choice = input(f"Enter choice [0-7, K, V, C, T, P, M, R, F, D] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice.lower(), "None")
     
     if action == "hardware_tools":
@@ -345,7 +400,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "rqt_graph", "tf2_tree"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "rqt_graph", "tf2_tree", "discovery_server"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -400,7 +455,7 @@ def run_cli_menu():
     selected_module_name = "None"
     selected_module_path = "."
     
-    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         
         if not modules:
@@ -433,7 +488,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree"]:
+    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -499,7 +554,7 @@ def run_cli_menu():
         pass
 
     domain_id = default_domain
-    if action not in ["train", "isaac_lab", "eval_policy"]:
+    if action not in ["train", "isaac_lab", "eval_policy", "discovery_server"]:
         domain_id = input(f"Enter ROS_DOMAIN_ID (default {default_domain}): ").strip() or default_domain
     robot_cfg = "UNITREE_GO2_CFG" # Default for now
     terrain_cfg = "flat"
@@ -730,6 +785,29 @@ def main():
     # Set up environment variables
     env = os.environ.copy()
     env["ROS_DOMAIN_ID"] = str(domain_id)
+
+    # ROS 2 discovery: multicast on cable, discovery server over the robot's WiFi AP.
+    discovery_server = resolve_discovery_server()
+    if discovery_server:
+        env["ROS_DISCOVERY_SERVER"] = discovery_server
+        # Without this the CLI only sees topics it matched itself, so `ros2 topic
+        # list` looks broken even when discovery is working.
+        env["ROS_SUPER_CLIENT"] = "TRUE"
+        print(f"[Launcher] Wireless path detected -> ROS_DISCOVERY_SERVER={discovery_server}")
+        print(f"[Launcher] Requires 'fast-discovery-server -i 0 -l {discovery_server.replace(':', ' -p ')}' on the robot.")
+    else:
+        # Be authoritative: a stale export from a previous wireless session would
+        # otherwise break discovery once you are back on cable.
+        env.pop("ROS_DISCOVERY_SERVER", None)
+        env.pop("ROS_SUPER_CLIENT", None)
+
+    if (discovery_server or None) != (os.environ.get("ROS_DISCOVERY_SERVER") or None):
+        # The daemon caches the previous discovery view across cable/WiFi switches.
+        try:
+            subprocess.run(["ros2", "daemon", "stop"], env=env, timeout=10,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
     env["QUADRUPED_ROBOT_CFG"] = robot_cfg
     env["QUADRUPED_ROBOT"] = robot_cfg
     if teleop:
@@ -867,7 +945,7 @@ def main():
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree"):
+    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "discovery_server"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable 
@@ -979,6 +1057,18 @@ def main():
             
         elif action == "foxglove":
             cmd = ["ros2", "launch", "foxglove_bridge", "foxglove_bridge_launch.xml"]
+
+        elif action == "discovery_server":
+            # Replaces multicast discovery, which the robot's WiFi AP drops.
+            # Must be running before any node that has ROS_DISCOVERY_SERVER set,
+            # otherwise discovery fails outright instead of falling back.
+            host, _, port = discovery_server_address().partition(":")
+            addrs = subprocess.run(["hostname", "-I"], capture_output=True, text=True).stdout.split()
+            if host not in addrs:
+                print(f"\n[WARNING] {host} is not an address on this machine ({' '.join(addrs) or 'none found'}).")
+                print("          fast-discovery-server can only bind to a local address.")
+                print("          On the robot this means the WiFi AP is not up yet.\n")
+            cmd = ["fast-discovery-server", "-i", "0", "-l", host, "-p", port or "11811"]
 
         elif action == "rqt_graph":
             cmd = ["ros2", "run", "rqt_graph", "rqt_graph"]

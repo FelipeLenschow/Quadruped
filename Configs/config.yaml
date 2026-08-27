@@ -53,6 +53,16 @@ network:
   interface: "eth0"
   ros_domain_id: 42
 
+  # ROS 2 discovery. The robot's WiFi AP drops multicast, so DDS discovery never
+  # completes over wireless (ping is fine, `ros2 topic list` is empty). A FastDDS
+  # discovery server on the robot replaces multicast with unicast client/server.
+  # 10.42.0.1 is the AP's own address, fixed by NetworkManager shared mode, so it
+  # is the same for every laptop that joins — nothing per-machine to edit.
+  # Start it on the robot with:  fast-discovery-server -i 0 -l 10.42.0.1 -p 11811
+  discovery_server: "10.42.0.1:11811"
+  discovery_mode: "auto"     # auto = on only when this machine is on the AP's subnet
+                             # on   = always use it | off = always plain multicast
+
 # --- Safety ---
 safety:
   watchdog_timeout: 0.35     # Seconds before torque is zeroed if no heartbeat
