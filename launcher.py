@@ -114,6 +114,10 @@ def write_fastdds_profile(local_ip):
         <type>UDPv4</type>
         <interfaceWhiteList>
           <address>%s</address>
+          <!-- Loopback is required or two participants on THIS machine cannot
+               find each other - which breaks the robot, where the discovery
+               server and the nodes both run locally. -->
+          <address>127.0.0.1</address>
         </interfaceWhiteList>
       </transport_descriptor>
     </transport_descriptors>

@@ -59,6 +59,9 @@ if [ -n "$_local" ] && [ "${_local%.*}" = "${_host%.*}" ]; then
         <type>UDPv4</type>
         <interfaceWhiteList>
           <address>${_local}</address>
+          <!-- Loopback is required or two participants on THIS machine cannot
+               find each other (robot: discovery server + nodes are both local). -->
+          <address>127.0.0.1</address>
         </interfaceWhiteList>
       </transport_descriptor>
     </transport_descriptors>
