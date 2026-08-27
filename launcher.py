@@ -1155,7 +1155,14 @@ def main():
             # No robot_key or ckpt needed for this
             
         elif action == "teleop_joy":
+            # Without config_filepath the launch defaults to joy_config:=ps3,
+            # which puts the deadman on the F710's Logitech button and never maps
+            # linear.y - moving the sticks then does nothing at all.
+            joy_cfg = os.path.abspath(os.path.join("Configs", "joy_f710.config.yaml"))
             cmd = ["ros2", "launch", "teleop_twist_joy", "teleop-launch.py"]
+            if os.path.exists(joy_cfg):
+                cmd.append(f"config_filepath:={joy_cfg}")
+                print(f"[Launcher] Joystick config: {joy_cfg}")
 
         elif action == "test_joints":
             bridge_script = os.path.abspath(os.path.join("Unitree", "test_joints.py"))

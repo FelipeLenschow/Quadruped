@@ -1,0 +1,52 @@
+# Logitech Gamepad F710 in X (XInput) mode -> Linux xpad driver, Xbox mapping.
+#
+# The teleop_twist_joy launch file defaults to joy_config:=ps3, which assumes a
+# PS3 pad. On this controller that puts the deadman on button 8 (the Logitech
+# button in the middle), leaves the right stick unused, and never sets
+# linear.y - so the robot cannot strafe even though it is trained for it.
+#
+# Scales stay inside the trained command envelope. training_phases.yaml uses
+# command_x_range / y_range / yaw_range = [-1.0, 1.0], so normal speed is half
+# of that and turbo reaches the limit. Do not raise these above 1.0: the policy
+# has never seen a command larger than that.
+#
+# F710 (X mode) reference:
+#   axes    0=LX  1=LY  2=LT  3=RX  4=RY  5=RT  6=DpadX  7=DpadY
+#   buttons 0=A  1=B  2=X  3=Y  4=LB  5=RB  6=Back  7=Start  8=Logitech  9=L3  10=R3
+#   Note LT/RT are AXES here, not buttons - which is why the ps3 config's
+#   "L2 shoulder button" deadman does nothing on this pad.
+
+joy_node:
+  ros__parameters:
+    deadzone: 0.12        # launch file default is 0.30, which swallows small inputs
+    autorepeat_rate: 20.0
+
+teleop_twist_joy_node:
+  ros__parameters:
+    # Left stick: forward/back and strafe.
+    # DIRECTION IS UNVERIFIED - check in MuJoCo before the real robot. If pushing
+    # the stick forward walks the robot BACKWARDS, negate scale_linear.x (and
+    # likewise y / yaw if left-right or turning come out mirrored).
+    axis_linear:
+      x: 1
+      y: 0
+    scale_linear:
+      x: 0.5
+      y: 0.4
+    scale_linear_turbo:
+      x: 1.0
+      y: 0.8
+
+    # Right stick horizontal: yaw.
+    axis_angular:
+      yaw: 3
+    scale_angular:
+      yaw: 0.5
+    scale_angular_turbo:
+      yaw: 1.0
+
+    # Deadman on a shoulder button rather than the Logitech button. Releasing it
+    # publishes a zero Twist, which is what stops the robot - real_driver.py has
+    # no cmd_vel timeout of its own.
+    enable_button: 4        # LB
+    enable_turbo_button: 5  # RB
