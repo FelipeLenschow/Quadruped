@@ -30,6 +30,7 @@ https://app.diagrams.net/#G1GvJtiRjVAKMMoCu5S3hGDXMBrdPyqgD7#%7B%22pageId%22%3A%
 
 fast-discovery-server -i 0 -l 10.42.0.1 -p 11811
 
+export ROS_DOMAIN_ID=42
 export ROS_DISCOVERY_SERVER=10.42.0.1:11811
 export ROS_SUPER_CLIENT=TRUE
 ros2 daemon stop
