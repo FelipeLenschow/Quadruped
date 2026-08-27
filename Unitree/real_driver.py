@@ -115,6 +115,18 @@ class RealDriver(Node):
             self.kd = 0.0
             self.get_logger().warn(f"[RealDriver] Could not load gains from config.yaml, defaulting to 0.0: {e}")
 
+        # Damping used when the safety gate cuts the policy. kp=0 with kd=0 leaves
+        # the joints completely free and the robot collapses; a damping kd makes
+        # it sink under control. The motor applies this itself, so it is bounded
+        # by the motor, not by the (zero) safety torque budget.
+        self.emergency_kd = 5.0
+        try:
+            with open(config_path, 'r') as f:
+                self.emergency_kd = float(
+                    (yaml.safe_load(f) or {}).get("safety", {}).get("emergency_kd", 5.0))
+        except Exception:
+            pass
+
         self.create_subscription(Float32, "/control/kp", self.kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
         self._startup_console_check = True
@@ -241,8 +253,9 @@ class RealDriver(Node):
             self.low_cmd.motor_cmd[i].dq = 0.0
             
             if max_torque <= 0.1:
+                # Emergency: damping only, no position hold.
                 self.low_cmd.motor_cmd[i].kp = 0.0
-                self.low_cmd.motor_cmd[i].kd = 0.0
+                self.low_cmd.motor_cmd[i].kd = self.emergency_kd
                 self.low_cmd.motor_cmd[i].tau = 0.0
             else:
                 self.low_cmd.motor_cmd[i].kp = self.kp

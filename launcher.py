@@ -31,6 +31,22 @@ def discovery_server_address():
     return server
 
 
+def sdk_network_interface():
+    """Interface the Unitree SDK binds to (config.yaml -> network.interface).
+
+    Without it the SDK calls ChannelFactoryInitialize(networkInterface=None) and
+    lets CycloneDDS pick. That was unambiguous while the robot only had eth0;
+    now that it also has a wlan0 for the WiFi AP, picking the wrong one means
+    the SDK never finds the robot's MCU on 192.168.123.x.
+    """
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            net = (yaml.safe_load(f) or {}).get("network", {}) or {}
+        return str(net.get("interface", "") or "").strip() or None
+    except Exception:
+        return None
+
+
 def _discovery_server_running():
     """True if a fast-discovery-server process is running on THIS machine."""
     try:
@@ -1127,6 +1143,10 @@ def main():
                 f"--robot={robot_key}",
                 f"--obs_dim={obs_dim}",
             ]
+            sdk_iface = sdk_network_interface()
+            if sdk_iface:
+                cmd.append(f"--interface={sdk_iface}")
+                print(f"[Launcher] Unitree SDK bound to interface: {sdk_iface}")
             if action == "real_deploy" and abs_ckpt:
                 cmd.append(f"--internal_policy={abs_ckpt}")
 
@@ -1140,6 +1160,9 @@ def main():
         elif action == "test_joints":
             bridge_script = os.path.abspath(os.path.join("Unitree", "test_joints.py"))
             cmd = [sys_python, bridge_script]
+            sdk_iface = sdk_network_interface()
+            if sdk_iface:
+                cmd.append(f"--interface={sdk_iface}")
         
         elif action == "plotjuggler":
             cmd = ["ros2", "run", "plotjuggler", "plotjuggler"]

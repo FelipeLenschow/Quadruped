@@ -40,6 +40,8 @@ class Ros2MujocoDriver(Node):
         self.motor_cfg = self.config.get("motor", {})
         self.kp = float(self.ctrl_cfg.get("kp", 0.0))
         self.kd = float(self.ctrl_cfg.get("kd", 0.0))
+        self.emergency_kd = float(
+            self.config.get("safety", {}).get("emergency_kd", 5.0))
 
 
 
@@ -270,12 +272,22 @@ class Ros2MujocoDriver(Node):
             sat_effort = float(self.motor_cfg.get("max_torque", 45.0))
             vel_lim = float(self.motor_cfg.get("max_velocity", 30.0))
         
-        if effort_limit <= 0.1:
-            # Go limp
+        emergency = effort_limit <= 0.1
+        if emergency:
+            # Damping only, no position hold - mirrors real_driver.send_to_sdk,
+            # which sends kp=0 with a damping kd so the robot sinks under control
+            # instead of collapsing.
             kp = 0.0
-            kd = 0.0
+            kd = self.emergency_kd
 
         torques = kp * pos_err + kd * (0 - v)
+
+        if emergency:
+            # On the real robot the motor controller applies this damping itself,
+            # bounded by the motor, NOT by the safety torque budget - which is
+            # zero here. Clipping to effort_limit like the normal path would
+            # cancel the damping entirely and make the robot go limp again.
+            return np.clip(torques, -sat_effort, sat_effort)
 
         vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
         v_clamp = np.clip(v, -vel_at_lim, vel_at_lim)

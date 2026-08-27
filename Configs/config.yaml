@@ -65,7 +65,10 @@ network:
 
 # --- Safety ---
 safety:
-  watchdog_timeout: 0.35     # Seconds before torque is zeroed if no heartbeat
+  watchdog_timeout: 0.35     # Seconds before the policy is cut if no heartbeat
+  emergency_kd: 5.0          # Damping applied on emergency stop (kp=0). Zero would
+                             # leave the joints free and the robot would collapse;
+                             # this makes it sink under control instead.
   supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
   global_max_torque_percent: 55.0 # Maximum allowed torque as a percentage of physical motor capacity (45.0 Nm)
   base_tilt_limit_deg: 30   # Trigger emergency stop if base tilts past 30 degrees in any direction
