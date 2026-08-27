@@ -31,6 +31,16 @@ def discovery_server_address():
     return server
 
 
+def _discovery_server_running():
+    """True if a fast-discovery-server process is running on THIS machine."""
+    try:
+        return subprocess.run(["pgrep", "-f", "fast-discovery-server"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=5).returncode == 0
+    except Exception:
+        return False
+
+
 def resolve_discovery_server():
     """Return (server, local_ip) for the wireless path, or (None, None) for cable.
 
@@ -67,6 +77,15 @@ def resolve_discovery_server():
 
     if mode == "on":
         return server, local_ip
+
+    if local_ip == host:
+        # This machine hosts the discovery server - the robot, which is also the
+        # AP and therefore ALWAYS holds this address. Subnet checks cannot tell
+        # WiFi from cable here, so ask the process table instead: the server
+        # would be running locally. Running it is the operator's way of saying
+        # "we are on wireless", which is exactly the intent we want to follow.
+        return (server, local_ip) if _discovery_server_running() else (None, None)
+
     same_subnet = local_ip.rsplit(".", 1)[0] == host.rsplit(".", 1)[0]
     return (server, local_ip) if same_subnet else (None, None)
 
