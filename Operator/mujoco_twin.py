@@ -24,9 +24,10 @@ class MujocoTwinNode(Node):
     Passive MuJoCo Digital Twin Node.
     Listens to ROS 2 topics and updates the MuJoCo visualization.
     """
-    def __init__(self, robot_type="go2", use_estimator=False):
+    def __init__(self, robot_type="go2", use_estimator=False, show_ghost=True):
         super().__init__("mujoco_twin_node")
         self.robot_type = robot_type
+        self.show_ghost = show_ghost
 
         # 1. Load MuJoCo Model
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Mujoco"))
@@ -36,42 +37,47 @@ class MujocoTwinNode(Node):
             mjcf_path = os.path.join(base_dir, "scene.xml")
             menagerie_dir = base_dir
 
-        # --- Generate Ghost Robot ---
-        # 1. Generate go2_ghost.xml
-        with open(os.path.join(menagerie_dir, "go2.xml"), "r") as f:
-            go2_xml = f.read()
+        # The ghost is a second, transparent green robot showing the COMMANDED
+        # joint positions next to the measured ones. Optional: it doubles the
+        # geometry and is only useful when comparing command vs response.
+        if self.show_ghost:
+            # --- Generate Ghost Robot ---
+            # 1. Generate go2_ghost.xml
+            with open(os.path.join(menagerie_dir, "go2.xml"), "r") as f:
+                go2_xml = f.read()
         
-        go2_xml = go2_xml.replace('model="go2"', 'model="go2_ghost"')
-        go2_xml = go2_xml.replace('name="', 'name="cmd_')
-        go2_xml = go2_xml.replace('joint="', 'joint="cmd_')
-        go2_xml = go2_xml.replace('child="', 'child="cmd_')
-        go2_xml = go2_xml.replace('class="', 'class="cmd_')
-        # Replace material definitions with transparent rgba (Greenish)
-        go2_xml = re.sub(r'material="[^"]+"', 'rgba="0.2 0.8 0.2 0.4"', go2_xml)
-        # Remove asset block to prevent duplicate mesh loads
-        go2_xml = re.sub(r'<asset>.*?</asset>', '', go2_xml, flags=re.DOTALL)
+            go2_xml = go2_xml.replace('model="go2"', 'model="go2_ghost"')
+            go2_xml = go2_xml.replace('name="', 'name="cmd_')
+            go2_xml = go2_xml.replace('joint="', 'joint="cmd_')
+            go2_xml = go2_xml.replace('child="', 'child="cmd_')
+            go2_xml = go2_xml.replace('class="', 'class="cmd_')
+            # Replace material definitions with transparent rgba (Greenish)
+            go2_xml = re.sub(r'material="[^"]+"', 'rgba="0.2 0.8 0.2 0.4"', go2_xml)
+            # Remove asset block to prevent duplicate mesh loads
+            go2_xml = re.sub(r'<asset>.*?</asset>', '', go2_xml, flags=re.DOTALL)
         
-        ghost_path = os.path.join(menagerie_dir, "twin_go2_ghost.xml")
-        with open(ghost_path, "w") as f:
-            f.write(go2_xml)
+            ghost_path = os.path.join(menagerie_dir, "twin_go2_ghost.xml")
+            with open(ghost_path, "w") as f:
+                f.write(go2_xml)
             
-        # 2. Generate scene_twin.xml
-        with open(mjcf_path, "r") as f:
-            scene_xml = f.read()
+            # 2. Generate scene_twin.xml
+            with open(mjcf_path, "r") as f:
+                scene_xml = f.read()
             
-        scene_xml = scene_xml.replace(
-            '<include file="go2.xml"/>',
-            '<include file="go2.xml"/>\n  <include file="twin_go2_ghost.xml"/>'
-        )
+            scene_xml = scene_xml.replace(
+                '<include file="go2.xml"/>',
+                '<include file="go2.xml"/>\n  <include file="twin_go2_ghost.xml"/>'
+            )
         
-        scene_twin_path = os.path.join(menagerie_dir, "twin_scene.xml")
-        with open(scene_twin_path, "w") as f:
-            f.write(scene_xml)
+            scene_twin_path = os.path.join(menagerie_dir, "twin_scene.xml")
+            with open(scene_twin_path, "w") as f:
+                f.write(scene_xml)
             
-        mjcf_path = scene_twin_path
-        # --- End Generate Ghost Robot ---
+            mjcf_path = scene_twin_path
+            # --- End Generate Ghost Robot ---
 
-        self.get_logger().info(f"Loading MuJoCo Twin Model with Ghost from {mjcf_path}")
+        self.get_logger().info(
+            f"Loading MuJoCo Twin Model{' with Ghost' if self.show_ghost else ''} from {mjcf_path}")
         self.model = mujoco.MjModel.from_xml_path(mjcf_path)
         self.data = mujoco.MjData(self.model)
 
@@ -87,7 +93,7 @@ class MujocoTwinNode(Node):
             "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
         ]
         self.qpos_addr = np.zeros(12, dtype=int)
-        self.cmd_qpos_addr = np.zeros(12, dtype=int)
+        self.cmd_qpos_addr = np.full(12, -1, dtype=int)
         for i, name in enumerate(self.isaac_names):
             j_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
             if j_id != -1:
@@ -207,10 +213,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
     parser.add_argument("--use_estimator", action="store_true", help="Use estimated odometry instead of ground truth")
+    parser.add_argument("--no_ghost", action="store_true",
+                        help="Hide the green ghost robot showing commanded joint positions")
     args = parser.parse_args()
 
     rclpy.init()
-    node = MujocoTwinNode(robot_type=args.robot, use_estimator=args.use_estimator)
+    node = MujocoTwinNode(robot_type=args.robot, use_estimator=args.use_estimator,
+                          show_ghost=not args.no_ghost)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

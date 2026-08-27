@@ -489,6 +489,7 @@ def run_cli_menu():
             last_cmd.get("run_name", ""),
             last_cmd.get("domain_id", "1"),
             last_cmd.get("use_estimator", False),
+            last_cmd.get("show_ghost", True),
             last_cmd.get("record_session", False),
             last_cmd.get("training_phase", ""),
         )
@@ -636,6 +637,7 @@ def run_cli_menu():
         teleop = True # Always active internally via /cmd_vel subscription
     run_name = ""
     use_estimator = False
+    show_ghost = True
     training_phase = ""
 
     if action in ["train", "isaac_lab", "eval_policy", "isaac_sim", "mujoco", "gazebo"]:
@@ -725,6 +727,12 @@ def run_cli_menu():
         ans = input("Use State Estimator? [Y/n] (default Y): ").lower().strip()
         use_estimator = ans != "n"
 
+    if action == "mujoco_twin":
+        # Second transparent green robot drawn from /commands/joint_commands,
+        # for comparing what was commanded against what the joints actually did.
+        ans = input("Show commanded-position ghost (green robot)? [Y/n] (default Y): ").lower().strip()
+        show_ghost = ans != "n"
+
     # Auto-record prompt if launching driver
     record_session = False
     if action in ["mujoco", "gazebo", "isaac_sim", "real_deploy"]:
@@ -798,7 +806,7 @@ def run_cli_menu():
                 selected_file = files[0]
             run_name = os.path.join(record_dir, selected_file)
 
-    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, record_session, training_phase
+    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, show_ghost, record_session, training_phase
 
 def main():
     (
@@ -815,6 +823,7 @@ def main():
         run_name,
         domain_id,
         use_estimator,
+        show_ghost,
         record_session,
         training_phase,
     ) = run_cli_menu()
@@ -834,6 +843,7 @@ def main():
         "run_name": run_name,
         "domain_id": domain_id,
         "use_estimator": use_estimator,
+        "show_ghost": show_ghost,
         "record_session": record_session,
         "training_phase": training_phase,
     })
@@ -1076,6 +1086,8 @@ def main():
             ]
             if use_estimator:
                 cmd.append("--use_estimator")
+            if not show_ghost:
+                cmd.append("--no_ghost")
         elif action == "gazebo_twin":
             bridge_script = os.path.abspath(os.path.join("Operator", "gazebo_twin.py"))
             cmd = [
