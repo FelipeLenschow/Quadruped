@@ -9,7 +9,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState, Imu
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Float32MultiArray
 import yaml
 
 # Add project root to sys.path
@@ -120,12 +120,27 @@ class RealDriver(Node):
         # it sink under control. The motor applies this itself, so it is bounded
         # by the motor, not by the (zero) safety torque budget.
         self.emergency_kd = 5.0
+        self.contact_threshold = 50.0
         try:
             with open(config_path, 'r') as f:
-                self.emergency_kd = float(
-                    (yaml.safe_load(f) or {}).get("safety", {}).get("emergency_kd", 5.0))
+                _cfg = yaml.safe_load(f) or {}
+            self.emergency_kd = float(_cfg.get("safety", {}).get("emergency_kd", 5.0))
+            # Was hardcoded to 50 while config.yaml carried the knob unread. If it
+            # is too high the feet never register contact, the estimator never
+            # gets its leg-odometry correction, and the velocity estimate diverges
+            # without bound - which feeds garbage straight into the policy.
+            self.contact_threshold = float(
+                _cfg.get("state_estimator", {}).get("contact_threshold", 50.0))
         except Exception:
             pass
+        self.get_logger().info(
+            f"[RealDriver] Contact threshold: {self.contact_threshold:.0f} (raw FSR)")
+
+        # Raw foot force, so the threshold can be chosen by measuring instead of
+        # guessing: watch /sensors/foot_force while loading each foot.
+        self.foot_force_pub = self.create_publisher(
+            Float32MultiArray, "/sensors/foot_force", 10)
+        self._ff_tick = 0
 
         self.create_subscription(Float32, "/control/kp", self.kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
@@ -185,7 +200,14 @@ class RealDriver(Node):
         contact = [0.0, 0.0, 0.0, 0.0]
         if hasattr(raw, 'foot_force'):
             ff = raw.foot_force
-            thr = 50
+            thr = self.contact_threshold
+
+            # 200 Hz loop -> publish at 50 Hz
+            self._ff_tick += 1
+            if self._ff_tick % 4 == 0:
+                msg = Float32MultiArray()
+                msg.data = [float(ff[1]), float(ff[0]), float(ff[3]), float(ff[2])]  # FL,FR,RL,RR
+                self.foot_force_pub.publish(msg)
             contact = [
                 float(ff[1] > thr),  # FL
                 float(ff[0] > thr),  # FR
