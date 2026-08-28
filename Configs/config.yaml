@@ -19,7 +19,7 @@ motor:
 state_estimator:
   use_estimator: false    # Switch between perfect and estimated odom
   dt: 0.02                # Control loop dt (50Hz)
-  contact_threshold: 50.0 # Raw FSR value threshold for binary contact flag
+  contact_threshold: 22.0 # Raw FSR value threshold for binary contact flag
 
   # Linear Kalman Filter (LKF) — 6-state: body velocity + accelerometer bias
   # Increase q_vel  → trust IMU more  (faster response, more noise)
@@ -29,7 +29,6 @@ state_estimator:
     process_noise_bias: 0.001  # Q diagonal — accel bias states (m/s²)²/step
     measurement_noise:  0.05   # R diagonal — leg odometry measurement (m/s)²
 
-# --- Safety Limits (Radians) ---
 # --- Safety Limits (Radians) ---
 # Official Unitree Go2 Hardware Limits
 joint_limits:
@@ -53,9 +52,22 @@ network:
   interface: "eth0"
   ros_domain_id: 42
 
+  # ROS 2 discovery. The robot's WiFi AP drops multicast, so DDS discovery never
+  # completes over wireless (ping is fine, `ros2 topic list` is empty). A FastDDS
+  # discovery server on the robot replaces multicast with unicast client/server.
+  # 10.42.0.1 is the AP's own address, fixed by NetworkManager shared mode, so it
+  # is the same for every laptop that joins — nothing per-machine to edit.
+  # Start it on the robot with:  fast-discovery-server -i 0 -l 10.42.0.1 -p 11811
+  discovery_server: "10.42.0.1:11811"
+  discovery_mode: "auto"     # auto = on only when this machine is on the AP's subnet
+                             # on   = always use it | off = always plain multicast
+
 # --- Safety ---
 safety:
-  watchdog_timeout: 0.35     # Seconds before torque is zeroed if no heartbeat
+  watchdog_timeout: 0.35     # Seconds before the policy is cut if no heartbeat
+  emergency_kd: 5.0          # Damping applied on emergency stop (kp=0). Zero would
+                             # leave the joints free and the robot would collapse;
+                             # this makes it sink under control instead.
   supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
   global_max_torque_percent: 55.0 # Maximum allowed torque as a percentage of physical motor capacity (45.0 Nm)
   base_tilt_limit_deg: 30   # Trigger emergency stop if base tilts past 30 degrees in any direction
@@ -67,7 +79,7 @@ safety:
 poses:
   default_interp_duration: 3.0   # Seconds to interpolate between poses
   stand:    [0.1, -0.1, 0.1, -0.1, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5]
-  lie_flat: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  lie_flat: [0.1, -0.1, 0.5, -0.5, 1.25, 1.25, 1.25, 1.25, -2.6, -2.6, -2.6, -2.6]
   sit:      [0.1, -0.1, 0.1, -0.1, 1.2, 1.2, 2.0, 2.0, -2.0, -2.0, -2.5, -2.5]
 
 # --- MCAP Logging & Telemetry Recording ---

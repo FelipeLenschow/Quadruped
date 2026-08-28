@@ -88,6 +88,8 @@ class SupervisorNode(Node):
             Float32, "/safety/base_forward_tilt_limit_deg", 10)
         self.rom_margin_pub = self.create_publisher(
             Float32, "/safety/joint_rom_safety_margin", 10)
+        self.watchdog_pub = self.create_publisher(
+            Float32, "/safety/watchdog_timeout", 10)
 
         # ------------------------------------------------------------------
         # 3. Timer
@@ -188,6 +190,8 @@ class SupervisorNode(Node):
             Float32(data=float(self.base_forward_tilt_limit_deg)))
         self.rom_margin_pub.publish(
             Float32(data=float(self.joint_rom_safety_margin)))
+        self.watchdog_pub.publish(
+            Float32(data=float(self.watchdog_timeout)))
 
         # Console status report on every heartbeat (replaces the last multi-line block in-place)
         self.heartbeat_count += 1

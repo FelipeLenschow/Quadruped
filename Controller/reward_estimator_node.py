@@ -42,7 +42,14 @@ UNAVAILABLE_TERMS = (
     "max_contact_force",    # needs per-foot normal force
     "pos_deviation",        # needs the training-side leashed reference pose
     "yaw_deviation",
+    "foot_landing_vel",     # see note below
 )
+# foot_landing_vel is the one entry here that is approximable rather than truly absent: the env
+# reads world-frame foot Z velocity on the step BEFORE touchdown, and on the robot that would be
+# d/dt of the body-frame foot Z from get_foot_positions() plus the base's own vertical velocity.
+# The second half is a Kalman output, and base Z is the least trustworthy channel the estimator
+# has, so the result would look like the training term while being driven by estimator error.
+# Reported as 0.0 until there is a foot velocity worth trusting.
 
 
 def _deep_update(base, override):
@@ -177,6 +184,9 @@ class RewardEstimatorNode(Node):
         self.last_time = time.time()
 
         self.feet_air_time = np.zeros(4)
+        # Peak height of the current swing, per foot -- the foot-height terms are scored on this
+        # at touchdown, mirroring feet_height_max in quadruped_env.py.
+        self.feet_height_max = np.zeros(4)
         self.last_contact = np.zeros(4)
         self.feet_height_max = np.zeros(4)
 
@@ -198,7 +208,8 @@ class RewardEstimatorNode(Node):
             "base_acc_l2",
             "action_rate_l2",
             "feet_air_time",
-            "foot_height",
+            "foot_height_penalty",
+            "foot_height_reward",
             "feet_air_penalty",
             "feet_air_penalty_static",
             "joint_vel_l2_static",
@@ -321,15 +332,25 @@ class RewardEstimatorNode(Node):
         dphi_dt = -2.0 * air_err / sigma_air * phi_air
         air_time_val = float(np.sum(dphi_dt * dt * airborne)) * moving_mask
 
-        # -- foot height: potential difference on the running per-foot maximum --
+        # -- foot height: swing apex, scored ONCE per landing, as the env does --
+        # The env charges/pays for the apex on the step the foot touches down, not on every
+        # airborne step, so the value depends on the apex alone: a slow high-clearance swing and
+        # a quick one that reaches the same height score identically, and this term never bids
+        # against feet_air_time over swing duration. feet_height_max is the running peak of the
+        # current swing and is reset below, AFTER scoring, so it still holds this swing's apex on
+        # the landing step. Split into the two scales the env uses -- penalty on the mismatch
+        # (negative scale) and reward on the match (positive scale) -- rather than the single
+        # rew_scale_foot_height_exp of the older reward set, which no longer exists.
         foot_positions = self.kin.get_foot_positions(self.q)
         foot_heights_z = foot_positions[:, 2] + 0.30
         target_fh = float(self._rew('target_foot_height', 0.1))
         sigma_fh = max(float(self._rew('foot_height_sigma', 0.01)), 1e-9)
-        prev_phi = np.exp(-np.square(self.feet_height_max - target_fh) / sigma_fh)
-        self.feet_height_max = np.where(contact_b, 0.0, np.maximum(self.feet_height_max, foot_heights_z))
-        new_phi = np.exp(-np.square(self.feet_height_max - target_fh) / sigma_fh)
-        foot_height_val = float(np.sum((new_phi - prev_phi) * airborne)) * moving_mask
+        self.feet_height_max = np.maximum(self.feet_height_max, foot_heights_z)
+        fh_match = np.exp(-np.square(self.feet_height_max - target_fh) / sigma_fh)
+        landed_moving = first_contact.astype(np.float64) * moving_mask
+        foot_height_penalty_val = float(np.sum((1.0 - fh_match) * landed_moving))
+        foot_height_reward_val = float(np.sum(fh_match * landed_moving))
+        self.feet_height_max = np.where(contact_b, 0.0, self.feet_height_max)
 
         gait_sym_val = self._gait_phase_sym(first_contact, dt, cmd_norm > ramp_lo) * moving_mask
         self.last_contact = self.contact.copy()
@@ -360,7 +381,8 @@ class RewardEstimatorNode(Node):
             "base_acc_l2": self._rew('rew_scale_base_acc_l2') * float(np.sum(base_acc ** 2)),
             "action_rate_l2": self._rew('rew_scale_action_rate_l2') * float(np.sum((self.actions - self.last_actions) ** 2)),
             "feet_air_time": self._rew('rew_scale_feet_air_time') * air_time_val,
-            "foot_height": self._rew('rew_scale_foot_height_exp') * foot_height_val,
+            "foot_height_penalty": self._rew('rew_scale_foot_height_penalty') * foot_height_penalty_val,
+            "foot_height_reward": self._rew('rew_scale_foot_height_reward') * foot_height_reward_val,
             "feet_air_penalty": self._rew('rew_scale_feet_air_penalty') * air_penalty_val,
             "feet_air_penalty_static": self._rew('rew_scale_feet_air_penalty_static') * air_penalty_val * static_mask,
             "joint_vel_l2_static": self._rew('rew_scale_joint_vel_l2_static') * float(np.sum(self.dq ** 2)) * static_mask,

@@ -258,6 +258,9 @@
         <div class="sidebar-header">
             <h2>Evaluation Hub</h2>
             <p>Select checkpoints to compare</p>
+            <a href="/training.html" style="display:inline-block;margin-top:12px;font-size:.78rem;
+               color:var(--accent);text-decoration:none;border:1px solid var(--border-color);
+               padding:5px 10px;border-radius:6px">Training curves &rarr;</a>
         </div>
         <div class="report-list" id="report-list">
             <!-- Populated by JS -->
@@ -379,6 +382,13 @@
                         <div class="card-desc">Time offset between FL and RR strikes (Target 0% for trot).</div>
                     </div>
                     <div class="chart-container"><canvas id="chartPhaseDiag"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Foot Landing Velocity</div>
+                        <div class="card-desc">Vertical foot speed at touchdown, sampled pre-impact (lower is a softer set-down). Blank for runs evaluated before this metric existed.</div>
+                    </div>
+                    <div class="chart-container"><canvas id="chartLandingVel"></canvas></div>
                 </div>
             </div>
 
@@ -608,6 +618,7 @@
                 renderSimpleLineChart(selectedReports, 'chartPhaseFront', 'phase_diff_front_percent', 'Phase Offset (%)');
                 renderSimpleLineChart(selectedReports, 'chartPhaseRight', 'phase_diff_right_percent', 'Phase Offset (%)');
                 renderSimpleLineChart(selectedReports, 'chartPhaseDiag', 'phase_diff_diag_percent', 'Phase Offset (%)');
+                renderChartEnvelope(selectedReports, 'chartLandingVel', 'foot_landing_vel_ms', 'Landing Speed (m/s)');
             }
             else if (currentCategory === 'position') {
                 renderSimpleLineChart(selectedReports, 'chartErrX', ['position_error', 'x_m'], 'Forward Drift (m)');

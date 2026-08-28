@@ -82,6 +82,7 @@ class LocomotionPipeline:
         # Mode Transition State
         self.mode_transition_active = False
         self.mode_transition_start_time = None
+        self._last_measured_q = None
         self.mode_transition_duration = 3.0  # Smooth transition duration in seconds
         self.mode_transition_start_targets = self.desired_qpos.copy()
 
@@ -113,7 +114,14 @@ class LocomotionPipeline:
                 # Start smooth transition from current targets
                 self.mode_transition_active = True
                 self.mode_transition_start_time = None
-                self.mode_transition_start_targets = self.latest_targets.copy()
+
+                was_limp = self.safety_processor.active_max_torque <= 0.1
+                if was_limp and self._last_measured_q is not None:
+                    self.mode_transition_start_targets = self._last_measured_q.copy()
+                    self.node.get_logger().info(
+                        "[Pipeline] Torque was off - blending from measured joints.")
+                else:
+                    self.mode_transition_start_targets = self.latest_targets.copy()
 
                 # Clear safety latch when entering pose mode — the pose
                 # generator IS the recovery mechanism for unsafe states.
@@ -149,6 +157,10 @@ class LocomotionPipeline:
         # 1. Standardize State
         raw_state_kwargs['update_estimator'] = is_policy_step
         state = self.telemetry.process_state(**raw_state_kwargs)
+
+
+        self._last_measured_q = np.array(
+            [state.motorState[i].q for i in range(12)], dtype=np.float32)
 
         # 2. Policy Inference & Command Processing
         if is_policy_step:

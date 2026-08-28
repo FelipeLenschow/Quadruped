@@ -27,7 +27,9 @@ share/python-wheels/
 !**/logs/**/
 **/logs/**/*.mp4
 !**/logs/**/*.tfevents*
-!**/Walk/logs/**/*.pt
+# Intermediate checkpoints: with checkpoint_interval=10000 a 500k run writes 50 of these
+# (~116 MB). Only best_agent.pt is kept in the repo.
+**/logs/**/agent_[0-9]*.pt
 !**/logs/**/best_agent.pt
 !**/logs/**/*mujoco_eval_report*.json
 !**/logs/**/*.yaml
@@ -52,3 +54,7 @@ Mcap/Recordings/
 check_collisions.py
 check_out.txt
 collisions.txt
+
+# Hydra run dirs: only ever hold hydra.log plus .hydra/*.yaml, and the config is already
+# duplicated in each run's own logs/**/params/{env,agent}.yaml.
+**/outputs/**

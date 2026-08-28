@@ -15,7 +15,8 @@ The framework is built on a **Hardware-Agnostic Core** to ensure zero-gap sim-to
 - **Unified Drivers**: Simulation bridges have been refactored into intelligent drivers (`mujoco_driver.py`, `gazebo_driver.py`, `isaac_driver.py`).
 - **TelemetryManager**: A centralized state standardizer in `telemetry.py` that converts raw simulator data into a `StandardState` object.
 - **CommandProcessor**: A safety-first action pipeline in `policy_bridge.py` that handles hardware-aware scaling and 90% saturation limits for the Go2.
-- **### High-Performance Drivers
+
+### High-Performance Drivers
 Each backend (MuJoCo, Gazebo, Isaac Sim, Real Robot) has a dedicated driver that handles physics and policy inference locally. This bypasses ROS 2 network overhead, achieving sub-millisecond control latency.
 
 ## 🧬 Project Structure
@@ -24,7 +25,11 @@ Each backend (MuJoCo, Gazebo, Isaac Sim, Real Robot) has a dedicated driver that
   - `policy_runner.py`: The cross-platform inference engine.
   - `policy_bridge.py`: Contains the `CommandProcessor` for safety and scaling.
   - `Utils/telemetry.py`: Standardizes data from any source (Sim or Real).
-- `IsaacLab_Tasks/`: RL task definitions and Isaac Lab configurations.
+- `IsaacLab_Tasks/`: RL task definitions and Isaac Lab configurations. Each subfolder is an independent task package (own source tree, own logs, own `training_phases.yaml`):
+  - `Walk/`: the main, actively developed locomotion task (3 robots: Go2/Go1/A1).
+  - `Walk_GO2/`: a Go2-only simplification, superseded by going back to `Walk`; likely stale.
+  - `Stairs/`: experiment adding a terrain/height-scan sensor for stair climbing.
+  - `Handstand/`: handstand task.
 - `Mujoco/`, `Gazebo/`, `IsaacSim/`: Simulator-specific drivers and assets.
 
 ## 🛠️ Typical Workflow
@@ -36,6 +41,8 @@ Each backend (MuJoCo, Gazebo, Isaac Sim, Real Robot) has a dedicated driver that
 
 ## ⚠️ Requirements
 
-- **Isaac Sim Environment**: Python 3.11 (for Isaac Lab and MuJoCo drivers).
-- **System ROS 2**: Python 3.10 (for Gazebo drivers and monitoring).
-- The launcher automatically handles environment switching between `env_isaacsim` and `/usr/bin/python3`.
+- **Isaac Sim Environment**: Python 3.11 (for Isaac Lab, training, and MuJoCo drivers). Activate with `source ~/env_isaacsim/bin/activate`.
+- **System ROS 2**: Python 3.10 (for Gazebo drivers and monitoring). Activate with `source venv_robot/bin/activate`, or use `Docker/` if the host isn't natively Python 3.10.
+- The launcher automatically handles environment switching between `env_isaacsim` and `/usr/bin/python3`, and disables menu options incompatible with the currently active environment.
+
+See `CLAUDE.md` for more on environment setup, the `launcher.py` flow, and how the `IsaacLab_Tasks/` task modules and training curriculum (`training_phases.yaml`) are structured.

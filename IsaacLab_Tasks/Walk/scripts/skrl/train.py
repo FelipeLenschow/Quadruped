@@ -291,6 +291,19 @@ def main(
     # https://skrl.readthedocs.io/en/latest/api/utils/runner.html
     runner = Runner(env, agent_cfg)
 
+    # skrl >= 2.1.0 only prefixes "Info / " onto environment_info keys that contain no "/", so
+    # our "reward/alive" style keys come out bare; older skrl prefixed unconditionally. Force the
+    # prefixed spelling on every version, otherwise runs from two machines log the same quantity
+    # under two different tag names and cannot be charted against each other.
+    _track_data = runner.agent.track_data
+
+    def _track_data_prefixed(tag, value, *args, **kwargs):
+        if tag.startswith(("reward/", "diag/")):
+            tag = f"Info / {tag}"
+        return _track_data(tag, value, *args, **kwargs)
+
+    runner.agent.track_data = _track_data_prefixed
+
     # load checkpoint (if specified)
     if resume_path:
         print(f"[INFO] Loading model checkpoint from: {resume_path}")

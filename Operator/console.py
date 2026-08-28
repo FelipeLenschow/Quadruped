@@ -21,7 +21,8 @@ import argparse
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, Float32, String
+from std_msgs.msg import Bool, Float32, Float32MultiArray, String
+from geometry_msgs.msg import Vector3
 
 # Ensure absolute path of the repository is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -35,6 +36,8 @@ _GREEN  = "\033[92m"
 _BOLD   = "\033[1m"
 _RESET  = "\033[0m"
 _CYAN   = "\033[96m"
+_RED    = "\033[91m"
+_YELLOW = "\033[93m"
 _DIM    = "\033[2m"
 _BG_GREEN = "\033[42m"
 _BG_DEFAULT = "\033[49m"
@@ -112,6 +115,14 @@ class ConsoleNode(Node):
             Float32, "/safety/base_forward_tilt_limit_deg", 10)
         self.rom_margin_pub = self.create_publisher(
             Float32, "/safety/joint_rom_safety_margin", 10)
+        self.watchdog_pub = self.create_publisher(
+            Float32, "/safety/watchdog_timeout", 10)
+        # Clearing a latched emergency stop used to require pressing Enter on the
+        # driver's stdin - which lives on the robot, while the console is always
+        # off-robot. The operator could not clear a stop from the operator's own
+        # interface.
+        self.safety_reset_pub = self.create_publisher(
+            Bool, "/safety/reset", 10)
         self.kp_pub = self.create_publisher(
             Float32, "/control/kp", 10)
         self.kd_pub = self.create_publisher(
@@ -136,6 +147,32 @@ class ConsoleNode(Node):
             String, "/pose/status", self._pose_status_cb, 10)
 
         # ------------------------------------------------------------------
+        # 4b. Estimator state - pre-flight gate for policy mode
+        # ------------------------------------------------------------------
+        # The policy's observation carries the estimated base velocity, and the
+        # checkpoint normalises observations with the scaler from training. If
+        # the estimator has diverged, that value goes far out of distribution and
+        # the policy commands nonsense. It diverges whenever the feet report no
+        # contact, because the leg-odometry correction never runs and the filter
+        # just integrates accelerometer bias. Seen in practice at -49 m/s while
+        # the robot stood still, hanging from its safety rope.
+        self._est_vel = None
+        self._est_contact = None
+        self._est_height = None
+        self._est_stamp = 0.0
+        # Set when something is printed that must survive: the status block is
+        # redrawn 10x/s by moving the cursor up 14 lines and overwriting, so any
+        # plain print() is erased within ~100 ms unless the next redraw is told
+        # to start fresh below it instead.
+        self._preserve_output = False
+        self.create_subscription(
+            Vector3, "/estimator/base_lin_vel", self._est_vel_cb, 10)
+        self.create_subscription(
+            Float32MultiArray, "/estimator/feet_contact", self._est_contact_cb, 10)
+        self.create_subscription(
+            Float32, "/estimator/base_height", self._est_height_cb, 10)
+
+        # ------------------------------------------------------------------
         # 5. Timer
         # ------------------------------------------------------------------
         self.timer_period = 1.0 / self.freq
@@ -158,6 +195,54 @@ class ConsoleNode(Node):
     # ------------------------------------------------------------------
     # Pose Status Feedback
     # ------------------------------------------------------------------
+    def _est_vel_cb(self, msg: Vector3):
+        self._est_vel = (msg.x, msg.y, msg.z)
+        self._est_stamp = time.time()
+
+    def _est_contact_cb(self, msg: Float32MultiArray):
+        self._est_contact = list(msg.data)
+
+    def _est_height_cb(self, msg: Float32):
+        self._est_height = float(msg.data)
+
+    # Limits for the pre-flight gate. Training commanded +-1.0 m/s, and a robot
+    # standing still should read about zero, so anything past this means the
+    # estimate is not trustworthy rather than merely fast.
+    PREFLIGHT_MAX_SPEED = 1.5      # m/s
+    PREFLIGHT_MIN_CONTACTS = 3     # of 4 feet
+    PREFLIGHT_MAX_AGE = 1.0        # s
+
+    def _policy_preflight(self):
+        """Return (ok, [reasons]) for whether policy mode is safe to enable."""
+        reasons = []
+
+        if self._est_vel is None:
+            return False, ["no estimator data (is the driver running?)"]
+
+        age = time.time() - self._est_stamp
+        if age > self.PREFLIGHT_MAX_AGE:
+            reasons.append(f"estimator data is stale ({age:.1f}s old)")
+
+        speed = (self._est_vel[0] ** 2 + self._est_vel[1] ** 2 + self._est_vel[2] ** 2) ** 0.5
+        if speed > self.PREFLIGHT_MAX_SPEED:
+            reasons.append(
+                f"base_lin_vel = {speed:.1f} m/s (limit {self.PREFLIGHT_MAX_SPEED}) "
+                f"- estimator has diverged")
+
+        if self._est_contact is not None:
+            n = sum(1 for c in self._est_contact if c > 0.5)
+            if n < self.PREFLIGHT_MIN_CONTACTS:
+                reasons.append(
+                    f"only {n}/4 feet in contact - the estimator cannot correct, "
+                    f"check contact_threshold or let the robot take its own weight")
+
+        # No height check: /estimator/base_height is not estimated. It is
+        # StandardState.base_pos[2], which only gets set when the caller supplies
+        # a world position - the simulator does, the real driver cannot (LowState
+        # has no global pose), so on hardware it reads its 0.5 default forever.
+
+        return (not reasons), reasons
+
     def _pose_status_cb(self, msg: String):
         """Parse pose status: 'pose_name|progress|label'."""
         try:
@@ -185,7 +270,9 @@ class ConsoleNode(Node):
             "Kd = ",
             "Mode = pose",
             "Mode = policy",
+            "Mode = policy!",
             "Mode = ",
+            "Safety = reset",
             "Pose = stand",
             "Pose = lie_flat",
             "Pose = sit",
@@ -247,9 +334,35 @@ class ConsoleNode(Node):
                     self.kd = float(val_str)
                     self.kd_pub.publish(Float32(data=float(self.kd)))
 
+                elif param in ("safety", "reset"):
+                    if val_str.lower().strip() in ("reset", "clear", "1", "on"):
+                        self.safety_reset_pub.publish(Bool(data=True))
+                        print(f"\n{_YELLOW}{_BOLD}>>> Safety reset sent.{_RESET}")
+                        print(f"{_DIM}    If the cause is still present it will "
+                              f"latch again immediately.{_RESET}\n")
+                        self._preserve_output = True
+                    continue
+
                 # --- Pipeline mode ---
                 elif param == "mode":
                     mode_val = val_str.lower().strip()
+
+                    # "mode = policy!" forces past the gate.
+                    forced = mode_val.endswith("!")
+                    if forced:
+                        mode_val = mode_val[:-1].strip()
+
+                    if mode_val == "policy" and not forced:
+                        ok, reasons = self._policy_preflight()
+                        if not ok:
+                            print(f"\n{_RED}{_BOLD}>>> POLICY REFUSED{_RESET}")
+                            for r in reasons:
+                                print(f"{_RED}    - {r}{_RESET}")
+                            print(f"{_YELLOW}    Fix and retry, or force with:  "
+                                  f"mode = policy!{_RESET}\n")
+                            self._preserve_output = True
+                            continue
+
                     if mode_val in ("pose", "policy"):
                         self.current_mode = mode_val
                         msg = String()
@@ -311,6 +424,8 @@ class ConsoleNode(Node):
             Float32(data=float(self.base_forward_tilt_limit_deg)))
         self.rom_margin_pub.publish(
             Float32(data=float(self.joint_rom_safety_margin)))
+        self.watchdog_pub.publish(
+            Float32(data=float(self.watchdog_timeout)))
         self.kp_pub.publish(
             Float32(data=float(self.kp)))
         self.kd_pub.publish(
@@ -331,7 +446,12 @@ class ConsoleNode(Node):
         DISPLAY_LINES = 14
         
         if self.heartbeat_count > 1:
-            if use_scroll_adjust:
+            if self._preserve_output:
+                # Do not move up: redraw below whatever was just printed so the
+                # message stays on screen.
+                self._preserve_output = False
+                self.input_submitted = False
+            elif use_scroll_adjust:
                 # Move up to compensate for terminal scroll/newline
                 print(f"\033[{DISPLAY_LINES + 1}A", end="")
                 self.input_submitted = False
@@ -412,12 +532,33 @@ def main():
         rclpy.spin(node)
     except KeyboardInterrupt:
         print()
+    except BaseException:
+        # rclpy raises ExternalShutdownException (not KeyboardInterrupt) when its
+        # own SIGINT handler shuts the context down first. Swallow it here so the
+        # cleanup below always runs.
+        pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        # Restore the terminal FIRST, and on its own. The command thread sits
+        # inside input(), and GNU readline leaves the tty with ECHO and ICANON
+        # off while it is mid-read - so on Ctrl-C the shell comes back with no
+        # echo and no line editing, looking frozen. This used to run after
+        # destroy_node()/shutdown(), and rclpy.shutdown() throws if the context
+        # is already down, which skipped the restore entirely.
         if old_termios:
-            import termios
-            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_termios)
+            try:
+                import termios
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_termios)
+            except Exception:
+                pass
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

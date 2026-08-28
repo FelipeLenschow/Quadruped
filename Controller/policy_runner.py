@@ -190,14 +190,15 @@ class PolicyRunner:
 
         self.policy.load_state_dict(net_keys, strict=False)
 
-        # Load scaler
-        # skrl renamed this checkpoint key from "state_preprocessor" to "observation_preprocessor"
-        # in 2.x, so both spellings have to be accepted -- runs from either version end up here.
-        # Missing it is not cosmetic: the policy then sees unnormalized observations and the base
-        # tilts past the safety limit within a couple of seconds.
+        # Load scaler. skrl renamed this key from "state_preprocessor" to
+        # "observation_preprocessor" in 2.1.0, so checkpoints trained before and after the
+        # upgrade spell it differently -- accept both. Getting this wrong is not a degradation:
+        # the policy is trained on normalized observations, and projected gravity alone has
+        # mean -1.0 / std 0.06, so feeding it raw both offsets it by a full unit and shrinks it
+        # ~16x. The robot loses its sense of which way is down and collapses on the spot.
         scaler_state = (
-            data.get("observation_preprocessor")
-            or data.get("state_preprocessor")
+            data.get("observation_preprocessor")     # skrl >= 2.1.0
+            or data.get("state_preprocessor")        # skrl < 2.1.0
             or data.get("running_standard_scaler")
         )
         if scaler_state:
@@ -211,11 +212,18 @@ class PolicyRunner:
                 f"[PolicyRunner] Loaded obs scaler (mean[0]: {self.scaler.running_mean[0]:.3f})"
             )
         else:
-            print("[PolicyRunner] " + "!" * 62)
-            print("[PolicyRunner] WARNING: No obs scaler found in checkpoint!")
-            print(f"[PolicyRunner] Checkpoint keys were: {list(data.keys())}")
-            print("[PolicyRunner] Policy will run on UNNORMALIZED observations.")
-            print("[PolicyRunner] " + "!" * 62)
+            # Do not let this pass quietly: an unscaled policy does not walk badly, it falls over,
+            # and the symptom looks like a bad policy rather than a bad load.
+            print(
+                "[PolicyRunner] " + "!" * 60 + "\n"
+                "[PolicyRunner] WARNING: No obs scaler found in checkpoint -- running UNNORMALIZED.\n"
+                f"[PolicyRunner]   checkpoint keys: {sorted(data.keys())}\n"
+                "[PolicyRunner]   Expected one of: observation_preprocessor (skrl >= 2.1.0),\n"
+                "[PolicyRunner]   state_preprocessor (skrl < 2.1.0), running_standard_scaler.\n"
+                "[PolicyRunner]   The robot will almost certainly not stand. Fix the key, do not\n"
+                "[PolicyRunner]   retrain.\n"
+                "[PolicyRunner] " + "!" * 60
+            )
 
     def build_obs(self, state, commands, last_actions, desired_qpos, mj_to_isaac):
         """

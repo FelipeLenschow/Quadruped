@@ -37,7 +37,7 @@ We anneal and adjust reward weights across training phases to guide the policy f
 | `rew_scale_track_ang_vel_z_exp` | `2.5` | `2.5` | `2.5` | `2.5` | `2.5` |
 | `rew_scale_gait_phase` | `1.0` | `1.0` | `1.0` | `1.0` | `1.0` |
 | `rew_scale_gait_phase_l1` | `-0.5` | `-0.5` | `-0.5` | `-0.5` | `-0.5` |
-| `rew_scale_foot_height_exp` | `0.1` | `0.1` | `0.1` | `0.1` | `0.1` |
+| `rew_scale_foot_height_penalty` | `0.1` | `0.1` | `0.1` | `0.1` | `0.1` |
 | `rew_scale_flat_orientation_l2` | `-6.0` | `-6.0` | `-6.0` | `-6.0` | `-6.0` |
 | `rew_scale_lin_vel_z_l2` | `-2.0` | `-2.0` | `-2.0` | `-2.0` | `-2.0` |
 | `rew_scale_ang_vel_xy_l2` | `-0.05` | `-0.05` | `-0.05` | `-0.05` | `-0.05` |

@@ -5,7 +5,7 @@ import threading
 import numpy as np
 
 from rclpy.node import Node
-from std_msgs.msg import Float32
+from std_msgs.msg import Bool, Float32
 
 # Ensure project root is importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -105,7 +105,13 @@ class CommandSafetyProcessor:
         self.base_tilt_limit_deg = 30.0     # Updated by heartbeat
         self.forward_tilt_limit_deg = 30.0  # Updated by heartbeat
         self.rom_safety_margin = 0.15       # Updated by heartbeat
-        self.watchdog_timeout = 1.0         # Updated by heartbeat
+
+        # Starting value only. The Supervisor owns this at runtime and sends it
+        # on /safety/watchdog_timeout with the rest of the safety parameters;
+        # until the first heartbeat arrives the robot is blocked anyway
+        # (has_received_heartbeat), so this just avoids an undefined timeout.
+        safety_cfg = self.config.get("safety", {})
+        self.watchdog_timeout = float(safety_cfg.get("watchdog_timeout", 1.0))
 
         # Derived values (recomputed when params change)
         self._recompute_safety_limits()
@@ -138,6 +144,11 @@ class CommandSafetyProcessor:
         self.node.create_subscription(
             Float32, "/safety/joint_rom_safety_margin",
             self._rom_margin_cb, 10)
+        self.node.create_subscription(
+            Float32, "/safety/watchdog_timeout",
+            self._watchdog_timeout_cb, 10)
+        self.node.create_subscription(
+            Bool, "/safety/reset", self._safety_reset_cb, 10)
 
         self.node.get_logger().info(
             f"[CommandSafetyProcessor] Gated safety arbitrator ready. "
@@ -165,6 +176,25 @@ class CommandSafetyProcessor:
     def _rom_margin_cb(self, msg: Float32):
         self.rom_safety_margin = msg.data
         self._recompute_safety_limits()
+
+    def _watchdog_timeout_cb(self, msg: Float32):
+        # Ignore nonsense rather than disabling the watchdog on a bad message.
+        if msg.data > 0.0:
+            self.watchdog_timeout = float(msg.data)
+
+    def _safety_reset_cb(self, msg: Bool):
+        """Clear a latched stop from the console, which is always off-robot.
+
+        Same effect as pressing Enter on the driver's stdin. If whatever caused
+        the stop is still true, evaluate_safety latches it again on the next
+        step, so this cannot force an unsafe robot to keep running.
+        """
+        if not msg.data or not self._policy_blocked:
+            return
+        self.node.get_logger().warn("[CommandSafetyProcessor] Safety reset received from console.")
+        self._robot_safe = True
+        self._shutdown_logged = False
+        self._policy_blocked = False
 
     # ======================================================================
     # Derived Limit Computation
@@ -301,7 +331,13 @@ class CommandSafetyProcessor:
         self.node.get_logger().error(f"[SAFETY] EMERGENCY SHUTDOWN: {reason}")
 
     def _reset_worker(self):
-        input()
+        try:
+            input()
+        except (EOFError, OSError):
+            self.node.get_logger().warn(
+                "[CommandSafetyProcessor] No interactive stdin; clear this stop "
+                "from the console with 'safety = reset'.")
+            return
         print(f"{_YELLOW}{_BOLD}>>> Safety RESET. Re-enabling main policy...{_RESET}")
         self.node.get_logger().info(
             "[CommandSafetyProcessor] Operator pressed ENTER. Main policy re-enabled.")
