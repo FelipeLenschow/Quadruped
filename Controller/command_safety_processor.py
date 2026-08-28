@@ -5,7 +5,7 @@ import threading
 import numpy as np
 
 from rclpy.node import Node
-from std_msgs.msg import Float32
+from std_msgs.msg import Bool, Float32
 
 # Ensure project root is importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -150,6 +150,8 @@ class CommandSafetyProcessor:
         self.node.create_subscription(
             Float32, "/safety/watchdog_timeout",
             self._watchdog_timeout_cb, 10)
+        self.node.create_subscription(
+            Bool, "/safety/reset", self._safety_reset_cb, 10)
 
         self.node.get_logger().info(
             f"[CommandSafetyProcessor] Gated safety arbitrator ready. "
@@ -182,6 +184,20 @@ class CommandSafetyProcessor:
         # Ignore nonsense rather than disabling the watchdog on a bad message.
         if msg.data > 0.0:
             self.watchdog_timeout = float(msg.data)
+
+    def _safety_reset_cb(self, msg: Bool):
+        """Clear a latched stop from the console, which is always off-robot.
+
+        Same effect as pressing Enter on the driver's stdin. If whatever caused
+        the stop is still true, evaluate_safety latches it again on the next
+        step, so this cannot force an unsafe robot to keep running.
+        """
+        if not msg.data or not self._policy_blocked:
+            return
+        self.node.get_logger().warn("[CommandSafetyProcessor] Safety reset received from console.")
+        self._robot_safe = True
+        self._shutdown_logged = False
+        self._policy_blocked = False
 
     # ======================================================================
     # Derived Limit Computation
@@ -318,7 +334,13 @@ class CommandSafetyProcessor:
         self.node.get_logger().error(f"[SAFETY] EMERGENCY SHUTDOWN: {reason}")
 
     def _reset_worker(self):
-        input()
+        try:
+            input()
+        except (EOFError, OSError):
+            self.node.get_logger().warn(
+                "[CommandSafetyProcessor] No interactive stdin; clear this stop "
+                "from the console with 'safety = reset'.")
+            return
         print(f"{_YELLOW}{_BOLD}>>> Safety RESET. Re-enabling main policy...{_RESET}")
         self.node.get_logger().info(
             "[CommandSafetyProcessor] Operator pressed ENTER. Main policy re-enabled.")
