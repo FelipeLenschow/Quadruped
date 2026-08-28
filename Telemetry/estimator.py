@@ -108,6 +108,15 @@ class StateEstimator:
         Process noise variance for accelerometer bias states.
     r_meas : float
         Measurement noise variance for each leg-odometry velocity component.
+    max_speed : float
+        Hard sanity bound on the velocity estimate (m/s). Exceeding it means the
+        filter has diverged, not that the robot is fast, so it self-resets.
+    no_contact_relax_time : float
+        Seconds without any foot contact after which the velocity estimate is
+        relaxed toward zero. With no contact the leg-odometry correction never
+        runs, the accelerometer bias is unobservable, and its error integrates
+        into velocity without bound - measured at -49 m/s on a robot standing
+        still, which then poisoned the policy's observation.
     """
 
     def __init__(
@@ -116,9 +125,16 @@ class StateEstimator:
         q_vel: float = 0.01,
         q_bias: float = 1e-3,
         r_meas: float = 0.05,
+        max_speed: float = 5.0,
+        no_contact_relax_time: float = 0.3,
     ):
         self.dt     = dt
         self._n     = 6   # state dimension
+        self.max_speed = max_speed
+        self.no_contact_relax_time = no_contact_relax_time
+        self._no_contact_time = 0.0
+        # Per-step factor giving a ~0.5 s time constant once relaxing starts.
+        self._relax_factor = float(np.exp(-dt / 0.5))
 
         # ── Process noise covariance Q ─────────────────────────────────────
         self._Q = np.diag([q_vel, q_vel, q_vel,
@@ -157,6 +173,7 @@ class StateEstimator:
         """Reset state to zero (call on robot restart or fall recovery)."""
         self._x[:] = 0.0
         self._P[:] = np.eye(6) * 1.0
+        self._no_contact_time = 0.0
 
     # ------------------------------------------------------------------
     def _get_kin(self):
@@ -209,8 +226,16 @@ class StateEstimator:
         g_body   = R.T @ _GRAVITY_WORLD          # gravity in body frame
         a_linear = (accel_body - b) + g_body     # remove bias, then compensate gravity
 
+        # The state is velocity in the BODY frame, so the body-frame rate of
+        # change is a_body - omega x v_body. Without the Coriolis term the
+        # prediction and the leg-odometry measurement (which does include
+        # omega x r_foot) use inconsistent kinematics, and the error grows with
+        # |omega|*|v| - worst exactly when turning while walking.
+        omega_p = (np.asarray(gyro_body, dtype=np.float64)
+                   if gyro_body is not None else np.zeros(3))
+
         x_pred = np.empty(6)
-        x_pred[:3] = v + a_linear * self.dt
+        x_pred[:3] = v + (a_linear - np.cross(omega_p, v)) * self.dt
         x_pred[3:] = b                            # bias random walk: no change
 
         P_pred = self._F @ self._P @ self._F.T + self._Q
@@ -252,6 +277,29 @@ class StateEstimator:
 
                 self._x = self._x + K @ y
                 self._P = (np.eye(6) - K @ self._H) @ self._P
+
+        # ── 3. Divergence guards ───────────────────────────────────────────
+        # Nothing above bounds the estimate: with no foot in contact the update
+        # block is skipped entirely and the bias error integrates forever.
+        if np.any(feet_contact > 0.5):
+            self._no_contact_time = 0.0
+        else:
+            self._no_contact_time += self.dt
+            if self._no_contact_time > self.no_contact_relax_time:
+                # No information is arriving, so relax toward the prior (zero)
+                # instead of integrating bias, and inflate the covariance so the
+                # first real contact corrects hard.
+                self._x[:3] *= self._relax_factor
+                self._P[:3, :3] += self._Q[:3, :3]
+
+        speed = float(np.linalg.norm(self._x[:3]))
+        if speed > self.max_speed:
+            # Past any speed this robot can reach: the filter is diverged, not
+            # fast. Drop the velocity and distrust the bias (keep its value, but
+            # widen its covariance) so contact re-learns it quickly.
+            self._x[:3] = 0.0
+            self._P[:3, :3] = np.eye(3)
+            self._P[3:, 3:] = np.eye(3)
 
         return self._x[:3].copy()
 

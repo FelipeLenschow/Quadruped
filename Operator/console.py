@@ -210,7 +210,6 @@ class ConsoleNode(Node):
     # estimate is not trustworthy rather than merely fast.
     PREFLIGHT_MAX_SPEED = 1.5      # m/s
     PREFLIGHT_MIN_CONTACTS = 3     # of 4 feet
-    PREFLIGHT_HEIGHT_RANGE = (0.15, 0.45)   # m, nominal stand is 0.33
     PREFLIGHT_MAX_AGE = 1.0        # s
 
     def _policy_preflight(self):
@@ -237,10 +236,10 @@ class ConsoleNode(Node):
                     f"only {n}/4 feet in contact - the estimator cannot correct, "
                     f"check contact_threshold or let the robot take its own weight")
 
-        if self._est_height is not None:
-            lo, hi = self.PREFLIGHT_HEIGHT_RANGE
-            if not (lo <= self._est_height <= hi):
-                reasons.append(f"base_height = {self._est_height:.2f} m (expected {lo}-{hi})")
+        # No height check: /estimator/base_height is not estimated. It is
+        # StandardState.base_pos[2], which only gets set when the caller supplies
+        # a world position - the simulator does, the real driver cannot (LowState
+        # has no global pose), so on hardware it reads its 0.5 default forever.
 
         return (not reasons), reasons
 

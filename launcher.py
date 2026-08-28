@@ -505,6 +505,7 @@ def run_cli_menu():
             last_cmd.get("run_name", ""),
             last_cmd.get("domain_id", "1"),
             last_cmd.get("use_estimator", False),
+            last_cmd.get("no_ground_truth", False),
             last_cmd.get("show_ghost", True),
             last_cmd.get("record_session", False),
             last_cmd.get("training_phase", ""),
@@ -653,6 +654,7 @@ def run_cli_menu():
         teleop = True # Always active internally via /cmd_vel subscription
     run_name = ""
     use_estimator = False
+    no_ground_truth = False
     show_ghost = True
     training_phase = ""
 
@@ -743,6 +745,14 @@ def run_cli_menu():
         ans = input("Use State Estimator? [Y/n] (default Y): ").lower().strip()
         use_estimator = ans != "n"
 
+    if action == "mujoco":
+        # The simulator can hand the pipeline a true base pose and velocity; the
+        # real robot cannot measure either. Withholding them makes MuJoCo see
+        # exactly what deploy sees, so a problem shows up here instead of on the
+        # robot. Forces the estimator on, since sim velocity would be zero.
+        ans = input("Simulator ground truth (pos/vel)? [Y/n] (default Y, n = match real robot): ").lower().strip()
+        no_ground_truth = ans == "n"
+
     if action == "mujoco_twin":
         # Second transparent green robot drawn from /commands/joint_commands,
         # for comparing what was commanded against what the joints actually did.
@@ -822,7 +832,7 @@ def run_cli_menu():
                 selected_file = files[0]
             run_name = os.path.join(record_dir, selected_file)
 
-    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, show_ghost, record_session, training_phase
+    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, no_ground_truth, show_ghost, record_session, training_phase
 
 def main():
     (
@@ -839,6 +849,7 @@ def main():
         run_name,
         domain_id,
         use_estimator,
+        no_ground_truth,
         show_ghost,
         record_session,
         training_phase,
@@ -859,6 +870,7 @@ def main():
         "run_name": run_name,
         "domain_id": domain_id,
         "use_estimator": use_estimator,
+        "no_ground_truth": no_ground_truth,
         "show_ghost": show_ghost,
         "record_session": record_session,
         "training_phase": training_phase,
@@ -1093,6 +1105,9 @@ def main():
                 cmd.append("--headless")
             if use_estimator:
                 cmd.append("--use_estimator")
+            if no_ground_truth:
+                cmd.append("--no_ground_truth")
+                print("[Launcher] Ground truth withheld: MuJoCo will see what the robot sees.")
         elif action == "mujoco_twin":
             bridge_script = os.path.abspath(os.path.join("Operator", "mujoco_twin.py"))
             cmd = [

@@ -20,7 +20,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from geometry_msgs.msg import Quaternion, Vector3, Twist
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool, Float32
+from std_msgs.msg import Bool, Float32, Float32MultiArray
 import argparse
 import threading
 from pipeline import LocomotionPipeline
@@ -28,7 +28,8 @@ from Configs.config_loader import load_config
 
 
 class Ros2MujocoDriver(Node):
-    def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False, headless=False):
+    def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False, headless=False,
+                 no_ground_truth=False):
         super().__init__("mujoco_bridge_node")
         self.robot_type = robot_type
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
@@ -36,6 +37,19 @@ class Ros2MujocoDriver(Node):
 
         # 0. Load Central Config
         self.config = load_config()
+        # Withhold the simulator's ground-truth base pose and velocity so the sim
+        # sees exactly what hardware sees. real_driver cannot supply either (the
+        # SDK's LowState has no global pose), so leaving them on lets the sim pass
+        # tests the robot would fail - which is how the diverging estimator went
+        # unnoticed until it hit the real robot.
+        self.no_ground_truth = no_ground_truth
+        if no_ground_truth and not use_estimator:
+            # Without 'vel' the sim velocity is zero, so the policy would be fed
+            # zeros. Ground truth off only makes sense with the estimator on.
+            use_estimator = True
+            self.get_logger().warn(
+                "[MujocoDriver] --no_ground_truth forces the state estimator on.")
+
         self.ctrl_cfg = self.config.get("control", {})
         self.motor_cfg = self.config.get("motor", {})
         self.kp = float(self.ctrl_cfg.get("kp", 0.0))
@@ -81,6 +95,8 @@ class Ros2MujocoDriver(Node):
 
         self.create_subscription(Float32, "/control/kp", self.kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
+        self.foot_force_pub = self.create_publisher(
+            Float32MultiArray, "/sensors/foot_force", 10)
         self._startup_console_check = False
 
         # 4. Physics Thread
@@ -190,6 +206,25 @@ class Ros2MujocoDriver(Node):
             accel = np.array([0.0, 0.0, 9.81])
 
         # Contacts
+        # Per-foot normal force, so the sim can be compared against the real
+        # robot's FSR readings on the same terms. The boolean below comes from the
+        # physics engine's contact list, which is ground truth and never fails -
+        # that is exactly why the real robot's contact bug never showed up here.
+        foot_force = {"FL": 0.0, "FR": 0.0, "RL": 0.0, "RR": 0.0}
+        for i in range(self.data.ncon):
+            _c = self.data.contact[i]
+            _f6 = np.zeros(6)
+            mujoco.mj_contactForce(self.model, self.data, i, _f6)
+            for _g in (_c.geom1, _c.geom2):
+                _nm = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, _g)
+                if _nm in foot_force:
+                    foot_force[_nm] += abs(_f6[0])
+        self._ff_tick = getattr(self, "_ff_tick", 0) + 1
+        if self._ff_tick % 4 == 0:
+            _msg = Float32MultiArray()
+            _msg.data = [foot_force[k] for k in ("FL", "FR", "RL", "RR")]
+            self.foot_force_pub.publish(_msg)
+
         contact = [0.0, 0.0, 0.0, 0.0]
         for i in range(self.data.ncon):
             con = self.data.contact[i]
@@ -203,10 +238,14 @@ class Ros2MujocoDriver(Node):
                     if is_match1 or is_match2:
                         contact[foot_idx] = 1.0
 
-        return {
-            'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro, 
-            'accel': accel, 'pos': pos, 'vel': vel_b, 'contact': contact
+        raw = {
+            'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro,
+            'accel': accel, 'contact': contact
         }
+        if not self.no_ground_truth:
+            raw['pos'] = pos
+            raw['vel'] = vel_b
+        return raw
 
     def teleop_cb(self, msg):
         """Teleop passed through to sensors for the policy runner to see."""
@@ -380,8 +419,21 @@ class Ros2MujocoDriver(Node):
                     if runner:
                         if hasattr(runner, "inf_times") and runner.inf_times:
                             inf_ms = runner.inf_times[-1] * 1000
+                    # With --no_ground_truth there is no 'pos'/'vel' to show, so
+                    # fall back to the height from the physics state and the
+                    # ESTIMATED velocity - which is what the policy is reading in
+                    # that mode anyway. Marked "est" so the two are not confused.
+                    if "pos" in raw_data and "vel" in raw_data:
+                        h = raw_data["pos"][2]
+                        vx, vy = raw_data["vel"][0], raw_data["vel"][1]
+                        tag = ""
+                    else:
+                        h = float(self.data.qpos[2])
+                        v_est = self.pipeline.telemetry.estimator.velocity
+                        vx, vy = float(v_est[0]), float(v_est[1])
+                        tag = " est"
                     print(
-                        f"\r[Bridge] t={self.data.time:7.2f} h={raw_data['pos'][2]:.2f} vx={raw_data['vel'][0]:+5.2f} vy={raw_data['vel'][1]:+5.2f} wz={raw_data['gyro'][2]:+5.2f} | inf={inf_ms:4.1f}ms   ",
+                        f"\r[Bridge] t={self.data.time:7.2f} h={h:.2f} vx={vx:+5.2f} vy={vy:+5.2f}{tag} wz={raw_data['gyro'][2]:+5.2f} | inf={inf_ms:4.1f}ms   ",
                         end="",
                         flush=True,
                     )
@@ -399,6 +451,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
     parser.add_argument(
+        "--no_ground_truth", action="store_true",
+        help="Withhold simulator pos/vel so the sim matches what hardware can measure"
+    )
+    parser.add_argument(
         "--internal_policy", type=str, default=None, help="Path to policy checkpoint"
     )
     parser.add_argument("--obs_dim", type=int, default=49)
@@ -412,6 +468,7 @@ def main():
         checkpoint=args.internal_policy, 
         obs_dim=args.obs_dim,
         use_estimator=args.use_estimator,
+        no_ground_truth=args.no_ground_truth,
         headless=args.headless
     )
     try:
