@@ -21,6 +21,20 @@ state_estimator:
   dt: 0.02                # Control loop dt (50Hz)
   contact_threshold: 22.0 # Raw FSR value threshold for binary contact flag
 
+  # Simulated FSR (MuJoCo only). The real foot sensor is a raw integer with a
+  # large no-load offset - it reads ~16 with the foot in the air and only ~30
+  # with the foot loaded, so contact_threshold=22 sits barely above the noise
+  # floor and a lightly loaded foot drops below it. MuJoCo's touch sensor gives
+  # clean newtons, which hides that entirely. These map newtons back onto the
+  # robot's raw scale (raw = bias + N / scale, plus noise, rounded to int) so the
+  # SAME contact_threshold above is what the simulator applies, and tuning it
+  # here transfers to hardware.
+  #   scale: with a 15.2 kg Go2, an even stance is 149/4 = 37 N per foot, which
+  #   the robot reads as 30 raw -> 37 / (30 - 16) = 2.66 N per raw unit.
+  fsr_bias: 16.0          # Raw reading with the foot unloaded
+  fsr_scale: 2.66         # Newtons per raw FSR unit
+  fsr_noise: 0.7          # Gaussian sigma in raw units (real spread is ~15-17)
+
   # Linear Kalman Filter (LKF) — 6-state: body velocity + accelerometer bias
   # Increase q_vel  → trust IMU more  (faster response, more noise)
   # Increase r_meas → trust FK less   (smoother, but slower correction)

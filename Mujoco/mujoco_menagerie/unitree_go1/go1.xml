@@ -117,6 +117,7 @@
             <geom class="calf2"/>
             <geom name="FR" class="foot"/>
             <site name="FR" pos="0 0 -0.213" type="sphere" size="0.023" group="5"/>
+            <site name="FR_foot" pos="0 0 -0.213" type="sphere" size="0.035" group="4" rgba="0 0 0 0"/>
           </body>
         </body>
       </body>
@@ -144,6 +145,7 @@
             <geom class="calf2"/>
             <geom name="FL" class="foot"/>
             <site name="FL" pos="0 0 -0.213" type="sphere" size="0.023" group="5"/>
+            <site name="FL_foot" pos="0 0 -0.213" type="sphere" size="0.035" group="4" rgba="0 0 0 0"/>
           </body>
         </body>
       </body>
@@ -172,6 +174,7 @@
             <geom class="calf2"/>
             <geom name="RR" class="foot"/>
             <site name="RR" pos="0 0 -0.213" type="sphere" size="0.023" group="5"/>
+            <site name="RR_foot" pos="0 0 -0.213" type="sphere" size="0.035" group="4" rgba="0 0 0 0"/>
           </body>
         </body>
       </body>
@@ -200,6 +203,7 @@
             <geom class="calf2"/>
             <geom name="RL" class="foot"/>
             <site name="RL" pos="0 0 -0.213" type="sphere" size="0.023" group="5"/>
+            <site name="RL_foot" pos="0 0 -0.213" type="sphere" size="0.035" group="4" rgba="0 0 0 0"/>
           </body>
         </body>
       </body>
@@ -225,4 +229,11 @@
     <key name="home" qpos="0 0 0.27 1 0 0 0 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"
       ctrl="0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"/>
   </keyframe>
+
+  <sensor>
+    <touch name="FL_touch" site="FL_foot"/>
+    <touch name="FR_touch" site="FR_foot"/>
+    <touch name="RL_touch" site="RL_foot"/>
+    <touch name="RR_touch" site="RR_foot"/>
+  </sensor>
 </mujoco>

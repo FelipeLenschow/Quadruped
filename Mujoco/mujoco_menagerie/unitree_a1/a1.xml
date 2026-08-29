@@ -99,10 +99,11 @@
             <inertial mass="0.226" pos="0.00472659 0 -0.131975" quat="0.706886 0.017653 0.017653 0.706886"
               diaginertia="0.00340344 0.00339393 3.54834e-05"/>
             <joint class="knee" name="FR_calf_joint"/>
+            <site name="FR_foot" pos="0 0 -0.2" type="sphere" size="0.035" group="4" rgba="0 0 0 0"/>
             <geom class="visual" mesh="calf"/>
             <geom class="calf1"/>
             <geom class="calf2"/>
-            <geom class="foot"/>
+            <geom name="FR" class="foot"/>
           </body>
         </body>
       </body>
@@ -125,10 +126,11 @@
             <inertial mass="0.226" pos="0.00472659 0 -0.131975" quat="0.706886 0.017653 0.017653 0.706886"
               diaginertia="0.00340344 0.00339393 3.54834e-05"/>
             <joint class="knee" name="FL_calf_joint"/>
+            <site name="FL_foot" pos="0 0 -0.2" type="sphere" size="0.035" group="4" rgba="0 0 0 0"/>
             <geom class="visual" mesh="calf"/>
             <geom class="calf1"/>
             <geom class="calf2"/>
-            <geom class="foot"/>
+            <geom name="FL" class="foot"/>
           </body>
         </body>
       </body>
@@ -150,10 +152,11 @@
             <inertial mass="0.226" pos="0.00472659 0 -0.131975" quat="0.706886 0.017653 0.017653 0.706886"
               diaginertia="0.00340344 0.00339393 3.54834e-05"/>
             <joint class="knee" name="RR_calf_joint"/>
+            <site name="RR_foot" pos="0 0 -0.2" type="sphere" size="0.035" group="4" rgba="0 0 0 0"/>
             <geom class="visual" mesh="calf"/>
             <geom class="calf1"/>
             <geom class="calf2"/>
-            <geom class="foot"/>
+            <geom name="RR" class="foot"/>
           </body>
         </body>
       </body>
@@ -175,10 +178,11 @@
             <inertial mass="0.226" pos="0.00472659 0 -0.131975" quat="0.706886 0.017653 0.017653 0.706886"
               diaginertia="0.00340344 0.00339393 3.54834e-05"/>
             <joint class="knee" name="RL_calf_joint"/>
+            <site name="RL_foot" pos="0 0 -0.2" type="sphere" size="0.035" group="4" rgba="0 0 0 0"/>
             <geom class="visual" mesh="calf"/>
             <geom class="calf1"/>
             <geom class="calf2"/>
-            <geom class="foot"/>
+            <geom name="RL" class="foot"/>
           </body>
         </body>
       </body>
@@ -204,4 +208,11 @@
     <key name="home" qpos="0 0 0.27 1 0 0 0 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"
       ctrl="0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"/>
   </keyframe>
+
+  <sensor>
+    <touch name="FL_touch" site="FL_foot"/>
+    <touch name="FR_touch" site="FR_foot"/>
+    <touch name="RL_touch" site="RL_foot"/>
+    <touch name="RR_touch" site="RR_foot"/>
+  </sensor>
 </mujoco>

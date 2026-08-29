@@ -58,6 +58,24 @@ class Ros2MujocoDriver(Node):
         self.emergency_kd = float(
             self.config.get("safety", {}).get("emergency_kd", 5.0))
 
+        # Simulated FSR. The real foot sensor is a raw integer with a big no-load
+        # offset (~16 in the air, ~30 loaded), so contact_threshold=22 is only a
+        # few counts above the noise floor and an unevenly loaded foot falls
+        # under it. Feeding the policy MuJoCo's ground-truth contact boolean
+        # instead hides that failure mode completely, which is why it only ever
+        # showed up on hardware. Map the touch sensor's newtons back onto the
+        # robot's raw scale and apply the SAME threshold the robot applies.
+        _est_cfg = self.config.get("state_estimator", {})
+        self.contact_threshold = float(_est_cfg.get("contact_threshold", 22.0))
+        self.fsr_bias = float(_est_cfg.get("fsr_bias", 16.0))
+        self.fsr_scale = float(_est_cfg.get("fsr_scale", 2.66))
+        self.fsr_noise = float(_est_cfg.get("fsr_noise", 0.7))
+        self.foot_names = ["FL", "FR", "RL", "RR"]
+        # Latest readings, kept for the viewer overlay.
+        self.foot_force_raw = np.zeros(4, dtype=np.float32)
+        self.foot_force_n = np.zeros(4, dtype=np.float32)
+        self.foot_contact = np.zeros(4, dtype=np.float32)
+
 
 
         # 1. Load MuJoCo Scene
@@ -106,6 +124,12 @@ class Ros2MujocoDriver(Node):
 
         print(
             f"[MujocoDriver] Initialized for {self.robot_type.upper()}. Physics running at 200Hz."
+        )
+        print(
+            f"[MujocoDriver] Simulated FSR: bias={self.fsr_bias:.0f} "
+            f"scale={self.fsr_scale:.2f} N/count noise={self.fsr_noise:.1f} "
+            f"-> contact threshold {self.contact_threshold:.0f} raw "
+            f"({(self.contact_threshold - self.fsr_bias) * self.fsr_scale:.1f} N)"
         )
 
     def _init_physics(self):
@@ -160,9 +184,139 @@ class Ros2MujocoDriver(Node):
                 self.model.dof_damping[self.model.jnt_dofadr[i]] = 0.0
                 self.model.dof_frictionloss[self.model.jnt_dofadr[i]] = 0.01
 
+        # Per-foot touch sensors (<touch> on a site enclosing the foot geom).
+        # A scene without them still works - _read_foot_fsr falls back to summing
+        # the contact list - but the sensor is the path the real robot has.
+        self.touch_sensor_adr = []
+        for foot in self.foot_names:
+            s_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_SENSOR, f"{foot}_touch")
+            if s_id == -1:
+                self.touch_sensor_adr = None
+                print(f"[MujocoDriver] No '{foot}_touch' sensor in the model; "
+                      f"falling back to contact-list forces.")
+                break
+            self.touch_sensor_adr.append(self.model.sensor_adr[s_id])
+
+        # Foot site ids for the viewer overlay, resolved once - _draw_foot_contacts
+        # runs on every render.
+        self.foot_site_id = [
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, f"{foot}_foot")
+            for foot in self.foot_names
+        ]
+
         # History for PD deriv
         self.pos_err_hist = np.zeros((1, 12), dtype=np.float32)
         self.vel_hist = np.zeros((1, 12), dtype=np.float32)
+
+    def _read_foot_fsr(self):
+        """Simulated foot FSR: (raw counts, newtons, binary contact) per foot.
+
+        The touch sensor reports the normal force in newtons summed over the
+        contacts inside the foot site. The robot's sensor reports a raw integer
+        with a large no-load offset instead, so convert with
+
+            raw = fsr_bias + N / fsr_scale + noise      (rounded, clamped >= 0)
+
+        and gate on the same config contact_threshold the real driver uses.
+        """
+        if self.touch_sensor_adr is not None:
+            force_n = np.array(
+                [self.data.sensordata[a] for a in self.touch_sensor_adr],
+                dtype=np.float64)
+        else:
+            # Fallback for scenes with no touch sensors: sum the normal
+            # component of every contact involving a foot geom.
+            acc = {name: 0.0 for name in self.foot_names}
+            f6 = np.zeros(6)
+            for i in range(self.data.ncon):
+                con = self.data.contact[i]
+                mujoco.mj_contactForce(self.model, self.data, i, f6)
+                for g in (con.geom1, con.geom2):
+                    nm = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g)
+                    if nm in acc:
+                        acc[nm] += abs(f6[0])
+            force_n = np.array([acc[n] for n in self.foot_names], dtype=np.float64)
+
+        force_n = np.maximum(force_n, 0.0)
+        raw = self.fsr_bias + force_n / max(self.fsr_scale, 1e-6)
+        if self.fsr_noise > 0.0:
+            raw += np.random.normal(0.0, self.fsr_noise, size=4)
+        raw = np.maximum(np.round(raw), 0.0)
+
+        contact = (raw > self.contact_threshold).astype(np.float32)
+        return raw.astype(np.float32), force_n.astype(np.float32), contact
+
+    # --- Viewer overlay -----------------------------------------------------
+    # Bar geometry, in metres. The bar rises from the foot and is linear in raw
+    # FSR counts above fsr_bias; BAR_SPAN counts fill BAR_HEIGHT, and the
+    # threshold tick is drawn at its own height on the same scale, so how much
+    # margin a foot actually has is visible at a glance rather than inferred.
+    BAR_HEIGHT = 0.18
+    BAR_SPAN = 28.0       # raw counts from bias to the top of the bar
+    BAR_WIDTH = 0.010
+    MARKER_R = 0.038
+    BAR_LIFT = 0.048      # clears the marker, so a below-threshold bar still shows
+
+    def _draw_foot_contacts(self, scn):
+        """Draw a contact marker and an FSR bar over each foot in the viewer."""
+        scn.ngeom = 0
+
+        def add(gtype, size, pos, rgba, mat=None):
+            if scn.ngeom >= scn.maxgeom:
+                return
+            g = scn.geoms[scn.ngeom]
+            mujoco.mjv_initGeom(
+                g, gtype,
+                np.asarray(size, dtype=np.float64),
+                np.asarray(pos, dtype=np.float64),
+                (np.eye(3) if mat is None else mat).flatten(),
+                np.asarray(rgba, dtype=np.float32),
+            )
+            scn.ngeom += 1
+
+        thr_frac = np.clip(
+            (self.contact_threshold - self.fsr_bias) / self.BAR_SPAN, 0.0, 1.0)
+
+        for i, s_id in enumerate(self.foot_site_id):
+            if s_id == -1:
+                continue
+            base = self.data.site_xpos[s_id].copy()
+
+            raw = float(self.foot_force_raw[i])
+            in_contact = self.foot_contact[i] > 0.5
+            frac = np.clip((raw - self.fsr_bias) / self.BAR_SPAN, 0.0, 1.0)
+
+            # Marker on the foot itself: green in contact, dark red when the
+            # policy is being told the foot is airborne.
+            color = (0.1, 0.9, 0.2, 0.85) if in_contact else (0.7, 0.1, 0.1, 0.55)
+            add(mujoco.mjtGeom.mjGEOM_SPHERE, [self.MARKER_R, 0, 0], base, color)
+
+            # The bar starts above the marker; a foot sitting just under the
+            # threshold has a short bar, and it must not be hidden inside it.
+            bar_base = base + [0, 0, self.BAR_LIFT]
+
+            # Empty bar (full span), so the threshold tick has context.
+            add(mujoco.mjtGeom.mjGEOM_BOX,
+                [self.BAR_WIDTH, self.BAR_WIDTH, self.BAR_HEIGHT * 0.5],
+                bar_base + [0, 0, self.BAR_HEIGHT * 0.5],
+                (0.85, 0.85, 0.9, 0.30))
+
+            # Filled portion, same colour as the marker. Slightly narrower than
+            # the outline so both stay readable where they overlap.
+            h = self.BAR_HEIGHT * frac
+            if h > 1e-4:
+                add(mujoco.mjtGeom.mjGEOM_BOX,
+                    [self.BAR_WIDTH * 0.7, self.BAR_WIDTH * 0.7, h * 0.5],
+                    bar_base + [0, 0, h * 0.5],
+                    color)
+
+            # Threshold tick: a wide, bright slab at contact_threshold. A bar
+            # hovering right at this line is a foot about to drop out.
+            add(mujoco.mjtGeom.mjGEOM_BOX,
+                [self.BAR_WIDTH * 2.4, self.BAR_WIDTH * 2.4, 0.004],
+                bar_base + [0, 0, self.BAR_HEIGHT * thr_frac],
+                (1.0, 0.85, 0.1, 0.95))
 
     def _get_raw_sensor_data(self):
         """Extracts raw state vectors from MuJoCo data."""
@@ -190,38 +344,24 @@ class Ros2MujocoDriver(Node):
         except KeyError:
             accel = np.array([0.0, 0.0, 9.81])
 
-        # Contacts
-        # Per-foot normal force, so the sim can be compared against the real
-        # robot's FSR readings on the same terms. The boolean below comes from the
-        # physics engine's contact list, which is ground truth and never fails -
-        # that is exactly why the real robot's contact bug never showed up here.
-        foot_force = {"FL": 0.0, "FR": 0.0, "RL": 0.0, "RR": 0.0}
-        for i in range(self.data.ncon):
-            _c = self.data.contact[i]
-            _f6 = np.zeros(6)
-            mujoco.mj_contactForce(self.model, self.data, i, _f6)
-            for _g in (_c.geom1, _c.geom2):
-                _nm = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, _g)
-                if _nm in foot_force:
-                    foot_force[_nm] += abs(_f6[0])
-        self._ff_tick = getattr(self, "_ff_tick", 0) + 1
-        if self._ff_tick % 4 == 0:
-            _msg = Float32MultiArray()
-            _msg.data = [foot_force[k] for k in ("FL", "FR", "RL", "RR")]
-            self.foot_force_pub.publish(_msg)
+        # Contacts, via the simulated FSR. Both the raw reading and the binary
+        # flag come from _read_foot_fsr, so the policy is gated by a numeric
+        # sensor crossing contact_threshold exactly as it is on the robot,
+        # instead of by the physics engine's contact list (which is ground truth
+        # and never fails - that is why the real robot's marginal-threshold
+        # contact bug never showed up here).
+        raw_fsr, force_n, contact = self._read_foot_fsr()
+        self.foot_force_raw = raw_fsr
+        self.foot_force_n = force_n
+        self.foot_contact = contact
 
-        contact = [0.0, 0.0, 0.0, 0.0]
-        for i in range(self.data.ncon):
-            con = self.data.contact[i]
-            g1, g2 = con.geom1, con.geom2
-            if g1 == 0 or g2 == 0:
-                for foot_idx, foot_name in enumerate(["FL", "FR", "RL", "RR"]):
-                    name1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g1)
-                    name2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g2)
-                    is_match1 = name1 and name1.lower() != "floor" and foot_name.lower() in name1.lower()
-                    is_match2 = name2 and name2.lower() != "floor" and foot_name.lower() in name2.lower()
-                    if is_match1 or is_match2:
-                        contact[foot_idx] = 1.0
+        # 1000 Hz loop -> publish at 50 Hz, in the same raw units real_driver
+        # publishes, so the two can be compared on one PlotJuggler plot.
+        self._ff_tick = getattr(self, "_ff_tick", 0) + 1
+        if self._ff_tick % 20 == 0:
+            _msg = Float32MultiArray()
+            _msg.data = [float(v) for v in raw_fsr]
+            self.foot_force_pub.publish(_msg)
 
         raw = {
             'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro,
@@ -393,6 +533,8 @@ class Ros2MujocoDriver(Node):
                     mujoco.mj_forward(self.model, self.data)  # resync kinematics
                 
                 if not headless:
+                    if viewer.user_scn is not None:
+                        self._draw_foot_contacts(viewer.user_scn)
                     viewer.sync()
 
                 self.step_counter += 1
@@ -417,8 +559,12 @@ class Ros2MujocoDriver(Node):
                         v_est = self.pipeline.telemetry.estimator.velocity
                         vx, vy = float(v_est[0]), float(v_est[1])
                         tag = " est"
+                    fsr = " ".join(
+                        f"{n}{int(r):3d}{'*' if c > 0.5 else ' '}"
+                        for n, r, c in zip(
+                            self.foot_names, self.foot_force_raw, self.foot_contact))
                     print(
-                        f"\r[Bridge] t={self.data.time:7.2f} h={h:.2f} vx={vx:+5.2f} vy={vy:+5.2f}{tag} wz={raw_data['gyro'][2]:+5.2f} | inf={inf_ms:4.1f}ms   ",
+                        f"\r[Bridge] t={self.data.time:7.2f} h={h:.2f} vx={vx:+5.2f} vy={vy:+5.2f}{tag} wz={raw_data['gyro'][2]:+5.2f} | fsr {fsr} | inf={inf_ms:4.1f}ms   ",
                         end="",
                         flush=True,
                     )
