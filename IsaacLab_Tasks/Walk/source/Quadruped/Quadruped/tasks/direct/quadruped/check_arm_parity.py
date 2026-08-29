@@ -32,12 +32,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Differences that the control mode forces rather than chooses. Everything else must match.
 #   control_mode / torque_scale / joint_limit_barrier_stiffness / spawn_height -- the mode itself
 #   max_timesteps -- torque runs at 200 Hz, so 4x the agent steps buys the same simulated time
+#   reset_exploration_on_entry -- only phase1_torque sets it, and only because it is entered
+#     from phase0_torque, the torque-only bootstrap already declared in UNMATCHED_PHASES. It
+#     re-inflates the policy std and the learning rate that a phase rewarding stillness
+#     annealed away; position phase1 starts fresh and has nothing to undo. It is part of the
+#     phase0 asymmetry, not a second one -- report it in the writeup on the same line.
 EXPECTED_ENV_DIFFS = {
     "control_mode",
     "torque_scale",
     "joint_limit_barrier_stiffness",
     "spawn_height",
     "max_timesteps",
+    "reset_exploration_on_entry",
 }
 
 # phase0_torque has no position counterpart: position control gets a standing prior for free

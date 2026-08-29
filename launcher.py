@@ -754,6 +754,15 @@ def main():
             except Exception:
                 pass
                 
+        # Point the task config at the run's own env.yaml. QUADRUPED_TRAINING_PHASE is only set
+        # by the `train` action, so play/eval/mujoco otherwise fall back to the "phase1" default
+        # inside quadruped_env_cfg.py -- a POSITION-mode phase, which silently replays a torque
+        # checkpoint with its efforts applied as joint position residuals. The overlay there
+        # takes control_mode, torque_scale, obs_mode, action_scale, spawn_height and the barrier
+        # stiffness from this file, so the interface always matches the checkpoint.
+        if os.path.exists(env_cfg_path):
+            env["QUADRUPED_ENV_YAML"] = env_cfg_path
+
         # Try env.yaml if not found in agent.yaml
         if not obs_dim and os.path.exists(env_cfg_path):
             try:
@@ -766,6 +775,75 @@ def main():
         if obs_dim:
             env["QUADRUPED_OBS_DIM"] = str(obs_dim)
             print(f"[INFO] Detected observation dimension from checkpoint: {obs_dim}")
+
+        # Control mode and torque scale, read from the same env.yaml the run was trained with.
+        # A torque policy emits joint efforts, so the sim/deploy path has to apply them directly
+        # instead of running them through its PD loop -- getting this wrong does not fail loudly,
+        # it just produces a robot thrashing on newton-metres interpreted as radians. Detected
+        # rather than asked for, so replaying a checkpoint always actuates the way it was trained.
+        if os.path.exists(env_cfg_path):
+            try:
+                with open(env_cfg_path, 'r') as f:
+                    data = yaml.load(f, Loader=yaml.UnsafeLoader)
+                mode = str(data.get("control_mode", "position")).lower()
+                env["QUADRUPED_CONTROL_MODE"] = mode
+                if mode == "torque":
+                    t_scale = data.get("torque_scale", 5.0)
+                    env["QUADRUPED_TORQUE_SCALE"] = str(t_scale)
+                    print(f"[INFO] Checkpoint is TORQUE control (torque_scale={t_scale}); "
+                          f"PD loop will be bypassed.")
+                # Reset height, so the sim drops the robot from the height it trained at. The
+                # MuJoCo driver used to hardcode 0.50, which is the position-mode value: a
+                # torque policy has no PD holding its stance through that fall and lands badly.
+                spawn_h = data.get("spawn_height")
+                if spawn_h:
+                    env["QUADRUPED_SPAWN_HEIGHT"] = str(spawn_h)
+                    print(f"[INFO] Reset height from checkpoint: {spawn_h} m")
+
+                # Policy RATE. Configs/config.yaml pins decimation to 20, i.e. 50 Hz against the
+                # 1000 Hz MuJoCo physics -- correct for a position policy trained at 50 Hz, and
+                # wrong by 4x for a torque policy trained at 200 Hz (sim dt 0.005, decimation 1).
+                # A position policy survives the mismatch because the PD loop keeps tracking the
+                # held target; a torque policy has nothing underneath it, so a held torque is an
+                # open-loop kick applied for 20 ms instead of 5. Derive the trained rate here and
+                # let the pipeline match it.
+                # Observation LAYOUT, not just its width. QUADRUPED_OBS_DIM alone told the
+                # env how wide to declare the space while the phase yaml still decided how to
+                # build it -- 65 declared, 49 built, and the mismatch only surfaced inside
+                # skrl's reshape at the first env.reset().
+                o_mode = data.get("obs_mode")
+                if o_mode:
+                    env["QUADRUPED_OBS_MODE"] = str(o_mode)
+                    print(f"[INFO] Observation layout from checkpoint: {o_mode}")
+
+                # Actuator model. MuJoCo's ctrlrange is a FLAT clip; Isaac's DCMotorCfg
+                # throttles torque with joint speed. Without these the sim hands the policy
+                # 2-6x the torque it trained with, precisely during fast swings.
+                _act = ((data.get("robot") or {}).get("actuators") or {}).get("base_legs") or {}
+                for _key, _var in (("effort_limit", "QUADRUPED_EFFORT_LIMIT"),
+                                   ("saturation_effort", "QUADRUPED_SATURATION_EFFORT"),
+                                   ("velocity_limit", "QUADRUPED_VELOCITY_LIMIT")):
+                    _v = _act.get(_key)
+                    if isinstance(_v, (int, float)):
+                        env[_var] = str(_v)
+                if env.get("QUADRUPED_EFFORT_LIMIT") and mode == "torque":
+                    print(f"[INFO] Actuator model: effort {env['QUADRUPED_EFFORT_LIMIT']} N*m, "
+                          f"saturation {env.get('QUADRUPED_SATURATION_EFFORT')}, "
+                          f"vel limit {env.get('QUADRUPED_VELOCITY_LIMIT')} rad/s")
+
+                stiff = data.get("joint_limit_barrier_stiffness")
+                if stiff and mode == "torque":
+                    env["QUADRUPED_BARRIER_STIFFNESS"] = str(stiff)
+
+                sim_dt = (data.get("sim") or {}).get("dt")
+                dec = data.get("decimation")
+                if sim_dt and dec:
+                    policy_hz = 1.0 / (float(sim_dt) * int(dec))
+                    env["QUADRUPED_POLICY_HZ"] = str(policy_hz)
+                    print(f"[INFO] Checkpoint policy rate: {policy_hz:.0f} Hz "
+                          f"(sim dt {sim_dt}, decimation {dec})")
+            except Exception:
+                pass
 
     # Prepare environment
     if terrain_cfg:

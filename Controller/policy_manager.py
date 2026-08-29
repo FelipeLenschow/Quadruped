@@ -117,6 +117,7 @@ class PolicyManager:
 
         # --- Polymorphic dispatch ---
         if isinstance(provider, PoseGenerator):
+            self.last_output_is_torque = False
             # PoseGenerator returns absolute joint targets directly
             return provider.step(state, current_time)
 
@@ -131,7 +132,17 @@ class PolicyManager:
             dt=dt
         )
 
-        # 2. Scale & Center to get absolute targets (radians)
+        # 2a. TORQUE-mode policies emit joint efforts, not a residual on the nominal stance.
+        # There is no nominal torque to centre on and no action_scale in radians -- the action IS
+        # the command, scaled by torque_scale. Returning it through the same channel as position
+        # targets would have the driver's PD loop treat newton-metres as radians.
+        # last_output_is_torque tells the pipeline and driver which units they just received.
+        if getattr(runner, "control_mode", "position") == "torque":
+            self.last_output_is_torque = True
+            return (raw_actions * runner.torque_scale).astype(np.float32)
+
+        # 2b. Position mode: scale & centre to get absolute targets (radians)
+        self.last_output_is_torque = False
         scale = getattr(runner, "action_scale", self.global_action_scale)
         qpos = runner.desired_qpos if runner.desired_qpos is not None else self.desired_qpos
 

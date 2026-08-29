@@ -27,6 +27,13 @@ class StandardState:
         self.base_lin_vel_est = [0.0, 0.0, 0.0]
         self.base_pos      = [0.0, 0.0, 0.5]
         self.feet_contact  = [0.0, 0.0, 0.0, 0.0]  # FL, FR, RL, RR binary
+        # Torque actually applied last control step (torque-mode policies only). None until a
+        # driver reports one, so a consumer can tell "not available" from "measured as zero".
+        self.applied_torque = None
+        # True only when a simulator supplied ground-truth body velocity. base_lin_vel_sim keeps
+        # a [0,0,0] default for the publishers, so this flag is the only safe way to ask whether
+        # that field means anything -- on hardware it never does.
+        self.has_sim_vel = False
         self.motorState    = [
             type('obj', (object,), {'q': 0.0, 'dq': 0.0}) for _ in range(12)
         ]
@@ -103,7 +110,7 @@ class TelemetryManager:
         )
 
     # ------------------------------------------------------------------
-    def process_state(self, q, dq, quat, gyro, accel=None, pos=None, vel=None, contact=None, update_estimator=True):
+    def process_state(self, q, dq, quat, gyro, accel=None, pos=None, vel=None, contact=None, tau=None, update_estimator=True):
         """
         Creates a StandardState from raw vectors and applies LKF estimation if enabled.
 
@@ -143,9 +150,15 @@ class TelemetryManager:
         if contact is not None:
             state.feet_contact = contact.tolist() if hasattr(contact, 'tolist') else list(contact)
 
+        # Torque actually applied on the previous control step. Only torque-mode policies read
+        # it (paper observation, Table II "Previous Applied Torque"); it stays None otherwise.
+        if tau is not None:
+            state.applied_torque = tau.tolist() if hasattr(tau, 'tolist') else list(tau)
+
         # 2. Simulator velocity
         if vel is not None:
             state.base_lin_vel_sim = vel.tolist() if hasattr(vel, 'tolist') else list(vel)
+            state.has_sim_vel = True
         else:
             state.base_lin_vel_sim = [0.0, 0.0, 0.0]
 

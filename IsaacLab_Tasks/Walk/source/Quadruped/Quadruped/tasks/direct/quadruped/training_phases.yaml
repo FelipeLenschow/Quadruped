@@ -23,6 +23,13 @@ default: &default
     # Torque mode only. Restoring stiffness (N·m per rad) for the soft joint-limit barrier
     # that stands in for position mode's target clamp.
     joint_limit_barrier_stiffness: 25.0
+    # Re-inflate the policy std and restore the base learning rate when the curriculum
+    # ENTERS this phase. Off by default and only used by phase1_torque -- see the comment
+    # there. Position phases never set it, so their baselines are unaffected.
+    reset_exploration_on_entry: false
+    # Value to re-inflate the log std to. -0.7 -> std 0.5, against the 0.0 (std 1.0) a
+    # from-scratch run starts at.
+    reset_exploration_log_std: -0.7
     # Base height on reset. Omit to get the mode default: 0.50 for position (the PD holds the
     # stance through the drop) or 0.35 for torque (limp legs cannot survive a 0.2 m drop, so
     # the robot is spawned already standing). Lower it further if it still lands hard.
@@ -52,6 +59,19 @@ default: &default
     rew_scale_track_ang_vel_z_exp: 0.0
 
     rew_scale_feet_air_time: 0.0
+    # Feet in contact beyond feet_grounded_allowed, charged every step while a move command is
+    # active. NEGATIVE. The only gait term that is nonzero while standing on all four -- every
+    # other one is gated on a foot already being airborne, so they read zero, with zero gradient,
+    # for exactly the robot they are meant to get moving. allowed=2 means a trot pays nothing, so
+    # it stops applying pressure once a gait exists. Standing pays (4-2)=2 units, so the scale is
+    # the per-step cost of standing divided by 2 -- compare it against rew_scale_alive.
+    rew_scale_feet_grounded: 0.0
+    feet_grounded_allowed: 2.0
+    # Foot height, both scored by exp(-(h-target)^2/foot_height_sigma), different accounting:
+    #   _reward  POSITIVE, DENSE -- per airborne foot per STEP, on instantaneous height. The lift
+    #            incentive. Size it against rew_scale_alive: 0.4 with two feet up is ~0.8/step.
+    #   _penalty NEGATIVE, once per landing, on that swing's APEX. Kills the high-stepping the
+    #            dense reward encourages. Use one or the other per phase.
     rew_scale_foot_height_penalty: 0.0
     rew_scale_foot_height_reward: 0.0
     rew_scale_foot_landing_vel: 0.0
@@ -82,6 +102,34 @@ default: &default
     rew_scale_max_contact_force: 0.0
 
     rew_scale_gait_phase_sym: 0.0
+
+    # ── Paper reward set: Dowdy & Chagas Vaz, IEEE/SICE SII 2026, Table III ──
+    # Separate from every scale above: these use L1 norms where the repo squares, so the paper's
+    # weights only mean what the paper meant when applied to the paper's expressions. A phase
+    # using this set must zero the repo equivalents -- see phase_paper_torque.
+    rew_scale_paper_alive: 0.0
+    rew_scale_paper_feet_air_time: 0.0
+    rew_scale_paper_track_lin_vel: 0.0
+    rew_scale_paper_track_ang_vel: 0.0
+    rew_scale_paper_gait: 0.0
+    rew_scale_paper_action_smooth: 0.0
+    rew_scale_paper_air_time_var: 0.0
+    rew_scale_paper_base_motion: 0.0
+    rew_scale_paper_base_orientation: 0.0
+    rew_scale_paper_foot_slip: 0.0
+    rew_scale_paper_dof_pos: 0.0
+    rew_scale_paper_dof_torque: 0.0
+    rew_scale_paper_dof_acc: 0.0
+    rew_scale_paper_dof_vel: 0.0
+    rew_scale_paper_thigh_contact: 0.0
+    rew_scale_paper_calf_contact: 0.0
+    paper_air_time_offset: 0.3
+    paper_vel_tracking_sigma: 0.25
+    paper_ang_tracking_sigma: 0.25
+    # NOT from the paper -- Table III leaves l_sync/l_async undefined. Width of the Gaussian in
+    # the reconstruction (s^2); 0.01 puts the knee at ~0.1 s of phase error between two feet.
+    paper_gait_sigma: 0.01
+    paper_gait_min_swing: 0.15
 
     # ── Shape parameters (NOT weights -- kept non-zero, see header note) ──
     target_feet_air_time: 0.5
@@ -224,11 +272,11 @@ phases:
     env:
       control_mode: torque
       torque_scale: 7.0
-      terrain: rough
+      # terrain: rough
       num_envs: 2000
       action_scale: 0.25
       observation_noise_scale: 0.05
-      max_timesteps: 150000
+      max_timesteps: 10000
       episode_length_s: 10.0
       base_angle_termination_thresh: 0.7
     events:
@@ -284,7 +332,14 @@ phases:
     env:
       control_mode: torque
       torque_scale: 7.0
-      terrain: rough
+      # phase0_torque hands over a policy that stands, and a search distribution that has
+      # been annealed to nothing doing it: the 2026-08-25_23-35-28 run entered this phase at
+      # std 0.037 (0.24 N*m of noise against a 23.5 N*m envelope) with the lr floored at
+      # 1.3e-5 by KLAdaptiveLR, and never moved off standing -- tracking reward went DOWN
+      # from 1.14 to 1.02 over the following 80k steps. The mean action from phase0 is worth
+      # keeping; the collapsed std and lr are not. Reset both on entry.
+      reset_exploration_on_entry: true
+      # terrain: rough
       num_envs: 2000
       action_scale: 0.25
       observation_noise_scale: 0.05
@@ -310,6 +365,10 @@ phases:
       rew_scale_action_rate_l2: -0.01
 
       rew_scale_foot_height_reward: 0.4
+      # Standing on four feet costs 2 * 0.5 = 1.0/step, exactly cancelling rew_scale_alive.
+      # A trot (two feet down) pays 0. Dial this down if the robot balances on two legs instead
+      # of stepping; dial it up if it keeps all four planted.
+      rew_scale_feet_grounded: -0.5
       target_foot_height: 0.08
       foot_height_sigma: 0.005
     commands:
@@ -323,21 +382,13 @@ phases:
       static_velocity_threshold: 0.02
       static_command_ramp: 0.1
       zero_command_fraction: 0.05
-      # MOVED FROM env: the cfg reads this from the commands block
-      # (quadruped_env_cfg.py: _phase_cfg["commands"]["standby_duration_s"]), so under env it
-      # was silently ignored -- and _transition_to_next_phase raises on unrecognised env keys,
-      # so it would also have killed the phase0->phase1 transition.
-      # Suppresses termination for the first 3 s of each episode so a hard landing does not
-      # end the episode. It ALSO forces zero velocity commands for that window, which is a
-      # real divergence from phase1's command distribution -- see check_arm_parity.py.
-      standby_duration_s: 3.0
 
   phase2_torque:
     inherits: default
     env:
       control_mode: torque
       torque_scale: 7.0
-      terrain: rough
+      # terrain: rough
       num_envs: 2000
       action_scale: 0.25
       observation_noise_scale: 0.05
@@ -363,6 +414,9 @@ phases:
       rew_scale_action_rate_l2: -0.01
 
       rew_scale_foot_height_penalty: -0.4
+      # Inert for a trot (two feet down), so keeping it on costs a settled gait nothing --
+      # it is here so the policy cannot quietly go back to standing on all four.
+      rew_scale_feet_grounded: -0.5
       target_foot_height: 0.08
       foot_height_sigma: 0.005
 
@@ -385,3 +439,159 @@ phases:
       zero_command_fraction: 0.05
       # NOT set here, matching where you put it. If the landing grace is wanted for the whole
       # torque arm rather than just phase1, add standby_duration_s: 3.0 to this block too.
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PAPER REPRODUCTION -- Dowdy & Chagas Vaz, "Towards Torque-Driven Reinforcement
+  # Learning for Quadruped Locomotion", IEEE/SICE SII 2026, Table III.
+  #
+  # Every repo reward is zeroed and the paper's 16 terms carry the whole reward. They are not
+  # interchangeable: most of the paper's terms are L1 norms where this repo squares, so mixing
+  # the two sets would double-charge the same physics at incomparable magnitudes.
+  #
+  # THE POINT OF THIS PHASE is the Gait term at weight 10.0 -- the largest in the table. It is
+  # DENSE (every step, not per landing), so a clean trot earns +10/step against an alive weight
+  # of 0.75, where the repo's gait terms top out near 0.15 charged per event. The prize for
+  # finding a gait goes from ~1% of the per-step reward to 13x the alive term.
+  # It is NOT a gradient out of standing: measured on this reconstruction, standing scores
+  # ~0.0003 and underflows to 0, so it still takes exploration stumbling into a near-trot before
+  # anything pays. If that never happens this will plateau standing like the last five runs.
+  #
+  # WATCH THE AIR-TIME TERM'S SIGN. Unclamped at weight 5.0 it penalises every swing shorter
+  # than paper_air_time_offset (0.3 s): 0.12 s pays -0.90, 0.25 s pays -0.25. Every policy that
+  # walks in this repo swings in 0.12-0.25 s, so on a Go2 this term charges for stepping until
+  # the swing exceeds 0.3 s. That threshold suits the paper's B1 (much heavier, slower cadence).
+  # Try paper_air_time_offset: 0.15 if the robot refuses to step but the gait term is climbing.
+  #
+  # WHAT IS NOT COPIED HERE (all outside the reward function, all worth trying next):
+  #   - entropy_loss_scale: paper 0.0025, this repo 0.0. Given std collapsed to the floor by
+  #     320k steps in every torque run, this is the most likely single fix after the rewards.
+  #     It lives in agents/skrl_ppo_cfg.yaml, shared by every phase, so it is left alone here.
+  #   - Observations: the paper feeds linear ACCELERATION, previous applied torque, foot contact
+  #     and a quaternion orientation, and deliberately omits base linear velocity. This repo's
+  #     obs includes base_lin_vel. Changing it moves the observation space and invalidates
+  #     every checkpoint and the deployment path.
+  #   - torque_scale: paper uses 30.0 on a B1 whose actuators are +-140 N*m -- 21% of the
+  #     envelope. The equivalent on a Go2 (23.5 N*m) is ~5.0, against the 7.0 set here.
+  #   - Their robot is a B1 (much heavier), 4096 envs, 20k iterations, lr 1e-3, target KL 0.01.
+  # ══════════════════════════════════════════════════════════════════════════
+  phase_paper_torque:
+    inherits: default
+    env:
+      control_mode: torque
+      # Paper uses 30.0 on a B1 whose actuators are +-140 N*m -- 21% of the envelope, chosen so
+      # exploration stays in a "stable, task-relevant" torque band. 21% of a Go2's 23.5 N*m is
+      # 5.0. Transferring the RATIO, not the literal 30.0, which on a Go2 would be 128% of the
+      # actuator limit and would mean the opposite of what the paper intended.
+      torque_scale: 5.0
+      # Table II observation space: no base linear velocity, plus linear acceleration, previous
+      # applied torque and foot contact. 65-dim. See QuadrupedEnv._paper_observations.
+      obs_mode: paper
+      terrain: rough
+      # Paper runs 4096. Drop to 2000 if this does not fit in VRAM.
+      num_envs: 4096
+      action_scale: 0.25
+      # Unused in paper obs mode -- Table II gives per-term noise instead, applied in
+      # _paper_observations. Left here only so the key exists.
+      observation_noise_scale: 0.0
+      # Paper trains 20,000 policy updates. train.py scales `rollouts` by the control-rate ratio,
+      # so at 200 Hz (torque decimation 1) that is 128 per update -> 20000 * 128 = 2.56M steps.
+      max_timesteps: 2560000
+      episode_length_s: 20.0
+      base_angle_termination_thresh: 0.7
+      reward_dt_ref: 0.02
+      joint_limit_barrier_stiffness: 25.0
+    domain_randomization:
+      # Table I. Terms this repo has no equivalent for are simply absent; terms this repo has
+      # that Table I does not list (joint stiffness/PD damping, action latency, motor backlash)
+      # stay at the default block's zeros, so only the paper's randomisation is active.
+      foot_friction_range: [0.4, 1.1]        # "New"   -- resampled, not perturbed
+      com_displacement_range: [-0.025, 0.025] # "Add"
+      link_mass_scale_range: [0.8, 1.3]      # "Scale" -- every body, not just the trunk
+      reset_body_vel_range: [-0.25, 0.25]    # "Add"
+      reset_body_pos_range: [-0.5, 0.5]      # "Add"
+      reset_body_ori_range: [-0.02, 0.02]    # "Add"
+      reset_joint_pos_range: [-0.3, 0.3]     # "Scale" in the table; read as a range, as for the
+      reset_joint_vel_range: [-2.5, 2.5]     #   others -- a "scale" of -2.5 is not meaningful
+    events:
+      # Table I text: pushes every 10-15 s setting base linear velocity in (-0.5, 0.5) m/s.
+      # The event term's interval_range_s is already (10.0, 15.0).
+      enable_pushes: true
+      push_velocity_range: [-0.5, 0.5]
+    rewards:
+      # Table III, rewards
+      rew_scale_paper_alive: 0.75
+      rew_scale_paper_feet_air_time: 5.0
+      rew_scale_paper_track_lin_vel: 7.0
+      rew_scale_paper_track_ang_vel: 5.0
+      rew_scale_paper_gait: 10.0
+      # Table III, penalties
+      rew_scale_paper_action_smooth: -0.6
+      rew_scale_paper_air_time_var: -1.0
+      rew_scale_paper_base_motion: -2.0
+      rew_scale_paper_base_orientation: -3.0
+      rew_scale_paper_foot_slip: -0.5
+      rew_scale_paper_dof_pos: -0.7
+      # SCALED: -0.0005 -> -0.003. ||tau|| is an absolute N*m quantity and the B1's actuator
+      # envelope is 140 N*m against this Go2's 23.5 -- a 5.96x ratio, so the paper's weight is
+      # ~6x weaker here for the same relative effort. Measured check: this robot walks at
+      # ||tau||=15.3 N*m, so -0.003 costs -0.046/step, which is what this repo's own
+      # dof_torques_l2 was already charging (-0.047). Two independent routes, same answer.
+      rew_scale_paper_dof_torque: -0.003
+      # NOT scaled, deliberately. Joint accelerations do not follow actuator size -- they go as
+      # g/L, so this robot's are ~1.6x the B1's for equivalent motion and the paper's weight
+      # already bites harder here (-0.0079/step at the measured ||theta_ddot|| = 316).
+      rew_scale_paper_dof_acc: -0.000025
+      rew_scale_paper_dof_vel: -0.01
+      rew_scale_paper_thigh_contact: -1.0
+      rew_scale_paper_calf_contact: -0.2
+      # ── SCALED FROM THE PAPER'S B1 TO THIS GO2 ── everything above is verbatim; these are
+      # not, because they are tied to the robot's size and would mean something different here.
+      #
+      # Air-time offset 0.3 -> 0.15. Unclamped, this term penalises every swing SHORTER than the
+      # offset. Measured swing times of the policies that walk in this repo: cp7 0.12 s,
+      # NiceGait7 ~0.20 s, Basic4 ~0.25 s -- all negative at 0.3, so the paper's value pays a Go2
+      # for NOT stepping. 0.15 puts this repo's own measured cadence on the positive side.
+      # (Leg-length scaling alone gives 0.24, still above most measured swings -- the
+      # measurement is the better guide.)
+      paper_air_time_offset: 0.15
+      # Linear tracking tolerance 0.25 -> 0.125, scaled with the command range below so the
+      # RELATIVE tightness matches the paper: their 0.25 is ~8% of a 3 m/s top speed, 0.125 is
+      # ~8% of the 1.5 m/s this robot is asked for.
+      paper_vel_tracking_sigma: 0.125
+      # Angular NOT scaled. A smaller quadruped is slower in m/s but faster in rad/s
+      # (omega ~ sqrt(g/L)), so the paper's tolerance is already right here.
+      paper_ang_tracking_sigma: 0.25
+      # Not a paper value at all -- Table III never defines l_sync/l_async. Chosen against this
+      # robot's measured cadence (swing 0.12-0.25 s, stride ~0.4-0.5 s): at 0.04 a trot skewed by
+      # 30 ms still scores 0.84 and by 60 ms scores 0.49, so an emerging gait gets partial
+      # credit, while standing reads 0.0003 and underflows. 0.01 gives almost no partial credit
+      # (0.49 at 30 ms); 0.08 pays standing 0.018, the one thing this term must never do.
+      paper_gait_sigma: 0.04
+      # Closes a degenerate solution in the gait term: it compares only DIFFERENCES of air and
+      # contact times, so four feet chattering at 0.01 s score a perfect 1.0, identically to a
+      # clean trot. The 2026-08-27 run found exactly that. Gates the gait reward on the last
+      # completed swing duration. Match it to paper_air_time_offset.
+      paper_gait_min_swing: 0.15
+    commands:
+      # Paper's ranges verbatim. NOTE these are B1 numbers: 3 m/s forward on a Go2 is roughly
+      # 3x anything this repo has ever measured (best eval: 0.94 m/s at a 1.0 command), so most
+      # of the command distribution is unreachable and the tracking reward will sit low no
+      # matter how good the gait is. Narrow to [-1.0, 1.0] if you want the reward readable.
+      # command_lin_vel_std / vel_tracking_sigma_exp are unused by the paper tracking terms,
+      # which divide by paper_vel_tracking_sigma / paper_ang_tracking_sigma instead.
+      command_lin_vel_std: 0.5
+      command_ang_vel_std: 0.5
+      vel_tracking_sigma_exp: 0.0
+      # SCALED. The paper's (-2.0, 3.0) is a B1 that reaches 3.5 m/s; the best this repo has
+      # measured on a Go2 is 0.94 m/s at a 1.0 command, so most of that distribution is
+      # physically unreachable and the tracking term would read ~0 however good the gait is.
+      # Paper's 2:3 backward:forward asymmetry kept, scaled to what this robot can be asked
+      # for. Yaw left at the paper's value -- angular speed is where a small quadruped is
+      # genuinely competitive.
+      command_x_range: [-1.0, 1.5]
+      command_y_range: [-0.75, 0.75]
+      command_yaw_range: [-2.0, 2.0]
+      command_resampling_time: 6.0
+      static_velocity_threshold: 0.02
+      static_command_ramp: 0.1
+      zero_command_fraction: 0.05

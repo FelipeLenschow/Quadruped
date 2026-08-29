@@ -194,16 +194,7 @@ def main(
     # multi-gpu training config
     if args_cli.distributed:
         env_cfg.sim.device = f"cuda:{app_launcher.local_rank}"
-    # max iterations for training
-    if args_cli.max_iterations:
-        agent_cfg["trainer"]["timesteps"] = (
-            args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
-        )
-    elif hasattr(env_cfg, "max_timesteps") and getattr(env_cfg, "max_timesteps") is not None:
-        agent_cfg["trainer"]["timesteps"] = env_cfg.max_timesteps
-    agent_cfg["trainer"]["close_environment_at_exit"] = False
-
-    # ── Control-rate compensation for the discount factors ────────────────────────
+    # ── Control-rate compensation (discount factors and rollout length) ───────────
     # Per-step reward is already normalised by the control period (see reward_dt_ref in
     # quadruped_env_cfg.py), which keeps per-SECOND reward invariant when the control rate
     # changes. That is only half the problem: gamma and GAE lambda discount per STEP, so a
@@ -233,6 +224,33 @@ def main(
                 f"[INFO]   {_key}: {_old:g} -> {_new:.6f} "
                 f"(horizon {_horizon_old:.2f} s -> {_horizon_new:.2f} s)"
             )
+        # Rescaling gamma and lambda restores the intended horizon only if the rollout is
+        # long enough to hold it. GAE sums over min(rollout, 1/(1 - gamma*lambda)) steps:
+        # at 50 Hz that window is ~17 steps inside a 32-step rollout, but the rescaled
+        # 200 Hz values give ~66 steps against the same 32 -- truncated, so the advantage
+        # falls back on a value function that has only ever seen 0.16 s ahead. Grow the
+        # rollout by the rate ratio to hold the window in wall-clock terms.
+        #
+        # mini_batches scales with it so the minibatch SIZE and the number of gradient steps
+        # per environment step both stay put; only the amount of experience each update sees
+        # changes. memory_size is -1 (auto = rollouts), so the buffer follows on its own.
+        _rollout_scale = int(round(1.0 / _ratio))
+        if _rollout_scale > 1:
+            for _key in ("rollouts", "mini_batches"):
+                if _key not in agent_cfg["agent"]:
+                    continue
+                _old_n = int(agent_cfg["agent"][_key])
+                agent_cfg["agent"][_key] = _old_n * _rollout_scale
+                print(f"[INFO]   {_key}: {_old_n} -> {_old_n * _rollout_scale}")
+    # max iterations for training
+    if args_cli.max_iterations:
+        agent_cfg["trainer"]["timesteps"] = (
+            args_cli.max_iterations * agent_cfg["agent"]["rollouts"]
+        )
+    elif hasattr(env_cfg, "max_timesteps") and getattr(env_cfg, "max_timesteps") is not None:
+        agent_cfg["trainer"]["timesteps"] = env_cfg.max_timesteps
+    agent_cfg["trainer"]["close_environment_at_exit"] = False
+
     # configure the ML framework into the global skrl variable
     if args_cli.ml_framework.startswith("jax"):
         skrl.config.jax.backend = "jax" if args_cli.ml_framework == "jax" else "numpy"
@@ -295,6 +313,10 @@ def main(
         args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None
     )
 
+    # Handle on the task env itself. The wrappers below hide it, and the curriculum has to
+    # reach back into the agent when it crosses a phase boundary (see _reset_exploration).
+    task_env = env.unwrapped
+
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv) and algorithm in ["ppo"]:
         env = multi_agent_to_single_agent(env)
@@ -339,6 +361,55 @@ def main(
     if resume_path:
         print(f"[INFO] Loading model checkpoint from: {resume_path}")
         runner.agent.load(resume_path)
+
+    # ── Exploration reset across a curriculum boundary ────────────────────────────
+    # Invoked by the env when it enters a phase with env.reset_exploration_on_entry set.
+    # A phase that rewards standing still is optimised by a deterministic policy, so PPO
+    # anneals the policy std away and KLAdaptiveLR follows it down; the next phase then
+    # inherits a policy that can neither explore nor take a meaningful step. Re-inflating
+    # the std and restoring the base learning rate keeps the mean action the previous phase
+    # learned while giving the search distribution and the step size back.
+    def _reset_exploration(phase_name: str, log_std: float) -> None:
+        import torch
+
+        agent = runner.agent
+        parameter = getattr(agent.policy, "log_std_parameter", None)
+        if parameter is None:
+            print(
+                f"[Curriculum] exploration reset for '{phase_name}' skipped: the policy has "
+                f"no log_std_parameter (not a Gaussian model?)."
+            )
+        else:
+            was = float(parameter.detach().mean().exp())
+            with torch.no_grad():
+                parameter.fill_(log_std)
+            # Drop Adam's moments for this parameter only. They hold the accumulated push
+            # that drove the std down in the first place, and would spend the next few
+            # updates undoing the reset.
+            if getattr(agent, "optimizer", None) is not None:
+                agent.optimizer.state.pop(parameter, None)
+            print(
+                f"[Curriculum] exploration reset for '{phase_name}': policy std "
+                f"{was:.4f} -> {float(torch.tensor(log_std).exp()):.4f}"
+            )
+
+        optimizer = getattr(agent, "optimizer", None)
+        if optimizer is not None:
+            base_lr = float(agent_cfg["agent"]["learning_rate"])
+            was_lr = optimizer.param_groups[0]["lr"]
+            for group in optimizer.param_groups:
+                group["lr"] = base_lr
+            # KLAdaptiveLR reads and writes param_groups directly, so setting the groups is
+            # the whole reset; _last_lr only feeds the "Learning / Learning rate" chart.
+            scheduler = getattr(agent, "scheduler", None)
+            if scheduler is not None:
+                scheduler._last_lr = [g["lr"] for g in optimizer.param_groups]
+            print(
+                f"[Curriculum] exploration reset for '{phase_name}': learning rate "
+                f"{was_lr:.3g} -> {base_lr:.3g}"
+            )
+
+    task_env.on_exploration_reset = _reset_exploration
 
     # run training
     runner.run()

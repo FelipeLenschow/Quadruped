@@ -9,6 +9,12 @@ models:
     class: GaussianMixin
     clip_actions: False
     clip_log_std: True
+    # Back to skrl's default, i.e. NO floor. The -2.9 floor was a workaround for std being
+    # annealed to nothing with entropy_loss_scale at 0.0; the paper (Dowdy & Chagas Vaz, SII
+    # 2026) instead runs entropy_loss_scale 0.0025, which resists the collapse at its source
+    # rather than clamping the symptom. Running both would mean the entropy bonus pushing
+    # against a clamp that zeroes its gradient. If std still collapses with the entropy term
+    # on, raise entropy_loss_scale rather than restoring this floor.
     min_log_std: -20.0
     max_log_std: 2.0
     initial_log_std: 0.0
@@ -45,10 +51,10 @@ agent:
   mini_batches: 8
   discount_factor: 0.99
   lambda: 0.95
-  learning_rate: 5.0e-04
+  learning_rate: 1.0e-03
   learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
-    kl_threshold: 0.008
+    kl_threshold: 0.01
   state_preprocessor: RunningStandardScaler
   state_preprocessor_kwargs: null
   value_preprocessor: RunningStandardScaler
@@ -59,7 +65,10 @@ agent:
   ratio_clip: 0.2
   value_clip: 0.2
   clip_predicted_values: True
-  entropy_loss_scale: 0.0
+  # Paper value. This is the single most likely fix for the std collapse that pinned every
+  # torque run at the exploration floor by ~320k steps -- it was 0.0 here, so nothing
+  # opposed the policy annealing its own exploration away.
+  entropy_loss_scale: 0.0025
   value_loss_scale: 2.0
   kl_threshold: 0.0
   rewards_shaper_scale: 0.1

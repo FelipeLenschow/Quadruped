@@ -53,6 +53,20 @@ class LocomotionPipeline:
         self.mj_to_isaac = list(range(12))  # Standard mapping
         self.sim_dt = sim_dt
         self.decimation = self.ctrl_cfg.get("decimation", 4)
+        # QUADRUPED_POLICY_HZ, exported by launcher.py from the checkpoint's own env.yaml, wins
+        # over the static config: it is the rate the policy was actually trained at. The config's
+        # decimation assumes a 50 Hz position policy, which silently runs a 200 Hz torque policy
+        # at a quarter speed -- and torque mode has no PD loop to paper over the held command.
+        # policy_dt follows, which also matters for the paper observation's linear-acceleration
+        # term: it is a finite difference divided by dt, so a wrong dt scales the input directly.
+        _hz = os.environ.get("QUADRUPED_POLICY_HZ")
+        if _hz:
+            _dec = max(1, int(round(1.0 / (float(_hz) * self.sim_dt))))
+            if _dec != self.decimation:
+                print(f"[Pipeline] Policy rate from checkpoint: {float(_hz):.0f} Hz -> "
+                      f"decimation {self.decimation} -> {_dec} "
+                      f"(physics {1.0/self.sim_dt:.0f} Hz)")
+            self.decimation = _dec
         self.policy_dt = self.decimation * self.sim_dt
 
         # 3. Command Safety Processor (safety checking + arbitration)
@@ -206,13 +220,31 @@ class LocomotionPipeline:
                     key = "safety" if active_policy == "safety" else "main"
                     proposed_targets[key] = targets
 
-                final_targets, max_torque = self.safety_processor.process(
-                    proposed_targets=proposed_targets,
-                    state=state
-                )
+                if getattr(self.policy_manager, "last_output_is_torque", False):
+                    # The safety processor arbitrates and clamps JOINT ANGLES; running torques
+                    # through it would clip them against soft_min/soft_max in radians, which is
+                    # meaningless. Torque mode therefore bypasses it and is limited by the
+                    # driver's effort limit instead. The tilt/ROM/heartbeat evaluation above
+                    # still ran, and still selects the safety policy or disables on violation --
+                    # what is skipped is only the joint-angle clamp.
+                    final_targets = proposed_targets.get(
+                        "safety" if active_policy == "safety" else "main",
+                        np.zeros(12, dtype=np.float32),
+                    )
+                    max_torque = self.safety_processor.global_max_torque
+                    self.safety_processor.active_max_torque = max_torque
+                else:
+                    final_targets, max_torque = self.safety_processor.process(
+                        proposed_targets=proposed_targets,
+                        state=state
+                    )
 
             # ── MODE TRANSITION INTERPOLATION ────────────────────
-            if self.mode_transition_active:
+            # Only meaningful between two position targets: blending a stance pose (radians)
+            # with a torque command (N*m) would produce neither.
+            if self.mode_transition_active and not getattr(
+                self.policy_manager, "last_output_is_torque", False
+            ):
                 if self.mode_transition_start_time is None:
                     self.mode_transition_start_time = sim_time
                 
@@ -225,7 +257,13 @@ class LocomotionPipeline:
                     self.mode_transition_active = False
                     self.mode_transition_start_time = None
 
+            # Interpolating between a position target and a torque command is meaningless, so
+            # mode transitions are skipped in torque mode (handled above by leaving
+            # mode_transition_active untouched -- see the guard in the interpolation block).
             self.latest_targets = final_targets
+            self.output_is_torque = getattr(
+                self.policy_manager, "last_output_is_torque", False
+            )
             self.distributor.send(final_targets, max_torque)
 
         # 3. Telemetry Publishing

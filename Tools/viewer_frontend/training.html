@@ -152,13 +152,26 @@ const TIPS={
  'Yaw-rate tracking, same exponential form. Divide by its scale to normalise.<br>'+
  '<span class="note">Good instantaneous tracking here does not prevent heading drift &mdash; '+
  'accumulated bias is only visible to pos_deviation.</span>'],
+'Info / reward/feet_grounded':['feet_grounded',
+ 'Penalty on feet in contact beyond <code>feet_grounded_allowed</code> (2), charged every step '+
+ 'while a move command is active. Scale NEGATIVE.<br>'+
+ 'The term that breaks the standing local optimum &mdash; every other gait reward is gated on a '+
+ 'foot already being airborne, so all of them read zero for a robot with four feet planted.<br>'+
+ '<span class="note">Standing pays 2 units, a trot pays 0. Divide by its scale (or read '+
+ 'diag/n_feet_grounded_excess) to see the raw excess: 2.0 means still standing, ~0 means '+
+ 'a real gait and the term has gone inert.</span>'],
+'Info / diag/n_feet_grounded_excess':['n_feet_grounded_excess',
+ 'Raw, unscaled: mean feet in contact above <code>feet_grounded_allowed</code>, command-gated. '+
+ 'The direct read on whether the robot is stepping at all.<br>'+
+ '<span class="note">2.0 = four feet planted. 0 = two or fewer down, i.e. trotting.</span>'],
 'Info / reward/foot_height_reward':['foot_height_reward',
- 'Swing-apex height <b style="display:inline">reward</b>, charged once per foot at touchdown: '+
- '<code>scale &times; exp(-(apex-target)&sup2;/&sigma;)</code>, scale POSITIVE.<br>'+
+ 'Foot-height <b style="display:inline">reward</b>, DENSE: paid every step a foot is airborne, on '+
+ 'its instantaneous height. <code>scale &times; &Sigma;_airborne exp(-(h-target)&sup2;/&sigma;)</code>, '+
+ 'scale POSITIVE.<br>'+
  'The lift incentive &mdash; early phases use this so the robot has a reason to pick a foot up '+
- 'at all. Divide by rew_scale_foot_height_reward for landings-scored-per-step.<br>'+
- '<span class="note">Pays per landing, so it also rewards stepping high and often. That is what '+
- 'foot_height_penalty exists to take back later.</span>'],
+ 'at all. Two feet up near target &asymp; 2&times;scale per step.<br>'+
+ '<span class="note">Compare it against reward/alive. Below ~5% of the per-step total it will '+
+ 'lose to standing still &mdash; that is exactly how the per-landing version failed.</span>'],
 'Info / reward/foot_height_penalty':['foot_height_penalty',
  'Same apex measurement, opposite side: <code>scale &times; (1 - exp(-(apex-target)&sup2;/&sigma;))</code>, '+
  'scale NEGATIVE, charged once per foot at touchdown.<br>'+
@@ -303,7 +316,7 @@ window.addEventListener('scroll',hideTip,true);
 // First match wins, so Task is tested before the generic velocity/joint patterns.
 const CATS=[
  ['Task',              t=>/track_lin_vel|track_ang_vel|^alive$|pos_deviation|yaw_deviation/.test(t)],
- ['Gait',              t=>/foot_height|feet_air|gait_phase/.test(t)],
+ ['Gait',              t=>/foot_height|feet_air|gait_phase|feet_grounded|n_feet_grounded/.test(t)],
  ['Stability',         t=>/flat_orientation|lin_vel_z_l2|ang_vel_xy_l2|base_acc_l2|base_height_l2/.test(t)],
  ['Effort & smoothness', t=>/dof_acc|dof_torques|action_rate|dof_pos_l2|joint_vel_l2/.test(t)],
  ['Contact forces',    t=>/grf_|max_contact_force|undesired_contacts/.test(t)],
@@ -343,6 +356,7 @@ function scaleFor(tag,id){
 // Both foot_height tags are listed (only one is non-zero in any given phase) plus the legacy
 // single tag, so a run from either side of the rename opens with its foot-height chart shown.
 const DEFAULT_TAGS=['Reward / Total reward (mean)','Info / reward/track_lin_vel_xy_exp',
+  'Info / diag/n_feet_grounded_excess',
   'Info / reward/foot_height_reward','Info / reward/foot_height_penalty',
   'Info / reward/foot_height','Info / diag/joint_acc_sum_sq_mean',
   'Policy / Standard deviation','Loss / Value loss'];

@@ -269,6 +269,35 @@ def main(
     # reset environment
     obs, _ = env.reset()
     timestep = 0
+
+    # Diagnostic dump, same format the MuJoCo PolicyRunner writes. Set QUADRUPED_OBS_DUMP=<path>
+    # in both and diff: a term in the wrong frame, order, sign or unit is invisible in behaviour
+    # but obvious side by side. Only meaningful for the 65-dim paper layout.
+    _obs_dump_path = os.environ.get("QUADRUPED_OBS_DUMP")
+    _obs_dump_n = 0
+    _PAPER_TERMS = [("lin_acc", 3), ("ang_vel", 3), ("orientation", 4), ("command", 3),
+                    ("joint_pos", 12), ("joint_vel", 12), ("prev_torque", 12),
+                    ("prev_action", 12), ("feet_contact", 4)]
+
+    def _dump_obs(o):
+        nonlocal _obs_dump_n
+        if not _obs_dump_path or _obs_dump_n >= 5:
+            return
+        v = o[0].detach().cpu().numpy() if hasattr(o, "detach") else o[0]
+        if v.shape[0] != 65:
+            return
+        i = 0
+        with open(_obs_dump_path, "a") as f:
+            f.write(f"# step {_obs_dump_n}  source=isaac\n")
+            for nm, w in _PAPER_TERMS:
+                f.write(f"{nm:14s} " + " ".join(f"{x:+9.4f}" for x in v[i:i + w]) + "\n")
+                i += w
+            f.write("\n")
+        _obs_dump_n += 1
+        if _obs_dump_n == 5:
+            print(f"[play] wrote observation dump to {_obs_dump_path}")
+
+    _dump_obs(obs)
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -292,6 +321,7 @@ def main(
                 actions = outputs[-1].get("mean_actions", outputs[0])
             # env stepping
             obs, _, _, _, _ = env.step(actions)
+            _dump_obs(obs)
         if args_cli.video:
             timestep += 1
             # exit the play loop after recording one video

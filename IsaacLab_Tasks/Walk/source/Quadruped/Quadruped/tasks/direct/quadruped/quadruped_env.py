@@ -96,7 +96,17 @@ class QuadrupedEnv(DirectRLEnv):
             else:
                 self._feet_ids = c_feet_ids
             
-        self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*_thigh|.*_calf|trunk")
+        self._undesired_contact_body_ids, names = self._contact_sensor.find_bodies(".*_thigh|.*_calf|trunk")
+        # Positions WITHIN net_undesired_contact_forces (not sensor body ids) of the thigh and calf
+        # bodies, so the paper reward set can charge them at its two different weights (-1.0 and
+        # -0.2) instead of collapsing them into one undesired-contacts flag. find_bodies returns
+        # ids and names in matching order, so indexing by enumerate position is the right mapping.
+        self._paper_thigh_local_ids = torch.tensor(
+            [k for k, n in enumerate(names) if "thigh" in n], dtype=torch.long, device=self.device
+        )
+        self._paper_calf_local_ids = torch.tensor(
+            [k for k, n in enumerate(names) if "calf" in n], dtype=torch.long, device=self.device
+        )
 
         self.net_contact_forces = torch.zeros(self.num_envs, 20, 3, device=self.device)
         self._joint_dof_idx, _ = self.robot.find_joints(
@@ -123,6 +133,15 @@ class QuadrupedEnv(DirectRLEnv):
         self.pos_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.yaw_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
+        # Mirror of feet_air_time for the STANCE side: seconds this foot has been continuously in
+        # contact, reset on liftoff. Only the paper reward set (Dowdy & Chagas Vaz, SII 2026) uses
+        # it -- its gait term scores air time and contact time against each other pairwise.
+        self.feet_contact_time = torch.zeros(self.num_envs, 4, device=self.device)
+        # Duration of each foot's last COMPLETED swing, latched at touchdown and held through
+        # the following stance. feet_air_time is 0 for a planted foot, so it cannot answer
+        # "were the swings real" at an arbitrary instant; this can. Used only by the paper
+        # gait term's duration gate -- see _compute_paper_rewards.
+        self.feet_last_air_time = torch.zeros(self.num_envs, 4, device=self.device)
         # Peak height reached so far in the current swing, per foot. Monotonic within a swing and
         # reset on landing -- so on the step a foot lands it still holds that swing's apex, which is
         # what the foot-height penalty is charged on (see _compute_reward_terms).
@@ -139,6 +158,10 @@ class QuadrupedEnv(DirectRLEnv):
         # (rew_scale_foot_height_reward, POSITIVE) instead of the mismatch. Both are filled
         # every step; which one actually does anything is decided by the phase's scales.
         self.foot_height_reward_val = torch.zeros(self.num_envs, device=self.device)
+        # Grounded feet in excess of feet_grounded_allowed, while a move command is active.
+        # The one gait term that is NONZERO when the robot is standing still -- see
+        # _compute_reward_terms.
+        self.feet_grounded_val = torch.zeros(self.num_envs, device=self.device)
         self.foot_landing_vel_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_static_val = torch.zeros(self.num_envs, device=self.device)
@@ -371,6 +394,176 @@ class QuadrupedEnv(DirectRLEnv):
         # Reset timer
         self.command_timer[env_ids] = 0.0
 
+    def _compute_paper_rewards(self) -> tuple[torch.Tensor, dict]:
+        """Reward set transcribed from Dowdy & Chagas Vaz, "Towards Torque-Driven Reinforcement
+        Learning for Quadruped Locomotion", IEEE/SICE SII 2026, Table III.
+
+        Kept entirely separate from compute_rewards() rather than folded into it, because the
+        paper's terms are NOT the repo's terms with different weights -- most use an L1 norm where
+        this repo squares, so transplanting the weights alone would mean something different. A
+        phase that turns this set on should zero the repo equivalents (see phase_paper_torque),
+        otherwise both charge for the same physics.
+
+        Every scale defaults to 0.0, so a phase that does not mention these keys is unaffected and
+        this method returns exactly zero.
+
+        WHY THIS SET MIGHT SUCCEED WHERE THE REPO'S DID NOT -- and what that claim is NOT:
+        The Gait term is DENSE (paid every step, not once per landing) and worth 10.0, so a clean
+        trot earns +10/step against an alive weight of 0.75. Measured on the reconstruction here:
+        standing scores ~0.0003 at 0.1 s of stance and underflows to 0 beyond that, a clean trot
+        scores exactly 1.0, and a three-down-one-up shuffle scores 0. Every gait term in
+        compute_rewards() tops out near 0.15 and is charged per event, so the prize for finding a
+        gait was ~1% of the per-step reward; here it is 13x the alive term.
+        This is a payoff difference, NOT a gradient difference. The product underflows to zero for
+        a standing robot just as the repo's terms do, so nothing here gently guides the first foot
+        off the ground either -- exploration still has to stumble into a near-trot before the term
+        pays anything. If that never happens, this set will plateau standing exactly like the last
+        five runs did, and the fix is in exploration (entropy_loss_scale, see below), not rewards.
+
+        DEVIATIONS FROM THE PAPER, all forced by what Table III leaves undefined:
+          - Gait: the table gives only "prod(l_sync) * prod(l_async)" without defining l. The form
+            here is the air-time/contact-time pairing from Chen et al. 2022 (the paper's ref [7],
+            cited for torque control), with sync pairs = the trot diagonals. gait_sync_sigma is not
+            in the paper at all and is exposed as a tunable.
+          - Air Time Variance: the table's expression sums SIGNED differences over all ordered
+            pairs, which is identically zero for any input. Read as absolute differences.
+          - Thigh/Calf contact: charged per body in contact, from the existing thigh/calf sensor
+            bodies. The paper gives C in R^4 without saying whether it counts bodies or is binary.
+        """
+        cfg = self.cfg
+        log: dict = {}
+        total = torch.zeros(self.num_envs, device=self.device)
+
+        def add(name: str, scale: float, value: torch.Tensor):
+            term = scale * value
+            log[f"reward/paper/{name}"] = term.mean()
+            return term
+
+        contact_f = self.contact_bool.float()
+        # -- Rewards (Table III, upper block) --
+        # Alive: sign(alive) -- 1 every step the episode is still running.
+        total = total + add("alive", cfg.rew_scale_paper_alive,
+                            torch.ones(self.num_envs, device=self.device))
+
+        # Feet Air Time: sum_i (t_air,i - 0.3), credited at touchdown, command-gated. Unbounded
+        # and LINEAR in swing duration, unlike this repo's saturating Gaussian. Transcribed
+        # unclamped because that is how Table III writes it AND how Isaac Lab's stock
+        # mdp.feet_air_time computes it (the clamped variant is feet_air_time_positive_biped).
+        #
+        # READ THE SIGN BEFORE TRUSTING THIS TERM. Unclamped, at weight 5.0, it PENALISES every
+        # swing shorter than paper_air_time_offset: 0.12 s pays -0.90, 0.20 s pays -0.50, 0.25 s
+        # pays -0.25, and it only turns positive past 0.30 s. The swing times actually measured
+        # from the policies that walk in this repo are cp7 0.12 s, NiceGait7 ~0.20 s, Basic4
+        # ~0.25 s -- all of them negative here. So for a Go2 this term does not pay for stepping,
+        # it pays for stepping SLOWLY, and until the policy can hold a 0.3 s swing it is cheaper
+        # not to step at all. The paper's own results section reports exactly this artifact
+        # ("a longer swing of each leg at low angular and linear velocities").
+        # The paper's robot is a B1 -- far heavier, naturally slower cadence -- so 0.3 s is
+        # plausible there and probably is not here. paper_air_time_offset is exposed for that
+        # reason; ~0.15 would put a Go2's natural cadence on the positive side.
+        # feet_last_air_time, NOT feet_air_time. _compute_reward_terms clears feet_air_time for
+        # every foot in contact, and it runs before this method -- so by the time we get here a
+        # foot that just landed reads 0, and this term evaluated to a flat
+        # (0 - offset) = -0.15 per landing no matter how long the swing actually was. It could
+        # never go positive and carried no gradient toward longer swings at all: the one term
+        # that was supposed to pay for real strides was a constant per-landing tax.
+        # feet_last_air_time is latched from feet_air_time at touchdown, before that clear, so
+        # on the step a foot lands it holds that swing's true duration.
+        total = total + add("feet_air_time", cfg.rew_scale_paper_feet_air_time,
+                            torch.sum((self.feet_last_air_time - cfg.paper_air_time_offset)
+                                      * self.landed_bool.float(), dim=1) * self.moving_mask_val)
+
+        # Linear / angular velocity error: exp(-||err|| / 0.25). NOTE the norm is not squared and
+        # the divisor is a fixed constant -- both differ from track_lin_vel_xy_exp in this repo,
+        # which squares the error and scales the divisor with commanded speed.
+        lin_err = torch.norm(self.base_lin_vel[:, :2] - self.commands[:, :2], dim=1)
+        total = total + add("track_lin_vel", cfg.rew_scale_paper_track_lin_vel,
+                            torch.exp(-lin_err / cfg.paper_vel_tracking_sigma))
+        ang_err = torch.abs(self.base_ang_vel[:, 2] - self.commands[:, 2])
+        total = total + add("track_ang_vel", cfg.rew_scale_paper_track_ang_vel,
+                            torch.exp(-ang_err / cfg.paper_ang_tracking_sigma))
+
+        # Gait: product over 2 synchronised pairs (the trot diagonals) and 4 antisynchronised
+        # pairs. Foot order is (FL, FR, RL, RR), so diagonals are (FL,RR) and (FR,RL).
+        #   l_sync(i,j)  = G(t_air_i  - t_air_j)  * G(t_cont_i - t_cont_j)   -- move together
+        #   l_async(i,j) = G(t_air_i  - t_cont_j) * G(t_cont_i - t_air_j)    -- oppose each other
+        # with G(x) = exp(-x^2 / gait_sync_sigma). The product is in [0, 1] and is 1 only for a
+        # clean trot, so at the paper's weight of 10.0 this is the single largest term in the set.
+        t_air, t_con = self.feet_air_time, self.feet_contact_time
+        def G(x):
+            return torch.exp(-torch.square(x) / cfg.paper_gait_sigma)
+        gait = torch.ones(self.num_envs, device=self.device)
+        for i, j in ((0, 3), (1, 2)):                       # sync: diagonals
+            gait = gait * G(t_air[:, i] - t_air[:, j]) * G(t_con[:, i] - t_con[:, j])
+        for i, j in ((0, 1), (2, 3), (0, 2), (1, 3)):       # async: everything else
+            gait = gait * G(t_air[:, i] - t_con[:, j]) * G(t_con[:, i] - t_air[:, j])
+        # DURATION GATE -- not in the paper, and necessary because the product above is
+        # DEGENERATE without it. l_sync and l_async compare only DIFFERENCES of times, so any
+        # state where all four feet share the same air and contact times scores 1.0 -- including
+        # a foot chattering on and off the ground at 0.01 s. Measured on this reconstruction:
+        #   real trot, 0.15 s swing ....... 1.0000
+        #   chatter, all times 0.02 s ..... 1.0000
+        #   chatter, all times 0.01 s ..... 1.0000
+        # A 10 Hz per-foot vibration is worth exactly as much as a clean trot, at the largest
+        # weight in the set (10.0, dense). The 2026-08-27 run found it: reward/paper/gait sat at
+        # 9.24/10 while feet_air_time stayed negative, which pins the swings at ~0.01-0.02 s,
+        # i.e. ~10 Hz per foot. The metrics looked like a gait; the robot was buzzing.
+        #
+        # The missing constraint is that the times be LARGE, not merely equal. Gate on the last
+        # completed swing, latched at touchdown so it persists through stance (max/instantaneous
+        # air time drops to 0 at every landing and would chop the reward at each transition).
+        # One-sided: swings longer than the target are not punished here, only degenerate ones.
+        # Chatter at 0.02 s scores 0.13 of the gate; a 0.15 s trot scores 1.0.
+        gait_dur_gate = (
+            self.feet_last_air_time.mean(dim=1) / max(cfg.paper_gait_min_swing, 1e-6)
+        ).clamp(0.0, 1.0)
+        gait = gait * gait_dur_gate
+        total = total + add("gait", cfg.rew_scale_paper_gait, gait)
+        log["diag/paper_gait_raw"] = gait.mean()
+        log["diag/paper_gait_dur_gate"] = gait_dur_gate.mean()
+        log["diag/paper_mean_swing_s"] = self.feet_last_air_time.mean()
+
+        # -- Penalties (Table III, lower block). All L1 / plain norms, as written. --
+        total = total + add("action_smooth", cfg.rew_scale_paper_action_smooth,
+                            torch.norm(self.actions - self.previous_actions, dim=1))
+
+        # Air Time Variance: sum over ordered pairs of |t_air,i - t_air,j|. Forces the four swings
+        # to take the same length, which is what stops one leg carrying the whole gait.
+        air_var = torch.sum(
+            torch.abs(t_air.unsqueeze(2) - t_air.unsqueeze(1)), dim=(1, 2)
+        )
+        total = total + add("air_time_var", cfg.rew_scale_paper_air_time_var, air_var)
+
+        total = total + add("base_motion", cfg.rew_scale_paper_base_motion,
+                            torch.abs(self.base_ang_vel[:, 0]) + torch.abs(self.base_ang_vel[:, 1]))
+        total = total + add("base_orientation", cfg.rew_scale_paper_base_orientation,
+                            torch.norm(self.projected_gravity[:, :2], dim=1))
+
+        # Foot Slippage: tangential speed of a foot that is in contact. Directly charges the
+        # dragging/scuffing that a shuffling policy uses to fake velocity tracking.
+        total = total + add("foot_slip", cfg.rew_scale_paper_foot_slip,
+                            torch.sum(torch.norm(self.feet_vel_w[:, :, :2], dim=2) * contact_f, dim=1))
+
+        total = total + add("dof_pos", cfg.rew_scale_paper_dof_pos,
+                            torch.sum(torch.abs(self.joint_pos - self.desired_joint_pos), dim=1))
+        total = total + add("dof_torque", cfg.rew_scale_paper_dof_torque,
+                            torch.norm(self.applied_torque, dim=1))
+        joint_acc = (self.joint_vel - self.last_joint_vel) / self.step_dt
+        total = total + add("dof_acc", cfg.rew_scale_paper_dof_acc, torch.norm(joint_acc, dim=1))
+        total = total + add("dof_vel", cfg.rew_scale_paper_dof_vel,
+                            torch.norm(self.joint_vel, dim=1))
+
+        # Thigh / calf contact, charged per body in contact rather than lumped into one
+        # undesired-contacts flag the way compute_rewards does.
+        forces = torch.norm(self.net_undesired_contact_forces, dim=-1) > 1.0
+        if self._paper_thigh_local_ids.numel():
+            total = total + add("thigh_contact", cfg.rew_scale_paper_thigh_contact,
+                                forces[:, self._paper_thigh_local_ids].float().sum(dim=1))
+        if self._paper_calf_local_ids.numel():
+            total = total + add("calf_contact", cfg.rew_scale_paper_calf_contact,
+                                forces[:, self._paper_calf_local_ids].float().sum(dim=1))
+        return total, log
+
     def _transition_to_next_phase(self):
         if self.curriculum_phase_idx >= len(self.curriculum_phases):
             return
@@ -414,6 +607,11 @@ class QuadrupedEnv(DirectRLEnv):
             "torque_scale",
             "reward_dt_ref",
             "joint_limit_barrier_stiffness",
+            # Not read per step like the rest of this set -- they are consumed once, right
+            # below, at the moment the phase is entered. Listed here because the loop treats
+            # any env key it does not recognise as a typo and raises.
+            "reset_exploration_on_entry",
+            "reset_exploration_log_std",
         }
         # max_timesteps legitimately differs per phase (it defines the phase length) and is
         # consumed at init to build the curriculum thresholds, so it is not a mismatch to report.
@@ -476,6 +674,21 @@ class QuadrupedEnv(DirectRLEnv):
                 }
                 self.event_manager.set_term_cfg(term_name, term_cfg)
             print(f"[Curriculum] push velocity range -> {tuple(rng)} (enabled={enabled})")
+
+        # Exploration reset. The env has no handle on the agent, so train.py registers a
+        # callback here before training starts; without it (play.py, eval, any script that
+        # builds the env without an optimizer) the request is reported and skipped rather
+        # than failing, since nothing is learning in those cases anyway.
+        if getattr(self.cfg, "reset_exploration_on_entry", False):
+            log_std = float(getattr(self.cfg, "reset_exploration_log_std", -0.7))
+            callback = getattr(self, "on_exploration_reset", None)
+            if callback is None:
+                print(
+                    f"[Curriculum] phase '{next_phase['name']}' asks for an exploration reset, "
+                    f"but no on_exploration_reset callback is registered -- skipping."
+                )
+            else:
+                callback(next_phase["name"], log_std)
 
         self.curriculum_phase_idx += 1
 
@@ -893,34 +1106,29 @@ class QuadrupedEnv(DirectRLEnv):
         # individual foot -- correcting that would need a height scan (see the Stairs task module).
         feet_heights = feet_heights - self.scene.env_origins[:, 2].unsqueeze(1)
 
-        # -- Swing-apex height terms, charged once per swing at touchdown --
-        # ONE measurement (this swing's apex vs target_foot_height, scored by a Gaussian), TWO
-        # ways to pay for it, both available at once so a curriculum can switch direction between
-        # phases without changing the math:
+        # -- Foot height: two terms, same Gaussian, DIFFERENT accounting on purpose --
         #
-        #   rew_scale_foot_height_reward (POSITIVE, foot_height_reward_val)  pays the Gaussian MATCH.
-        #     Early phases: the robot starts out scuffing/dragging and needs a reason to pick a
-        #     foot up at all. Every landing at ~target_foot_height banks up to +|scale| per foot.
-        #     This is a lift incentive, so it has cp7's failure mode built in -- the optimum drifts
-        #     ABOVE target (a taller arc is also a cheap way to earn more landings), and standing
-        #     still earns nothing, so the policy is pushed toward stepping more than the task needs.
-        #     That is the point at the start, and the reason to turn it off later.
+        #   rew_scale_foot_height_reward (POSITIVE, foot_height_reward_val) -- DENSE, paid every
+        #     step a foot is airborne, on that foot's INSTANTANEOUS height. The lift incentive for
+        #     early phases, where nothing else gives the robot a reason to pick a foot up. Written
+        #     just below the penalty; see the long note there for why it is dense and not
+        #     per-landing (short version: a per-landing reward is worth ~0.5% of the per-step
+        #     total and loses to standing still).
         #
-        #   rew_scale_foot_height_penalty (NEGATIVE, foot_height_penalty_val) charges the MISMATCH
-        #     (1 - match) -- the same conversion gait_phase_sym went through, for the same reason.
-        #     Later phases: it costs nothing to stand still and only charges for stepping at the
-        #     wrong height, above target (jumping) and below it (scuffing) alike, which is what
-        #     removes the high-stepping exploit the lift reward creates. feet_air_time is then the
-        #     only thing paying for taking a step at all.
+        #   rew_scale_foot_height_penalty (NEGATIVE, foot_height_penalty_val) -- charged ONCE per
+        #     swing at touchdown, on that swing's APEX, as the MISMATCH (1 - match). The same
+        #     conversion gait_phase_sym went through, for the same reason. Later phases: it costs
+        #     nothing to stand still and only charges for stepping at the wrong height, above
+        #     target (jumping) and below it (scuffing) alike, which is what removes the
+        #     high-stepping exploit the dense lift reward creates.
         #
-        # match + mismatch == 1, so running BOTH at once differs from either alone only by a
-        # per-landing constant (+|lift| * landings) -- i.e. it re-adds a payout for landing at all.
-        # Intended usage is one phase at a time: lift while the gait is being found, penalty once
-        # it is. Blending them is a deliberate choice, not a free lunch.
+        # Intended usage is one phase at a time -- lift while the gait is being found, penalty
+        # once it is. They are no longer two sides of one number (dense-instantaneous vs
+        # per-landing-apex), so running both at once is a genuine blend, not a constant offset.
         #
-        # 1 - exp(-(apex-target)^2/sigma) is bounded in [0, 1], so one wild apex costs at most a
-        # single unit of scale and cannot swamp the rest of the reward the way an unbounded squared
-        # error would.
+        # The penalty, 1 - exp(-(apex-target)^2/sigma), is bounded in [0, 1], so one wild apex costs
+        # at most a single unit of scale and cannot swamp the rest of the reward the way an
+        # unbounded squared error would.
         #
         # feet_height_max is the running peak of the current swing (monotonic within a swing, reset
         # on landing further down), so on the step a foot touches down it holds that swing's apex.
@@ -934,12 +1142,68 @@ class QuadrupedEnv(DirectRLEnv):
             -torch.square(self.feet_height_max - self.cfg.target_foot_height) / self.cfg.foot_height_sigma
         )
         foot_height_mismatch = 1.0 - foot_height_match
-        # Only feet that landed THIS step are counted (`landed`, computed above). Masked by command
-        # like every other gait-shaping term, so a robot told to hold still neither pays nor earns
-        # for shuffling a foot -- target_foot_height is meaningless when it is not supposed to step.
-        landed_moving = landed.float() * moving_mask.unsqueeze(1)
-        self.foot_height_penalty_val = torch.sum(foot_height_mismatch * landed_moving, dim=1)
-        self.foot_height_reward_val = torch.sum(foot_height_match * landed_moving, dim=1)
+        # Only feet that landed THIS step are charged (`landed`, computed above). Masked by command
+        # like every other gait-shaping term, so a robot told to hold still pays nothing even if it
+        # does shuffle a foot -- target_foot_height is meaningless when it is not supposed to step.
+        self.foot_height_penalty_val = torch.sum(
+            foot_height_mismatch * landed.float() * moving_mask.unsqueeze(1), dim=1
+        )
+
+        # -- Lift REWARD: DENSE, every step a foot is airborne (NOT per landing) --
+        # The two directions deliberately use different accounting, because they have different
+        # jobs. A penalty only has to be avoidable, so charging it once per landing is fine and
+        # keeps it from bidding against feet_air_time over swing duration. A reward that has to
+        # INDUCE a behaviour the policy does not have yet must be big enough to out-earn standing
+        # still, and per-landing accounting cannot be:
+        #
+        #   a landing is an event, ~8 per second for a 2 Hz gait, while `alive` and the tracking
+        #   terms are paid EVERY step. At 50 Hz that is 0.16 landings/step, at 200 Hz only 0.04 --
+        #   so at scale 0.4 a perfect gait earned at most ~0.016/step against alive=1.0. Measured
+        #   in the 2026-08-26 torque run: reward/foot_height_reward sat at 0.008-0.011, about 0.5%
+        #   of the per-step total, while stepping cost strictly more torque, dof_acc and
+        #   action_rate. Standing still was the better deal and the policy took it.
+        #
+        # Dense payment is also what cp7 -- the only configuration in this repo that produced a
+        # fast gait -- actually used: up to ~0.4/step with two feet up, i.e. ~25x what the
+        # per-landing version could pay. It is rate-invariant too, which per-landing is not: a
+        # per-step term is exactly what reward_dt_ref's normalisation is built for, so the same
+        # scale means the same thing at 50 Hz and 200 Hz.
+        #
+        # The cost is cp7's known exploit -- the optimum drifts above target because a taller arc
+        # spends more time in the high-reward band -- and that is the whole reason phase2 switches
+        # to the penalty above. Scored on INSTANTANEOUS height (not the swing apex), since the
+        # point is to pay for the foot being up right now, at every step of the swing.
+        airborne = (~contact).float() * moving_mask.unsqueeze(1)
+        foot_height_dense_match = torch.exp(
+            -torch.square(feet_heights - self.cfg.target_foot_height) / self.cfg.foot_height_sigma
+        )
+        self.foot_height_reward_val = torch.sum(foot_height_dense_match * airborne, dim=1)
+
+        # -- Grounded-feet PENALTY: the term that has to break the standing local optimum --
+        # Every other gait term in this file is multiplied by (~contact) or by `landed`, so for a
+        # robot with all four feet planted they are ALL identically zero -- and so are their
+        # gradients. feet_air_time only pays a foot that is already airborne; the lift reward only
+        # pays a foot that is already up. None of them can tell the policy that picking a foot up
+        # would be better, because none of them changes until it already has. That is the whole
+        # reason five straight runs plateaued standing still with a valid-looking reward set.
+        #
+        # This term is nonzero exactly IN that state and falls monotonically as feet leave the
+        # ground, so it is a real gradient out of it: charge (feet in contact - allowed), floored
+        # at zero, every step, while a move command is active.
+        #
+        # feet_grounded_allowed = 2 is what makes it safe to point at a gait rather than at
+        # jumping: a trot has two feet down at all times and pays exactly zero, so once the robot
+        # is trotting this term stops applying pressure entirely. Nothing here rewards having
+        # FEWER than two feet down, so it cannot drive flight phases the way a bare "reward air
+        # time" would. A three-legged crawl pays 1 -- deliberate, since that is the shuffle this
+        # is meant to push past.
+        #
+        # Gated by moving_mask like the rest of the gait shaping: standing still on all four feet
+        # is the correct answer to a zero command and must stay free.
+        self.feet_grounded_val = (
+            (contact.float().sum(dim=1) - self.cfg.feet_grounded_allowed).clamp(min=0.0)
+            * moving_mask
+        )
 
         # -- Landing impact PENALTY: vertical foot speed at touchdown, charged once per landing --
         # Target is a foot set down at zero vertical speed. Mismatch again, so
@@ -971,6 +1235,18 @@ class QuadrupedEnv(DirectRLEnv):
             feet_vel_z = all_feet_vel_z
         else:
             feet_vel_z = self.robot.data.body_lin_vel_w[:, self._feet_ids_articulation, 2]
+
+        # Full world-frame foot velocity (N, 4, 3). The landing penalty above only needs z; the
+        # paper set's foot-slippage term needs the tangential (xy) component of a foot that is
+        # supposed to be planted.
+        if getattr(self, "is_heterogeneous", False):
+            feet_vel_w = torch.zeros((self.num_envs, 4, 3), device=self.device)
+            for i, view in enumerate(self.robot_views):
+                indices = self.robot_view_indices[i]
+                feet_vel_w[indices] = view.data.body_lin_vel_w[:, self.robot_feet_ids[i], :]
+        else:
+            feet_vel_w = self.robot.data.body_lin_vel_w[:, self._feet_ids_articulation, :]
+        self.feet_vel_w = feet_vel_w
 
         # Squared, so an upward-moving foot at touchdown (a scuff into a bump, or a skimming
         # re-contact) is charged the same as one dropping. No env-origin correction is needed the
@@ -1054,6 +1330,19 @@ class QuadrupedEnv(DirectRLEnv):
         # Diagnostic: peak foot force as a multiple of body weight, so the new measurement can be
         # compared directly against the MuJoCo eval's grf_peak_stance_N before tuning the scale.
         self.grf_peak_bw_val = feet_forces_z_peak.amax(dim=1) / self.robot_total_weight.clamp(min=1.0)
+
+        # Stance-time bookkeeping, mirroring the air-time lines just below: accumulate while in
+        # contact, clear on liftoff. Same ordering rule -- the increment happens before the clear,
+        # so a foot that lifts this step still had its full stance credited.
+        self.feet_contact_time += self.step_dt
+        self.feet_contact_time[~contact] = 0.0
+        # Handles for _compute_paper_rewards, which runs after this method from _get_rewards.
+        self.contact_bool = contact
+        self.landed_bool = landed
+        self.moving_mask_val = moving_mask
+
+        # Latch the completed swing duration before feet_air_time is cleared below.
+        self.feet_last_air_time = torch.where(landed, self.feet_air_time, self.feet_last_air_time)
 
         # Reset air time and swing peak height for feet in contact. Must stay AFTER the reward
         # computations above, so the final increment of the swing is credited before clearing.
@@ -1191,6 +1480,73 @@ class QuadrupedEnv(DirectRLEnv):
             yaw_error[exceeds_yaw_leash] = yaw_error_clamped
         self.yaw_deviation_val = torch.abs(yaw_error)
 
+    # Table II of Dowdy & Chagas Vaz (SII 2026): (scaler, injected noise) per observation term,
+    # applied per-term rather than through this repo's single observation_noise_scale.
+    _PAPER_OBS_SPEC = (
+        ("lin_acc",      0.7, 0.02),
+        ("ang_vel",      0.7, 0.01),
+        ("orientation",  0.7, 0.05),
+        ("command",      1.0, 0.00),
+        ("joint_pos",    1.0, 0.05),
+        ("joint_vel",    1.0, 0.10),
+        ("prev_torque",  0.5, 0.05),
+        ("prev_action",  1.0, 0.00),
+        ("feet_contact", 2.0, 0.00),
+    )
+    PAPER_OBS_DIM = 3 + 3 + 4 + 3 + 12 + 12 + 12 + 12 + 4  # = 65
+
+    def _paper_observations(self) -> torch.Tensor:
+        """Observation vector transcribed from Dowdy & Chagas Vaz (SII 2026), Table II.
+
+        Three differences from this repo's 49-dim vector matter, and they are the paper's whole
+        argument for why a torque policy can work without state estimation:
+
+          1. BASE LINEAR VELOCITY IS ABSENT, deliberately. This repo feeds base_lin_vel, which on
+             hardware has to come from a state estimator. The paper replaces it with linear
+             ACCELERATION (what an IMU actually measures) and lets the policy infer velocity from
+             the sequence.
+          2. PREVIOUS APPLIED TORQUE is fed back in. With domain randomisation over the actuators,
+             this is what lets the policy identify its own actuator dynamics online -- the paper's
+             stated reason for expecting torque control to beat position control here.
+          3. FOOT CONTACT is an explicit binary input. Nothing in this repo's observation tells the
+             policy which feet are down, which is a hard thing to ask it to infer while also
+             asking it to produce a contact-scheduled gait.
+
+        Orientation is the raw world-frame quaternion, replacing projected gravity -- the paper is
+        explicit about that swap. Command is 3 wide here (vx, vy, wz); this repo's 4th slot
+        (heading) has no counterpart in Table II and is dropped.
+
+        Per-term scalers and per-term noise both come from Table II, so cfg.observation_noise_scale
+        is NOT used in this mode.
+
+        AMBIGUITY: Table II names the term "Linear Acceleration a_base" without saying whether it
+        is body-frame, and whether it includes gravity the way a real accelerometer does. Taken
+        here as the body-frame finite difference of base_lin_vel -- the same quantity the repo
+        already computes for base_acc_l2 -- i.e. gravity-free.
+        """
+        lin_acc = (self.base_lin_vel - self.last_base_lin_vel) / self.step_dt
+        feet_contact = (
+            torch.norm(self.net_contact_forces[:, self._feet_ids, :], dim=-1) > 1.0
+        ).float()
+        terms = (
+            lin_acc,
+            self.base_ang_vel,
+            self.root_quat_w,
+            self.commands[:, :3],
+            self.joint_pos - self.desired_joint_pos,
+            self.joint_vel,
+            self.applied_torque,
+            self.actions,
+            feet_contact,
+        )
+        out = []
+        for value, (_, scaler, noise) in zip(terms, self._PAPER_OBS_SPEC):
+            v = value * scaler
+            if noise > 0.0:
+                v = v + torch.randn_like(v) * noise
+            out.append(v)
+        return torch.cat(out, dim=-1)
+
     def _get_observations(self) -> dict:
         """
         Collects data from the simulation to feed into the neural network.
@@ -1199,23 +1555,26 @@ class QuadrupedEnv(DirectRLEnv):
         # teleported to their spawn state since _compute_reward_terms() last looked.
         self._refresh_state()
 
-        # Observations (unscaled)
-        obs = torch.cat(
-            (
-                self.base_lin_vel,
-                self.base_ang_vel,
-                self.projected_gravity,
-                self.commands,
-                self.joint_pos - self.desired_joint_pos,
-                self.joint_vel,
-                self.actions,
-            ),
-            dim=-1,
-        )
+        if self.cfg.obs_mode == "paper":
+            obs = self._paper_observations()
+        else:
+            # Observations (unscaled)
+            obs = torch.cat(
+                (
+                    self.base_lin_vel,
+                    self.base_ang_vel,
+                    self.projected_gravity,
+                    self.commands,
+                    self.joint_pos - self.desired_joint_pos,
+                    self.joint_vel,
+                    self.actions,
+                ),
+                dim=-1,
+            )
 
-        # Add observation noise (Sim2Real)
-        obs_noise = torch.randn_like(obs) * self.cfg.observation_noise_scale
-        obs = obs + obs_noise
+            # Add observation noise (Sim2Real)
+            obs_noise = torch.randn_like(obs) * self.cfg.observation_noise_scale
+            obs = obs + obs_noise
 
         if self.cfg.obs_history_len > 0:
             full_obs = torch.cat([obs, self.obs_history_buf], dim=-1)
@@ -1255,6 +1614,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_flat_orientation_l2,
             self.cfg.rew_scale_foot_height_penalty,
             self.cfg.rew_scale_foot_height_reward,
+            self.cfg.rew_scale_feet_grounded,
             self.cfg.rew_scale_foot_landing_vel,
             self.cfg.rew_scale_feet_air_penalty,
             self.cfg.rew_scale_feet_air_penalty_static,
@@ -1285,6 +1645,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.feet_air_time_reward_val,
             self.foot_height_penalty_val,
             self.foot_height_reward_val,
+            self.feet_grounded_val,
             self.foot_landing_vel_val,
             self.feet_air_penalty_val,
             self.feet_air_penalty_static_val,
@@ -1304,6 +1665,13 @@ class QuadrupedEnv(DirectRLEnv):
         )
         self.extras.setdefault("log", {})
         self.extras["log"].update(reward_log)
+        # Paper reward set (Dowdy & Chagas Vaz, SII 2026 Table III). Added on top rather than
+        # inside compute_rewards: its terms use L1 norms where the repo squares, so they are
+        # genuinely different terms, not a reweighting. Every scale defaults to 0.0, so this
+        # contributes exactly zero unless a phase turns it on.
+        paper_reward, paper_log = self._compute_paper_rewards()
+        total_reward = total_reward + paper_reward
+        self.extras["log"].update(paper_log)
         # Peak per-foot contact force in body weights, for comparing the substep-peak measurement
         # against the MuJoCo eval's grf_peak_stance_N before retuning rew_scale_max_contact_force.
         self.extras["log"]["diag/grf_peak_bw_mean"] = self.grf_peak_bw_val.mean()
@@ -1399,6 +1767,8 @@ class QuadrupedEnv(DirectRLEnv):
         # airborne at termination, and obs_history_buf feeding the policy 10 frames of the
         # previous, falling episode. Phase 1 is exactly where the base gait is learned.
         self.feet_air_time[env_ids] = 0.0
+        self.feet_contact_time[env_ids] = 0.0
+        self.feet_last_air_time[env_ids] = 0.0
         self.feet_height_max[env_ids] = 0.0
         self.last_feet_contact[env_ids] = False
         self.last_feet_vel_z[env_ids] = 0.0
@@ -1433,7 +1803,61 @@ class QuadrupedEnv(DirectRLEnv):
         masses[local_ids_cpu, 0] = (
             view.data.default_mass[local_ids_cpu, 0] + mass_noise[:, 0]
         )
+        # Link Mass, "Scale" in Table I of the paper: a multiplier on EVERY body's mass, not the
+        # single additive payload on the trunk above. Applied on top of the payload so the two
+        # compose; range defaults to (1.0, 1.0), i.e. off, for every pre-existing phase.
+        lo, hi = self.cfg.link_mass_scale_range
+        if lo != 1.0 or hi != 1.0:
+            scale = sample_uniform(lo, hi, (len(env_ids_cpu), masses.shape[1]), "cpu")
+            masses[local_ids_cpu] = view.data.default_mass[local_ids_cpu] * scale
+            masses[local_ids_cpu, 0] = masses[local_ids_cpu, 0] + mass_noise[:, 0]
         view.root_physx_view.set_masses(masses, local_ids_cpu)
+
+        # Foot Friction, "New" in Table I: resample the contact material outright rather than
+        # perturbing it. Applied to every collider on the robot, not only the feet -- shape ids
+        # are not exposed per-body here, and the terrain uses friction_combine_mode="multiply",
+        # so this still lands on the foot/ground contact that Table I is about.
+        f_lo, f_hi = self.cfg.foot_friction_range
+        if f_hi > 0.0:
+            # BUCKETED, and it has to be. PhysX caps the scene at 64K unique materials, and a
+            # freshly sampled friction per (env, shape) blows straight through that: 4096 envs x
+            # ~17 shapes = ~70K on the first full reset, which fails with
+            #   "PxPhysics::createMaterial: limit of 64K materials reached"
+            # followed by a flood of "material pointer 0 is NULL". Isaac Lab's own
+            # randomize_rigid_body_material has num_buckets for exactly this reason.
+            #
+            # So: draw a fixed, small palette of friction values, and give each env one of them.
+            # The number of distinct materials is bounded by the bucket count no matter how many
+            # envs exist. 64 values across (0.4, 1.1) is a 0.011 quantisation -- far finer than
+            # the sim2real uncertainty this is standing in for.
+            #
+            # Applied ONCE PER VIEW, on the first reset, not on every reset. Bucketing
+            # bounds the number of distinct material VALUES; it does not necessarily bound how
+            # many material objects PhysX allocates across repeated set_material_properties
+            # calls. Assigning once removes that question entirely, and costs almost nothing:
+            # with thousands of envs each holding a different bucket, the policy still sees the
+            # whole friction distribution in every single batch -- it just does not get a fresh
+            # draw per episode. This is also what Isaac Lab's own material randomisation does
+            # (its event term defaults to mode="startup").
+            view_key = view_idx if view_idx is not None else -1
+            if getattr(self, "_friction_done", None) is None:
+                self._friction_done = set()
+            if view_key not in self._friction_done:
+                self._friction_done.add(view_key)
+                n_buckets = self.cfg.friction_num_buckets
+                buckets = sample_uniform(f_lo, f_hi, (n_buckets,), "cpu")
+                materials = view.root_physx_view.get_material_properties().clone()
+                # One bucket per ENV, broadcast across that robot's shapes. A robot with
+                # different friction under each of its own feet is not what the paper's "Foot
+                # Friction" row describes, and per-shape draws are what multiplied the material
+                # count by ~17 in the first place.
+                n_env_total = materials.shape[0]
+                picks = torch.randint(0, n_buckets, (n_env_total,), device="cpu")
+                friction = buckets[picks].unsqueeze(1)      # (n_env_total, 1), broadcasts
+                materials[:, :, 0] = friction               # static
+                materials[:, :, 1] = friction               # dynamic
+                all_ids = torch.arange(n_env_total, device="cpu")
+                view.root_physx_view.set_material_properties(materials, all_ids)
 
         # Cache total robot weight (mg) for physics-based GRF penalty
         total_mass_per_env = masses[local_ids_cpu].sum(dim=1)  # sum all body masses
@@ -1557,12 +1981,18 @@ class QuadrupedEnv(DirectRLEnv):
         joint_pos = view.data.default_joint_pos[ids].clone()
         joint_vel = view.data.default_joint_vel[ids].clone()
 
-        # Add small random noise to initial joint positions and velocities
+        # Add random noise to initial joint positions and velocities. Ranges are configurable
+        # (defaults reproduce the old hardcoded +-0.2 rad / +-0.5 rad/s); the paper phase widens
+        # them to Table I's +-0.3 rad and +-2.5 rad/s, which is a far more aggressive reset --
+        # the robot regularly starts mid-tumble, which is itself a source of the varied contact
+        # states a gait reward needs to see before it can score one.
         pos_noise = sample_uniform(
-            -0.2, 0.2, (len(ids), len(v_idx)), joint_pos.device
+            self.cfg.reset_joint_pos_range[0], self.cfg.reset_joint_pos_range[1],
+            (len(ids), len(v_idx)), joint_pos.device
         )
         vel_noise = sample_uniform(
-            -0.5, 0.5, (len(ids), len(v_idx)), joint_vel.device
+            self.cfg.reset_joint_vel_range[0], self.cfg.reset_joint_vel_range[1],
+            (len(ids), len(v_idx)), joint_vel.device
         )
 
         # Apply noise only to controlled joints
@@ -1577,6 +2007,24 @@ class QuadrupedEnv(DirectRLEnv):
         default_root_state[:, 2] = (
             self.scene.env_origins[env_ids][:, 2] + self.cfg.spawn_height
         )
+
+        # Base pose / velocity randomisation on reset (Table I: Body Position, Body Orientation,
+        # Body Velocity -- all "Add"). This repo spawned every robot in an identical, perfectly
+        # level, perfectly still pose, so the policy only ever saw one initial condition. All
+        # three ranges default to 0.0, leaving existing phases spawning exactly as before.
+        n = len(ids)
+        if self.cfg.reset_body_pos_range[1] > 0.0:
+            lo, hi = self.cfg.reset_body_pos_range
+            default_root_state[:, :2] += sample_uniform(lo, hi, (n, 2), self.device)
+        if self.cfg.reset_body_ori_range[1] > 0.0:
+            # Applied as a small additive perturbation on the quaternion, renormalised. At Table
+            # I's +-0.02 the small-angle approximation holds comfortably (~2.3 deg).
+            lo, hi = self.cfg.reset_body_ori_range
+            quat = default_root_state[:, 3:7] + sample_uniform(lo, hi, (n, 4), self.device)
+            default_root_state[:, 3:7] = quat / quat.norm(dim=1, keepdim=True).clamp(min=1e-6)
+        if self.cfg.reset_body_vel_range[1] > 0.0:
+            lo, hi = self.cfg.reset_body_vel_range
+            default_root_state[:, 7:10] += sample_uniform(lo, hi, (n, 3), self.device)
 
         # 3. Write to Simulator
         view.write_root_pose_to_sim(default_root_state[:, :7], ids)
@@ -1611,6 +2059,7 @@ def compute_rewards(
     rew_scale_flat_orientation_l2: float,
     rew_scale_foot_height_penalty: float,
     rew_scale_foot_height_reward: float,
+    rew_scale_feet_grounded: float,
     rew_scale_foot_landing_vel: float,
     rew_scale_feet_air_penalty: float,
     rew_scale_feet_air_penalty_static: float,
@@ -1641,6 +2090,7 @@ def compute_rewards(
     feet_air_time_reward_val: torch.Tensor,
     foot_height_penalty_val: torch.Tensor,
     foot_height_reward_val: torch.Tensor,
+    feet_grounded_val: torch.Tensor,
     foot_landing_vel_val: torch.Tensor,
     feet_air_penalty_val: torch.Tensor,
     feet_air_penalty_static_val: torch.Tensor,
@@ -1743,6 +2193,10 @@ def compute_rewards(
     rew_foot_height_penalty = rew_scale_foot_height_penalty * foot_height_penalty_val
     rew_foot_height_reward = rew_scale_foot_height_reward * foot_height_reward_val
 
+    # 12c. Grounded-feet penalty (scale must be NEGATIVE). Charged on feet in contact beyond
+    # feet_grounded_allowed while moving -- the only gait term that is nonzero while standing.
+    rew_feet_grounded = rew_scale_feet_grounded * feet_grounded_val
+
     # 12b. Landing Impact Penalty (touchdown vertical-speed mismatch -- scale must be NEGATIVE)
     rew_foot_landing_vel = rew_scale_foot_landing_vel * foot_landing_vel_val
 
@@ -1781,6 +2235,8 @@ def compute_rewards(
     log["reward/flat_orientation_l2"] = rew_flat_orientation_l2.mean()
     log["reward/foot_height_penalty"] = rew_foot_height_penalty.mean()
     log["reward/foot_height_reward"] = rew_foot_height_reward.mean()
+    log["reward/feet_grounded"] = rew_feet_grounded.mean()
+    log["diag/n_feet_grounded_excess"] = feet_grounded_val.mean()
     log["reward/foot_landing_vel"] = rew_foot_landing_vel.mean()
     log["reward/base_height_l2"] = rew_base_height_l2.mean()
     log["reward/feet_air_penalty"] = rew_feet_air_penalty.mean()
@@ -1814,6 +2270,7 @@ def compute_rewards(
         + rew_flat_orientation_l2
         + rew_foot_height_penalty
         + rew_foot_height_reward
+        + rew_feet_grounded
         + rew_foot_landing_vel
         + rew_base_height_l2
         + rew_feet_air_penalty

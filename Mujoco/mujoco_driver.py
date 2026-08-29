@@ -241,11 +241,60 @@ class Ros2MujocoDriver(Node):
             self.get_logger().info(f"[MujocoDriver] Dynamic Kd updated to: {self.kd:.2f}")
 
 
+    @property
+    def act_effort_limit(self) -> float:
+        """Peak actuator torque, N*m. From the checkpoint's env.yaml via launcher.py."""
+        return float(os.environ.get("QUADRUPED_EFFORT_LIMIT", 23.7))
+
+    @property
+    def act_saturation(self) -> float:
+        """Stall torque of the DC motor model, N*m -- the intercept of the torque-speed line."""
+        return float(os.environ.get("QUADRUPED_SATURATION_EFFORT", 23.7))
+
+    @property
+    def act_velocity_limit(self) -> float:
+        """No-load joint speed, rad/s -- where available torque reaches zero."""
+        return float(os.environ.get("QUADRUPED_VELOCITY_LIMIT", 30.0))
+
+    @property
+    def barrier_stiffness(self) -> float:
+        """Stiffness of the joint-limit spring in torque mode, in N*m/rad.
+
+        Exported by launcher.py from the checkpoint's env.yaml
+        (joint_limit_barrier_stiffness). Training picks it to match position mode's Kp so the
+        boundary feels the same in both modes; a policy trained against it will drive into the
+        limits without it.
+        """
+        return float(os.environ.get("QUADRUPED_BARRIER_STIFFNESS", 25.0))
+
+    @property
+    def spawn_height(self) -> float:
+        """Base height the robot is reset to, in metres.
+
+        QUADRUPED_SPAWN_HEIGHT wins if set (launcher.py exports it from the checkpoint's
+        env.yaml). Otherwise falls back to the same mode-dependent defaults the training config
+        uses, so a checkpoint is dropped from the height it learned to land from. Lower it
+        further if the robot still cannot recover -- a Go2 stands at ~0.32 m, so 0.35 is a 3 cm
+        settle rather than a fall.
+        """
+        env_val = os.environ.get("QUADRUPED_SPAWN_HEIGHT")
+        if env_val:
+            return float(env_val)
+        torque = os.environ.get("QUADRUPED_CONTROL_MODE", "position").lower() == "torque"
+        return 0.35 if torque else 0.50
+
     def _reset_robot(self):
         mujoco.mj_resetData(self.model, self.data)
         for i, addr in enumerate(self.isaac_qpos_addr):
             self.data.qpos[addr] = self.desired_qpos[i]
-        self.data.qpos[2] = 0.50
+        # Drop height, matched to what the policy was trained with rather than hardcoded.
+        # 0.50 was the position-mode number and assumes the PD loop holds the default stance
+        # through the ~0.2 m fall so the robot lands on its feet. A torque policy has no PD
+        # underneath it -- the legs are only as stiff as the torques it happens to command --
+        # so the same drop lands it on its belly. The training cfg already accounts for this
+        # (quadruped_env_cfg.spawn_height: 0.35 for torque, 0.50 for position); this reads the
+        # value the checkpoint actually trained at, exported by launcher.py from its env.yaml.
+        self.data.qpos[2] = self.spawn_height
         self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
         mujoco.mj_forward(self.model, self.data)
         print("[MujocoDriver] Robot reset to standing pose.")
@@ -335,14 +384,65 @@ class Ros2MujocoDriver(Node):
                 
                 # --- Centralized Pipeline (handles inference & telemetry) ---
                 raw_data = self._get_raw_sensor_data()
+                raw_data['tau'] = getattr(self, '_last_applied_torque', np.zeros(12))
                 self.current_targets = self.pipeline.step(
                     raw_state_kwargs=raw_data,
                     cmd_vel=self.cmd_vel,
                     sim_time=self.data.time
                 )
 
-                # --- PD step (200 Hz) ---
-                torques = self._pd_torques(self.current_targets)
+                # --- Actuation (200 Hz) ---
+                if getattr(self.pipeline, "output_is_torque", False):
+                    # Torque-mode policy: the pipeline handed us joint EFFORTS in N*m, already
+                    # scaled by torque_scale. Applied straight to the actuators, bypassing the PD
+                    # loop entirely -- running them through _pd_torques would treat newton-metres
+                    # as radians of position error and multiply them by Kp.
+                    # Clipped to the same effort limit the PD path is bounded by, which is also
+                    # what the training env's actuator model enforces.
+                    torques = np.asarray(self.current_targets, dtype=np.float64)
+                    # JOINT-LIMIT BARRIER, mirroring QuadrupedEnv._joint_limit_barrier. Position
+                    # mode makes limit violation structurally impossible by clamping the target;
+                    # torque mode has no target, so training re-establishes the guarantee in the
+                    # action path with a one-sided spring. The policy learned WITH that safety
+                    # net underneath it, so leaving it out here changes behaviour exactly at the
+                    # limits -- the joints get driven into their stops instead of pushed back.
+                    # Same two parts, same order as training:
+                    #   1. drop any commanded torque still pushing the joint further out
+                    #   2. add a spring proportional to the overshoot, pulling it back
+                    sp = self.pipeline.safety_processor
+                    q = self.data.qpos[self.isaac_qpos_addr]
+                    over_hi = np.clip(q - sp.soft_max, 0.0, None)
+                    over_lo = np.clip(sp.soft_min - q, 0.0, None)
+                    torques = np.where(over_hi > 0.0, np.minimum(torques, 0.0), torques)
+                    torques = np.where(over_lo > 0.0, np.maximum(torques, 0.0), torques)
+                    torques = torques + self.barrier_stiffness * (over_lo - over_hi)
+
+                    # ACTUATOR MODEL, mirroring Isaac's DCMotorCfg. Training does not clip to
+                    # a flat effort limit: available torque falls off with joint speed (back-EMF),
+                    #   max_eff =  sat * (1 - v/v_lim), clipped to [0, +effort_limit]
+                    #   min_eff =  sat * (-1 - v/v_lim), clipped to [-effort_limit, 0]
+                    # so a joint at 15 rad/s can only pull 11.8 N*m and at 25 rad/s only 3.9,
+                    # against MuJoCo's flat ctrlrange of 23.7. A trot peaks at 10-20 rad/s in
+                    # swing, so without this the policy gets 2-6x the torque it was ever trained
+                    # to have, exactly during the fastest part of the stride. Braking torque
+                    # stays available at full, which is the physically correct asymmetry.
+                    v = self.data.qvel[self.isaac_qvel_addr]
+                    sat, v_lim, eff = self.act_saturation, self.act_velocity_limit, self.act_effort_limit
+                    max_eff = np.clip(sat * (1.0 - v / v_lim), 0.0, eff)
+                    min_eff = np.clip(sat * (-1.0 - v / v_lim), -eff, 0.0)
+                    torques = np.clip(torques, min_eff, max_eff)
+
+                    # Safety watchdog limit still applies on top.
+                    limit = sp.active_max_torque
+                    torques = np.clip(torques, -limit, limit)
+                    # Fed back as the "previous applied torque" observation. Training feeds the
+                    # torque the articulation ACTUALLY applied -- after this barrier and after
+                    # the actuator clamp -- not what the policy asked for. They differ precisely
+                    # when the barrier or the effort limit is active, which is where a torque
+                    # policy most needs to know what really happened.
+                    self._last_applied_torque = torques.copy()
+                else:
+                    torques = self._pd_torques(self.current_targets)
                 for i, act_idx in enumerate(self.isaac_ctrl_idx):
                     self.data.ctrl[act_idx] = torques[i]
 

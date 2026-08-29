@@ -103,6 +103,7 @@ class RewardEstimatorNode(Node):
             "feet_air_penalty",
             "feet_air_penalty_static",
             "joint_vel_l2_static",
+            "feet_grounded",
             "total_reward"
         ]
 
@@ -149,8 +150,8 @@ class RewardEstimatorNode(Node):
         target_air_time = self.rew_cfg.get('target_feet_air_time', 0.2)
         air_time_reward = 0.0
         
-        # Swing-apex height, scored once per landing like the env does (match for the lift reward,
-        # 1 - match for the penalty). Accumulated here, scaled below.
+        # Foot height, matching the env's two forms: the reward is DENSE (per airborne foot per
+        # step, instantaneous height), the penalty is charged once per landing on the swing apex.
         target_foot_height = self.rew_cfg.get('target_foot_height', 0.12)
         foot_height_sigma = self.rew_cfg.get('foot_height_sigma', 0.01)
         foot_height_match = 0.0
@@ -162,13 +163,17 @@ class RewardEstimatorNode(Node):
 
             self.feet_height_max[i] = max(self.feet_height_max[i], foot_heights_z[i])
 
-            # First contact this step
+            # Dense lift reward: every step this foot is airborne, on its current height.
+            if not is_contact:
+                foot_height_match += np.exp(
+                    -((foot_heights_z[i] - target_foot_height) ** 2) / foot_height_sigma
+                )
+
+            # First contact this step -- the apex penalty is charged here, once per swing.
             if is_contact and not was_contact:
                 air_time_reward += max(0.0, self.feet_air_time[i] - target_air_time)
                 err_sq = (self.feet_height_max[i] - target_foot_height) ** 2
-                match = np.exp(-err_sq / foot_height_sigma)
-                foot_height_match += match
-                foot_height_mismatch += 1.0 - match
+                foot_height_mismatch += 1.0 - np.exp(-err_sq / foot_height_sigma)
 
             if not is_contact:
                 self.feet_air_time[i] += dt
@@ -199,11 +204,9 @@ class RewardEstimatorNode(Node):
         is_moving = np.linalg.norm(self.commands[:3]) > self.cmd_cfg.get('static_velocity_threshold', 0.001)
         rewards.append(self.rew_cfg.get('rew_scale_feet_air_time', 1.0) * air_time_reward * float(is_moving))
         
-        # 4. Foot Height -- both directions of the same swing-apex score, as in the env:
-        #    rew_scale_foot_height_penalty  (NEGATIVE) charges the mismatch,
-        #    rew_scale_foot_height_reward (POSITIVE) pays the match.
-        #    This used to score instantaneous height every airborne step against a hardcoded
-        #    sigma, which paid out with the sign of a scale that is now a penalty weight.
+        # 4. Foot Height, as in the env:
+        #    rew_scale_foot_height_reward  (POSITIVE) pays the dense per-airborne-step match,
+        #    rew_scale_foot_height_penalty (NEGATIVE) charges the per-landing apex mismatch.
         #    Published as one "foot_height" entry -- reward_names and PlotJuggler/reward_layout.xml
         #    index this list positionally, so the two directions are summed rather than split.
         rewards.append(
@@ -247,6 +250,15 @@ class RewardEstimatorNode(Node):
         
         # 15. Joint Vel L2 Static
         rewards.append(self.rew_cfg.get('rew_scale_joint_vel_l2_static', -1.0e-5) * np.sum(self.dq**2) * static_mask)
+
+        # 15b. Grounded feet beyond feet_grounded_allowed, while a move command is active.
+        # Appended AFTER joint_vel_l2_static so indices 0-14 keep their meaning -- reward_names
+        # and PlotJuggler/reward_layout.xml address this list positionally.
+        n_grounded = float(np.sum(self.contact > 0.5))
+        grounded_excess = max(0.0, n_grounded - self.rew_cfg.get('feet_grounded_allowed', 2.0))
+        rewards.append(
+            self.rew_cfg.get('rew_scale_feet_grounded', 0.0) * grounded_excess * float(is_moving)
+        )
         
         # 16. Total
         rewards.append(sum(rewards))

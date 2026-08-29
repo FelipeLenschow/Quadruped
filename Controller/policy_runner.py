@@ -4,6 +4,11 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+# Observation width of the paper layout (Dowdy & Chagas Vaz, SII 2026, Table II):
+# lin_acc(3) + ang_vel(3) + quat(4) + cmd(3) + jpos(12) + jvel(12) + prev_torque(12)
+# + prev_action(12) + contact(4). Must stay in sync with QuadrupedEnv.PAPER_OBS_DIM.
+PAPER_OBS_DIM = 65
+
 
 # Rotation helper
 def quat_to_rot_matrix(q):
@@ -122,8 +127,29 @@ class PolicyRunner:
 
             self._load_checkpoint(checkpoint_path)
 
+        # Control mode. A torque-trained policy emits joint EFFORTS, not position residuals, so
+        # the whole downstream path has to know -- feeding torques into a PD loop as if they were
+        # joint angles produces motion, just not any that means anything.
+        self.control_mode = os.environ.get("QUADRUPED_CONTROL_MODE", "position").lower()
+        self.torque_scale = float(os.environ.get("QUADRUPED_TORQUE_SCALE", 5.0))
+
+        # Observation layout. 65 is the paper set (Dowdy & Chagas Vaz, SII 2026, Table II);
+        # anything else is this repo's historical 49-dim vector. Detected from the checkpoint
+        # rather than configured, so a checkpoint always gets the observation it was trained on.
+        self.paper_obs = (self.obs_dim == PAPER_OBS_DIM)
+        if self.paper_obs:
+            self.control_mode = os.environ.get("QUADRUPED_CONTROL_MODE", "torque").lower()
+            print(
+                f"[PolicyRunner] obs_dim {self.obs_dim} -> PAPER observation layout "
+                f"(Table II, 65-dim), control_mode={self.control_mode}, "
+                f"torque_scale={self.torque_scale}"
+            )
+        self._prev_lin_vel = np.zeros(3, dtype=np.float32)
+
         # Detect single-step dim based on environment variable (default 49)
-        self._obs_dim_single = int(os.environ.get("QUADRUPED_OBS_DIM_SINGLE", 49))
+        self._obs_dim_single = int(
+            os.environ.get("QUADRUPED_OBS_DIM_SINGLE", PAPER_OBS_DIM if self.paper_obs else 49)
+        )
         if self.obs_dim % self._obs_dim_single != 0:
             print(f"[PolicyRunner] WARNING: Total obs_dim {self.obs_dim} is not a multiple of single-step dim {self._obs_dim_single}.")
 
@@ -235,11 +261,124 @@ class PolicyRunner:
                 "[PolicyRunner] " + "!" * 60
             )
 
+    def _build_obs_paper(self, state, commands, last_actions, desired_qpos, mj_to_isaac):
+        """Table II of Dowdy & Chagas Vaz (SII 2026) -- the 65-dim observation.
+
+        Must match QuadrupedEnv._paper_observations term for term and scaler for scaler, or the
+        policy is reading a different vector than it was trained on. No noise is injected here:
+        Table II's noise column is training-time domain randomisation, and the real sensors
+        supply their own.
+
+        NOTE ON LINEAR ACCELERATION: training computes it as the body-frame finite difference of
+        base_lin_vel, which is gravity-FREE. That is reproduced here rather than reading
+        state.imu.accelerometer, which reports specific force (gravity included, ~+9.81 in z at
+        rest) and would be a different quantity by ~1g.
+
+        In simulation this differentiates the exact body velocity, matching training. ON REAL
+        HARDWARE there is no such field and it falls back to base_lin_vel -- i.e. the estimator,
+        differentiated -- which is both noisy and exactly the state-estimation dependency the
+        paper's observation design exists to remove. Switching BOTH sides to IMU specific force
+        is the real fix for hardware; it invalidates any policy already trained, so it is not
+        done here. See the matching note in QuadrupedEnv._paper_observations.
+        """
+        quat = np.asarray(state.imu.quaternion, dtype=np.float32)          # (w, x, y, z)
+        ang_vel = np.asarray(state.imu.gyroscope, dtype=np.float32)
+
+        # Training differentiates the simulator's exact body velocity. In sim, prefer the same
+        # ground-truth field: base_lin_vel may be the LKF estimate, and differentiating an
+        # ESTIMATE at 1/dt = 200 amplifies its noise by 200x, which would make this input noise
+        # rather than acceleration and would be measuring the estimator, not the policy.
+        # has_sim_vel, not a None check: base_lin_vel_sim keeps a [0,0,0] default for the
+        # telemetry publishers, so testing the field itself would silently feed zeros on
+        # hardware -- a constant acceleration of exactly 0, which looks like a working input.
+        use_sim = getattr(state, "has_sim_vel", False)
+        lin_vel = np.asarray(
+            state.base_lin_vel_sim if use_sim else state.base_lin_vel, dtype=np.float32
+        )
+        if not hasattr(self, "_vel_src_logged"):
+            print(f"[PolicyRunner] lin_acc source: "
+                  f"{'ground-truth sim velocity' if use_sim else 'base_lin_vel (estimator)'}")
+            self._vel_src_logged = True
+
+        dt = max(getattr(self, '_last_dt', 0.02), 1e-6)
+        lin_acc = (lin_vel - self._prev_lin_vel) / dt
+        self._prev_lin_vel = lin_vel.copy()
+
+        num_joints = len(mj_to_isaac)
+        mj_qpos = np.array([state.motorState[i].q for i in range(num_joints)])
+        mj_qvel = np.array([state.motorState[i].dq for i in range(num_joints)])
+        jpos = mj_qpos[mj_to_isaac] - desired_qpos
+        jvel = mj_qvel[mj_to_isaac]
+
+        # Previous APPLIED torque. On the training side this is what the articulation actually
+        # applied, after the joint-limit barrier and the actuator's torque-speed clamp. Here the
+        # closest available quantity is what was commanded last step: action * torque_scale.
+        applied = getattr(state, "applied_torque", None)
+        if applied is not None:
+            prev_torque = np.asarray(applied, dtype=np.float32)
+        else:
+            # No feedback available (e.g. first step, or a driver that does not report it):
+            # fall back on what was commanded. Differs from the applied torque only where the
+            # joint-limit barrier or the effort clamp bit.
+            prev_torque = np.asarray(last_actions, dtype=np.float32) * self.torque_scale
+
+        contact = np.asarray(getattr(state, "feet_contact", [0.0] * 4), dtype=np.float32)[:4]
+
+        parts = [
+            (lin_acc,                                    0.7),
+            (ang_vel,                                    0.7),
+            (quat,                                       0.7),
+            (np.asarray(commands, dtype=np.float32)[:3], 1.0),
+            (jpos,                                       1.0),
+            (jvel,                                       1.0),
+            (prev_torque,                                0.5),
+            (np.asarray(last_actions, dtype=np.float32), 1.0),
+            (contact,                                    2.0),
+        ]
+        out = [np.asarray(v, dtype=np.float32) * sc for v, sc in parts]
+
+        # Diagnostic dump. Set QUADRUPED_OBS_DUMP=<path> to write the first few observation
+        # vectors, broken down by term, and stop. Meant to be diffed against the same dump taken
+        # from the Isaac side (play.py writes the identical format), because a term that is in
+        # the wrong frame, order, sign or unit is invisible in behaviour but obvious here.
+        _dump = os.environ.get("QUADRUPED_OBS_DUMP")
+        if _dump:
+            n = getattr(self, "_dump_count", 0)
+            if n < 5:
+                names = [nm for nm, _, _ in self._PAPER_OBS_SPEC]
+                with open(_dump, "a") as f:
+                    f.write(f"# step {n}  source=mujoco\n")
+                    for nm, v in zip(names, out):
+                        f.write(f"{nm:14s} " + " ".join(f"{x:+9.4f}" for x in v) + "\n")
+                    f.write("\n")
+                self._dump_count = n + 1
+                if self._dump_count == 5:
+                    print(f"[PolicyRunner] wrote observation dump to {_dump}")
+        return out
+
     def build_obs(self, state, commands, last_actions, desired_qpos, mj_to_isaac):
         """
         Generic observation builder that works with LowState (Real or Mock).
         state: object with imu.quaternion, base_lin_vel, imu.gyroscope, motorState[...]
         """
+        if self.paper_obs:
+            obs_parts = self._build_obs_paper(
+                state, commands, last_actions, desired_qpos, mj_to_isaac
+            )
+            if not hasattr(self, "_obs_debug_done"):
+                print(
+                    f"[PolicyRunner] Obs Parts Lengths: {[len(p) for p in obs_parts]} "
+                    f"(Sum: {sum(len(p) for p in obs_parts)}) [paper layout]"
+                )
+                self._obs_debug_done = True
+            obs_single = np.concatenate(obs_parts).astype(np.float32)
+            self._obs_history = np.roll(self._obs_history, shift=1, axis=0)
+            self._obs_history[0, :] = obs_single
+            if self._episode_start:
+                self._obs_history[:] = obs_single
+                self._episode_start = False
+            return self._obs_history.flatten()
+
         # Base quaternion (w, x, y, z)
         quat = state.imu.quaternion
         R = quat_to_rot_matrix(quat)
@@ -320,6 +459,7 @@ class PolicyRunner:
 
 
 
+        self._last_dt = dt
         obs = self.build_obs(state, commands, self.last_actions, desired_qpos, mapping)
         actions = self.get_action(obs)
         t_end = time.perf_counter()

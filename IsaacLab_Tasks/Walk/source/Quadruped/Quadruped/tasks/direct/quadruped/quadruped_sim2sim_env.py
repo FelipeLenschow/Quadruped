@@ -368,6 +368,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.cfg.rew_scale_flat_orientation_l2,
                 self.cfg.rew_scale_foot_height_penalty,
                 getattr(self.cfg, "rew_scale_foot_height_reward", 0.0),
+                getattr(self.cfg, "rew_scale_feet_grounded", 0.0),
                 self.cfg.rew_scale_feet_air_penalty,
                 self.cfg.rew_scale_feet_air_penalty_static,
                 self.cfg.rew_scale_joint_vel_l2_static,
@@ -400,6 +401,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.feet_air_time_reward_val[sl],
                 zero_val, # foot_height_penalty_val
                 zero_val, # foot_height_reward_val
+                zero_val, # feet_grounded_val
                 self.feet_air_penalty_val[sl],
                 zero_val, # feet_air_penalty_static_val
                 zero_val, # joint_vel_l2_static_val
