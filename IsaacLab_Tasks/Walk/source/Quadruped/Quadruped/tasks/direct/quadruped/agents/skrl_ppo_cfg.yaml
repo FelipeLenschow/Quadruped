@@ -4,7 +4,9 @@ seed: 42
 # Models are instantiated using skrl's model instantiator utility
 # https://skrl.readthedocs.io/en/latest/api/utils/model_instantiators.html
 models:
-  separate: False
+  # Must be True: the value function now reads a wider, privileged input than the
+  # policy, so they cannot share a trunk.
+  separate: True
   policy:  # see gaussian_model parameters
     class: GaussianMixin
     clip_actions: False
@@ -23,7 +25,10 @@ models:
     clip_actions: False
     network:
       - name: net
-        input: OBSERVATIONS
+        # STATES, not OBSERVATIONS: the critic reads DirectRLEnvCfg.state_space
+        # (the actor observation plus base_lin_vel, true foot contact, per-foot
+        # load and base height), which the env returns under the "critic" key.
+        input: STATES
         layers: [512, 256, 128]
         activations: elu
     output: ONE
@@ -49,6 +54,13 @@ agent:
   learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
     kl_threshold: 0.008
+  # Both must be spelled out. skrl's Runner renames state_preprocessor ->
+  # observation_preprocessor when the latter is missing (and deletes the original),
+  # which is right for a symmetric setup but would leave the critic's privileged
+  # input unnormalised here -- and its terms (m/s, newtons/mg, metres) are on wildly
+  # different scales.
+  observation_preprocessor: RunningStandardScaler
+  observation_preprocessor_kwargs: null
   state_preprocessor: RunningStandardScaler
   state_preprocessor_kwargs: null
   value_preprocessor: RunningStandardScaler
@@ -59,11 +71,22 @@ agent:
   ratio_clip: 0.2
   value_clip: 0.2
   clip_predicted_values: True
+  # Fallback only -- training_phases.yaml's `agent:` block owns this value and
+  # train.py overwrites it before the Runner is built (and again at every curriculum
+  # transition). Change it there, per phase, not here.
   entropy_loss_scale: 0.0
   value_loss_scale: 2.0
   kl_threshold: 0.0
   rewards_shaper_scale: 0.1
-  time_limit_bootstrap: False
+  # Episodes run 949-972 steps against a 1000-step limit (episode_length_s 20.0 /
+  # step_dt 0.02), so nearly every episode ends in TRUNCATION, not termination.
+  # With this off, skrl skips the `rewards += discount * V(next_obs) * truncated`
+  # correction and instead lets the GAE recursion run across the episode boundary,
+  # mixing the post-reset value into the pre-reset advantage. This is the setting
+  # the skrl >= 2.1.0 pin was for -- the upgrade supplied the option, but the
+  # option itself was never switched on, and the ~2.7 ceiling stayed put across
+  # Basic4 (2730), Final2 (2717) and Final (2729).
+  time_limit_bootstrap: True
   # logging and checkpoint
   experiment:
     directory: "quadruped_direct"

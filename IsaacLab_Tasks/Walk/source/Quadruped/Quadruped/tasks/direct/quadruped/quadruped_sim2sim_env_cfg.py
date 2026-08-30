@@ -17,6 +17,11 @@ from .quadruped_env_cfg import QuadrupedEnvCfg
 
 @configclass
 class QuadrupedSim2SimEnvCfg(QuadrupedEnvCfg):
+    # Symmetric: this env evaluates a trained checkpoint and returns only
+    # {"policy"}, so it must not inherit the training env's privileged critic
+    # space -- skrl would ask for a "critic" key that _get_observations never
+    # produces and hand the value model None.
+    state_space = 0
     """Sim2Sim environment config.
 
     Three robots (A1, Quadruped, Go2) are spawned side-by-side (Y-axis) in every

@@ -18,6 +18,7 @@ from collections.abc import Sequence
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
+from isaaclab.utils.math import quat_rotate_inverse
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils.math import sample_uniform
@@ -287,6 +288,14 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
             lin_vel = robot.data.root_lin_vel_b
             ang_vel = robot.data.root_ang_vel_b
             proj_grav = robot.data.projected_gravity_b
+            # Accelerometer, matching quadruped_env._refresh_state: specific force
+            # in body frame, f_b = R^T(a_w - g_w) = R^T a_w - 9.81 * proj_grav.
+            accel = (
+                quat_rotate_inverse(
+                    robot.data.root_quat_w, robot.data.body_lin_acc_w[:, 0, :]
+                )
+                - 9.81 * proj_grav
+            )
 
             # Contact / air-time
             self._net_cf[i] = cs.data.net_forces_w
@@ -322,8 +331,10 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
             cmds = self.commands[slice_]
             acts = self.actions[slice_]
 
+            # Must match quadruped_env._get_observations exactly, or a policy
+            # trained there reads every field at the wrong offset here.
             obs = torch.cat(
-                (lin_vel, ang_vel, proj_grav, cmds,
+                (ang_vel, proj_grav, accel / 9.81, cmds,
                  jpos - desired_jp, jvel, acts),
                 dim=-1,
             )
@@ -333,8 +344,17 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
         policy_obs = torch.cat(obs_chunks, dim=0)
 
         if self.cfg.obs_history_len > 0:
-            self.obs_history_buf = torch.cat([policy_obs, self.obs_history_buf[:, :-49]], dim=-1)
-            policy_obs = torch.cat([policy_obs, self.obs_history_buf], dim=-1)
+            # Build the stacked vector from the CURRENT frame plus the PREVIOUS
+            # history, then roll -- the training env's order. Updating the buffer
+            # first (as this did) duplicates the current frame into slot 1 and
+            # drops the oldest, so every field past the first 49 was shifted by
+            # one step relative to training. Harmless while obs_history_len was 0;
+            # not any more.
+            full_obs = torch.cat([policy_obs, self.obs_history_buf], dim=-1)
+            self.obs_history_buf = torch.cat(
+                [policy_obs, self.obs_history_buf[:, :-49]], dim=-1
+            )
+            policy_obs = full_obs
 
         return {"policy": policy_obs}
 

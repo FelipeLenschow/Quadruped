@@ -231,6 +231,7 @@
   </keyframe>
 
   <sensor>
+    <accelerometer site="imu" name="accelerometer"/>
     <touch name="FL_touch" site="FL_foot"/>
     <touch name="FR_touch" site="FR_foot"/>
     <touch name="RL_touch" site="RL_foot"/>

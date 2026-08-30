@@ -202,6 +202,18 @@ def main(
     elif hasattr(env_cfg, "max_timesteps") and getattr(env_cfg, "max_timesteps") is not None:
         agent_cfg["trainer"]["timesteps"] = env_cfg.max_timesteps
     agent_cfg["trainer"]["close_environment_at_exit"] = False
+
+    # Per-phase PPO knobs from training_phases.yaml (`agent:` block). Applied here so
+    # the starting phase's values are what the Runner is built with; the env re-applies
+    # them at each curriculum transition (see _transition_to_next_phase).
+    for _k, _v in getattr(env_cfg, "agent_overrides", {}).items():
+        if _k not in agent_cfg["agent"]:
+            raise KeyError(
+                f"[Curriculum] training_phases.yaml sets agent.{_k}, which is not a key of "
+                f"skrl_ppo_cfg.yaml's agent block. Check the spelling."
+            )
+        print(f"[Curriculum] agent.{_k}: {agent_cfg['agent'][_k]} -> {_v} (from phase yaml)")
+        agent_cfg["agent"][_k] = _v
     # configure the ML framework into the global skrl variable
     if args_cli.ml_framework.startswith("jax"):
         skrl.config.jax.backend = "jax" if args_cli.ml_framework == "jax" else "numpy"
@@ -290,6 +302,14 @@ def main(
     # configure and instantiate the skrl runner
     # https://skrl.readthedocs.io/en/latest/api/utils/runner.html
     runner = Runner(env, agent_cfg)
+
+    # Hand the env a reference to the live agent so a curriculum transition can rewrite
+    # PPO knobs mid-run. Without it the `agent:` block would only ever apply to the phase
+    # the process started on -- the same trap observation_noise_scale used to be in.
+    try:
+        env.unwrapped._agent = runner.agent
+    except AttributeError:
+        pass
 
     # skrl >= 2.1.0 only prefixes "Info / " onto environment_info keys that contain no "/", so
     # our "reward/alive" style keys come out bare; older skrl prefixed unconditionally. Force the

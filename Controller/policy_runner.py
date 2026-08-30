@@ -114,6 +114,8 @@ class PolicyRunner:
 
         # Detect single-step dim based on environment variable (default 49)
         self._obs_dim_single = int(os.environ.get("QUADRUPED_OBS_DIM_SINGLE", 49))
+        # Which observation layout this checkpoint expects. See build_obs.
+        self.obs_version = int(os.environ.get("QUADRUPED_OBS_VERSION", 2))
         if self.obs_dim % self._obs_dim_single != 0:
             print(f"[PolicyRunner] WARNING: Total obs_dim {self.obs_dim} is not a multiple of single-step dim {self._obs_dim_single}.")
 
@@ -142,6 +144,44 @@ class PolicyRunner:
         # For now, we rely on the environment variable or common defaults
         return int(os.environ.get("QUADRUPED_OBS_DIM", 49))
 
+    @staticmethod
+    def _split_policy_state(policy_state):
+        """Split a skrl policy state dict into (hidden_sizes, remapped_state).
+
+        skrl writes two different layouts depending on `models: separate:` in the
+        agent config, and they disagree about where the OUTPUT head lives:
+
+          separate: False (shared trunk)  net_container.{0,2,4} = hidden
+                                          policy_layer          = output head
+          separate: True  (own trunk)     net_container.{0,2,4} = hidden
+                                          net_container.{6}     = output head
+
+        PolicyMLP always expects the head under `policy_layer`, so the separate
+        layout needs its LAST net_container entry moved there. Without this the
+        head is left randomly initialised and an extra ELU is applied where the
+        output should be -- and because _load_checkpoint uses strict=False, nothing
+        complains. The robot simply stands still.
+        """
+        idxs = sorted(
+            int(k.split(".")[1])
+            for k in policy_state
+            if k.startswith("net_container.") and k.endswith(".weight")
+        )
+        if not idxs:
+            return None, dict(policy_state)
+
+        state = dict(policy_state)
+        if "policy_layer.weight" in policy_state:
+            hidden = idxs                      # shared layout: head is separate
+        else:
+            hidden = idxs[:-1]                 # separate layout: last entry is the head
+            last = idxs[-1]
+            state["policy_layer.weight"] = state.pop(f"net_container.{last}.weight")
+            state["policy_layer.bias"] = state.pop(f"net_container.{last}.bias", None)
+            if state["policy_layer.bias"] is None:
+                del state["policy_layer.bias"]
+        return [policy_state[f"net_container.{i}.weight"].shape[0] for i in hidden], state
+
     def _inspect_checkpoint(self, path):
         """Detect obs_dim and layer sizes from checkpoint keys and shapes."""
         obs_dim = 236
@@ -156,18 +196,9 @@ class PolicyRunner:
                     obs_dim = v.shape[1]
                     break
 
-            # Detect layers
-            layer_sizes = []
-            i = 0
-            while True:
-                key = f"net_container.{i}.weight"
-                if key in policy_state:
-                    layer_sizes.append(policy_state[key].shape[0])
-                    i += 2  # Skip activation
-                else:
-                    break
-            if layer_sizes:
-                layers = layer_sizes
+            hidden, _ = self._split_policy_state(policy_state)
+            if hidden:
+                layers = hidden
 
         except Exception as e:
             print(f"[PolicyRunner] Warning: Inspection failed: {e}")
@@ -180,7 +211,9 @@ class PolicyRunner:
 
         # Load policy
         policy_state = data.get("policy", {})
-        # Map keys robustly
+        # Normalise the two skrl layouts onto PolicyMLP's naming (see
+        # _split_policy_state) before mapping keys.
+        _, policy_state = self._split_policy_state(policy_state)
         net_keys = {}
         for k, v in policy_state.items():
             if "net" in k or "policy" in k:
@@ -188,7 +221,17 @@ class PolicyRunner:
                 clean_key = k.split("_model.")[-1]
                 net_keys[clean_key] = v
 
-        self.policy.load_state_dict(net_keys, strict=False)
+        result = self.policy.load_state_dict(net_keys, strict=False)
+        # strict=False is needed to tolerate extra keys (log_std_parameter,
+        # value_layer), but it also silently accepts a policy whose output head
+        # never loaded. Missing keys are never acceptable -- that head would stay
+        # random and the robot would not move.
+        if result.missing_keys:
+            raise RuntimeError(
+                f"[PolicyRunner] Checkpoint did not supply {result.missing_keys}. "
+                f"The policy would run with randomly initialised weights. "
+                f"Checkpoint policy keys: {sorted(policy_state)}"
+            )
 
         # Load scaler. skrl renamed this key from "state_preprocessor" to
         # "observation_preprocessor" in 2.1.0, so checkpoints trained before and after the
@@ -242,6 +285,11 @@ class PolicyRunner:
         gravity_w = np.array([0.0, 0.0, -1.0])
         proj_grav = R.T @ gravity_w
 
+        # Accelerometer: body-frame specific force, in g. Both MuJoCo's
+        # <accelerometer> and the Unitree IMU report (0, 0, +9.81) at rest and
+        # upright, which is the convention Isaac's term was built to match.
+        accel_b = np.asarray(state.imu.accelerometer, dtype=np.float64) / 9.81
+
         # Joint states
         num_joints = len(mj_to_isaac)
         mj_qpos = np.array([state.motorState[i].q for i in range(num_joints)])
@@ -249,15 +297,31 @@ class PolicyRunner:
         jpos_isaac = mj_qpos[mj_to_isaac]
         jvel_isaac = mj_qvel[mj_to_isaac]
 
-        obs_parts = [
-            lin_vel_b,
-            ang_vel_b,
-            proj_grav,
-            commands,
-            jpos_isaac - desired_qpos,
-            jvel_isaac,
-            last_actions,
-        ]
+        # obs_version 2 dropped base_lin_vel (unmeasurable on hardware) and put the
+        # accelerometer in its place. Both layouts are 49 wide, so a checkpoint from
+        # either era loads without error and only misbehaves at runtime -- hence the
+        # explicit switch rather than a shape check. Set QUADRUPED_OBS_VERSION=1 to
+        # run a policy trained before the change.
+        if self.obs_version >= 2:
+            obs_parts = [
+                ang_vel_b,
+                proj_grav,
+                accel_b,
+                commands,
+                jpos_isaac - desired_qpos,
+                jvel_isaac,
+                last_actions,
+            ]
+        else:
+            obs_parts = [
+                lin_vel_b,
+                ang_vel_b,
+                proj_grav,
+                commands,
+                jpos_isaac - desired_qpos,
+                jvel_isaac,
+                last_actions,
+            ]
 
 
 

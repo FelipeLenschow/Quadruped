@@ -228,9 +228,32 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
 
     # ── Observation / Action spaces ───────────────────────────────────────────
     observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 49 * (1 + obs_history_len)))
-    # obs = [lin_vel(3) + ang_vel(3) + gravity(3) + cmd(4) + jpos(12) + jvel(12) + actions(12)] = 49
+    # Actor obs (sensors only, per frame):
+    #   gyro(3) + gravity(3) + accel(3) + cmd(4) + jpos(12) + jvel(12) + actions(12) = 49
+    # base_lin_vel was dropped and the accelerometer took its slot, so the per-frame
+    # width is unchanged at 49 -- but the CONTENT is not. A checkpoint trained before
+    # this change loads without complaint and reads accelerometer values where it
+    # expects velocity, so obs_version below exists to tell the two apart.
+    obs_version = 2
     action_space = 12
-    state_space = 0
+    # Critic gets the actor observation plus what only the simulator knows:
+    #   base_lin_vel(3) + contact_bool(4) + foot_force/mg(4) + base_height(1) = 12
+    state_space = observation_space + 12
+
+    # ── IMU noise (sim2real) ──────────────────────────────────────────────────
+    # The simulator hands out a perfect gyro and a perfect gravity direction; the
+    # robot's are a MEMS sensor and an on-chip AHRS. *_bias is a per-episode
+    # constant offset (turn-on bias), *_noise is per-step white noise.
+    imu_gyro_noise = _phase_cfg["env"]["imu_gyro_noise"]
+    imu_gyro_bias = _phase_cfg["env"]["imu_gyro_bias"]
+    imu_accel_noise = _phase_cfg["env"]["imu_accel_noise"]
+    imu_accel_bias = _phase_cfg["env"]["imu_accel_bias"]
+    imu_gravity_noise = _phase_cfg["env"]["imu_gravity_noise"]
+
+    # ── Agent knobs resolved from the phase yaml ──────────────────────────────
+    # train.py copies these into agent_cfg before building the Runner, and
+    # _transition_to_next_phase re-applies them live at each phase change.
+    agent_overrides = dict(_phase_cfg.get("agent", {}))
     action_scale = _phase_cfg["env"]["action_scale"]
     
     base_max_timesteps = _phase_cfg["env"]["max_timesteps"]

@@ -345,11 +345,19 @@ class Ros2MujocoDriver(Node):
             accel = np.array([0.0, 0.0, 9.81])
 
         # Contacts, via the simulated FSR. Both the raw reading and the binary
-        # flag come from _read_foot_fsr, so the policy is gated by a numeric
-        # sensor crossing contact_threshold exactly as it is on the robot,
-        # instead of by the physics engine's contact list (which is ground truth
-        # and never fails - that is why the real robot's marginal-threshold
-        # contact bug never showed up here).
+        # flag come from _read_foot_fsr, so the flag is a numeric sensor crossing
+        # contact_threshold rather than the physics engine's contact list (which
+        # is ground truth and never fails - that is why the real robot's
+        # marginal-threshold contact bug never showed up here).
+        #
+        # Note this flag is NOT in the policy observation - build_obs is
+        # lin_vel/ang_vel/gravity/commands/joint state/last actions, no contact
+        # term. It reaches the policy only through base_lin_vel: the estimator's
+        # leg-odometry correction only runs for feet whose flag is set, so a foot
+        # wrongly read as airborne stops correcting the velocity that IS in the
+        # observation. That is the same path the real robot uses, and with
+        # use_estimator off (ground-truth velocity) it does not reach the policy
+        # at all.
         raw_fsr, force_n, contact = self._read_foot_fsr()
         self.foot_force_raw = raw_fsr
         self.foot_force_n = force_n

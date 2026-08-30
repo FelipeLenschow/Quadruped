@@ -15,7 +15,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor, RayCaster
-from isaaclab.utils.math import sample_uniform
+from isaaclab.utils.math import sample_uniform, quat_rotate_inverse
 
 from .quadruped_env_cfg import QuadrupedEnvCfg
 
@@ -25,6 +25,9 @@ class QuadrupedEnv(DirectRLEnv):
     A simplified environment for getting started with Reinforcement Learning on a quadruped robot (Unitree QUADRUPED).
     This environment focuses on the basics: controlling joint positions to keep the robot upright.
     """
+
+    # Standard gravity, for scaling the accelerometer term.
+    GRAVITY = 9.81
 
     cfg: QuadrupedEnvCfg
 
@@ -96,6 +99,19 @@ class QuadrupedEnv(DirectRLEnv):
             else:
                 self._feet_ids = c_feet_ids
             
+        # Root body, for the accelerometer. Named "base" on Go2 and "trunk" on
+        # A1/Go1; index 0 is the root link either way, so that is the fallback.
+        _base_ids, _ = self.robot.find_bodies("base|trunk")
+        self._base_body_id = _base_ids[0] if len(_base_ids) else 0
+
+        # Total mass, used to normalise the critic's foot contact forces so the
+        # term is dimensionless and comparable across the three robots.
+        try:
+            self._robot_weight = float(
+                self.robot.data.default_mass[0].sum()) * self.GRAVITY
+        except Exception:
+            self._robot_weight = 15.0 * self.GRAVITY
+
         self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*_thigh|.*_calf|trunk")
 
         self.net_contact_forces = torch.zeros(self.num_envs, 20, 3, device=self.device)
@@ -115,6 +131,18 @@ class QuadrupedEnv(DirectRLEnv):
             self.num_envs, self.cfg.action_space, device=self.device
         )
         self.commands = torch.zeros(self.num_envs, 4, device=self.device)
+
+        # ── IMU ────────────────────────────────────────────────────────────────
+        # Body-frame specific force, i.e. what an accelerometer reads: gravity
+        # plus linear acceleration. Replaces base_lin_vel in the actor observation,
+        # which the real robot cannot measure at all.
+        self.base_lin_acc = torch.zeros((self.num_envs, 3), device=self.device)
+        self.root_lin_acc_w = torch.zeros((self.num_envs, 3), device=self.device)
+        # Per-episode constant offsets. A MEMS gyro/accel has a turn-on bias that
+        # is fixed for a run but different every power cycle, so sampling it once
+        # per episode (not per step) is what actually matches the hardware.
+        self.imu_gyro_bias = torch.zeros((self.num_envs, 3), device=self.device)
+        self.imu_accel_bias = torch.zeros((self.num_envs, 3), device=self.device)
         self.target_commands = torch.zeros(self.num_envs, 4, device=self.device)
         self.last_joint_vel = torch.zeros(self.num_envs, 12, device=self.device)
         self.last_base_lin_vel = torch.zeros((self.num_envs, 3), device=self.device)
@@ -411,6 +439,14 @@ class QuadrupedEnv(DirectRLEnv):
             "observation_noise_scale",
             "base_angle_termination_thresh",
             "action_scale",
+            # IMU noise: read from self.cfg in _get_observations every step, and the
+            # bias magnitudes are re-read in _reset_idx when each episode resamples,
+            # so all five take effect immediately on a phase change.
+            "imu_gyro_noise",
+            "imu_gyro_bias",
+            "imu_accel_noise",
+            "imu_accel_bias",
+            "imu_gravity_noise",
         }
         # max_timesteps legitimately differs per phase (it defines the phase length) and is
         # consumed at init to build the curriculum thresholds, so it is not a mismatch to report.
@@ -449,6 +485,27 @@ class QuadrupedEnv(DirectRLEnv):
                     f"[Curriculum] phase '{next_phase['name']}' sets unrecognised env.{k}. Add it "
                     f"to _RUNTIME_SETTABLE_ENV or _STARTUP_ONLY_ENV in _transition_to_next_phase."
                 )
+
+        # Agent block. Applied to the live PPO agent, which train.py attached as
+        # self._agent after building the Runner. skrl stores its config on agent.cfg
+        # and re-reads these every update, so assignment is enough.
+        a_cfg = p_cfg.get("agent", {})
+        if a_cfg:
+            agent = getattr(self, "_agent", None)
+            if agent is None:
+                print(
+                    f"[Curriculum] WARNING: phase '{next_phase['name']}' sets {sorted(a_cfg)}, "
+                    f"but no agent is attached (running under play/eval?). Ignored."
+                )
+            else:
+                for k, v in a_cfg.items():
+                    if not hasattr(agent.cfg, k):
+                        raise AttributeError(
+                            f"[Curriculum] phase '{next_phase['name']}' sets agent.{k}, but the "
+                            f"skrl agent config has no such key."
+                        )
+                    print(f"[Curriculum] agent.{k}: {getattr(agent.cfg, k)} -> {v}")
+                    setattr(agent.cfg, k, v)
 
         # Events. The push terms are always registered (with a zero range standing in for
         # "disabled"), so the range can be rewritten live here. Previously this section was not
@@ -691,6 +748,9 @@ class QuadrupedEnv(DirectRLEnv):
                 self.applied_torque[indices] = view.data.applied_torque[
                     :, self._joint_dof_idx
                 ]
+                self.root_lin_acc_w[indices] = view.data.body_lin_acc_w[
+                    :, self._base_body_id, :
+                ]
 
                 # Handle possible body count differences
                 num_bodies = min(
@@ -709,6 +769,18 @@ class QuadrupedEnv(DirectRLEnv):
             self.root_pos_w = self.robot.data.root_pos_w
             self.root_quat_w = self.robot.data.root_quat_w
             self.applied_torque = self.robot.data.applied_torque
+            self.root_lin_acc_w = self.robot.data.body_lin_acc_w[
+                :, self._base_body_id, :
+            ]
+
+        # Accelerometer: specific force in body frame, f_b = R^T (a_w - g_w).
+        # projected_gravity is R^T @ (0,0,-1), so R^T @ (0,0,+9.81) equals
+        # -9.81 * projected_gravity. At rest and upright this reads (0, 0, +9.81),
+        # matching both the Unitree IMU and MuJoCo's <accelerometer> convention.
+        self.base_lin_acc = (
+            quat_rotate_inverse(self.root_quat_w, self.root_lin_acc_w)
+            - self.GRAVITY * self.projected_gravity
+        )
 
         self.net_contact_forces = self._contact_sensor.data.net_forces_w
         if len(self._undesired_contact_body_ids) > 0:
@@ -1123,16 +1195,38 @@ class QuadrupedEnv(DirectRLEnv):
         # teleported to their spawn state since _compute_reward_terms() last looked.
         self._refresh_state()
 
-        # Observations (unscaled)
+        # ── Actor observation: sensors the robot actually has ──────────────────
+        # base_lin_vel is deliberately absent. The SDK's LowState carries no
+        # global pose, so on hardware that term can only come from the leg-odometry
+        # estimator -- whose correction is gated on a foot-contact flag derived from
+        # a marginal FSR threshold. Training on it taught the policy to lean on a
+        # signal that is clean in sim and unreliable on the robot. The accelerometer
+        # takes its place: together with the observation history it is what makes
+        # velocity inferable through a flight phase, when no foot is planted and
+        # leg odometry has nothing to say.
+        gyro = self.base_ang_vel + self.imu_gyro_bias
+        accel = self.base_lin_acc + self.imu_accel_bias
+        tilt = self.projected_gravity
+
+        if self.cfg.imu_gyro_noise > 0.0:
+            gyro = gyro + torch.randn_like(gyro) * self.cfg.imu_gyro_noise
+        if self.cfg.imu_accel_noise > 0.0:
+            accel = accel + torch.randn_like(accel) * self.cfg.imu_accel_noise
+        if self.cfg.imu_gravity_noise > 0.0:
+            # Tilt error from the on-chip AHRS. Renormalised because the real
+            # filter always reports a unit gravity direction, however wrong it is.
+            tilt = tilt + torch.randn_like(tilt) * self.cfg.imu_gravity_noise
+            tilt = tilt / torch.norm(tilt, dim=-1, keepdim=True).clamp(min=1e-6)
+
         obs = torch.cat(
             (
-                self.base_lin_vel,
-                self.base_ang_vel,
-                self.projected_gravity,
-                self.commands,
-                self.joint_pos - self.desired_joint_pos,
-                self.joint_vel,
-                self.actions,
+                gyro,                                       # (3)  rate gyro
+                tilt,                                       # (3)  AHRS gravity dir
+                accel / self.GRAVITY,                       # (3)  accelerometer
+                self.commands,                              # (4)
+                self.joint_pos - self.desired_joint_pos,    # (12) encoders
+                self.joint_vel,                             # (12) encoders
+                self.actions,                               # (12)
             ),
             dim=-1,
         )
@@ -1146,7 +1240,27 @@ class QuadrupedEnv(DirectRLEnv):
             self.obs_history_buf = torch.cat([obs, self.obs_history_buf[:, :-49]], dim=-1)
             obs = full_obs
 
-        return {"policy": obs}
+        if not self.cfg.state_space:
+            return {"policy": obs}
+
+        # ── Critic observation: everything the simulator knows ─────────────────
+        # The value function is only ever evaluated during training, so privileged
+        # terms here cost nothing at deploy. Without this the critic is blinded at
+        # the same time as the actor and the value estimate degrades along with it,
+        # which is the usual reason a sensors-only policy fails to train at all.
+        foot_forces = torch.norm(
+            self.net_contact_forces[:, self._feet_ids, :], dim=-1
+        )
+        privileged = torch.cat(
+            (
+                self.base_lin_vel,                      # (3) unmeasurable on hardware
+                (foot_forces > 1.0).float(),            # (4) true contact, no FSR threshold
+                foot_forces / self._robot_weight,       # (4) analog load per foot
+                self.root_pos_w[:, 2:3],                # (1) base height
+            ),
+            dim=-1,
+        )
+        return {"policy": obs, "critic": torch.cat([obs, privileged], dim=-1)}
 
     def _get_rewards(self) -> torch.Tensor:
         """
@@ -1322,6 +1436,21 @@ class QuadrupedEnv(DirectRLEnv):
         self.last_joint_vel[env_ids] = 0.0
         self.last_base_lin_vel[env_ids] = 0.0
         self.previous_actions[env_ids] = 0.0
+
+        # Resample the IMU turn-on bias. A MEMS gyro/accel holds a roughly constant
+        # offset for a whole run but a different one every power cycle, so this is
+        # per-episode, not per-step -- per-step would just be more white noise and
+        # would teach the policy nothing about the constant error it will actually
+        # face on hardware.
+        n = len(env_ids)
+        if self.cfg.imu_gyro_bias > 0.0:
+            self.imu_gyro_bias[env_ids] = sample_uniform(
+                -self.cfg.imu_gyro_bias, self.cfg.imu_gyro_bias, (n, 3), self.device
+            )
+        if self.cfg.imu_accel_bias > 0.0:
+            self.imu_accel_bias[env_ids] = sample_uniform(
+                -self.cfg.imu_accel_bias, self.cfg.imu_accel_bias, (n, 3), self.device
+            )
         self.last_strike_time[env_ids] = 0.0
         self.stride_duration[env_ids] = 1.0
         self.gait_phase_sym_val[env_ids] = 0.0

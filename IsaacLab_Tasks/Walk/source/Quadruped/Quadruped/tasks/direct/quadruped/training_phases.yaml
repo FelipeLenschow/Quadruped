@@ -1,14 +1,37 @@
 default: &default
   env:
-    obs_history_len: 0
+    # The actor no longer observes base_lin_vel (see _get_observations), so it has
+    # to infer velocity from leg odometry while a foot is planted and by
+    # integrating the accelerometer while none is. A single frame cannot integrate,
+    # so this must stay > 0 -- at 0 the policy is memoryless and velocity tracking
+    # has nothing to work with.
+    obs_history_len: 4
     robot_cfg: GO2
     terrain: flat
     num_envs: 2000
     action_scale: 0.25
     observation_noise_scale: 0.0
+    # IMU realism. Sim gives a perfect gyro and a perfect gravity direction; the
+    # robot gives a MEMS sensor and an on-chip AHRS. *_bias is a constant offset
+    # resampled once per episode (turn-on bias); *_noise is per-step white noise.
+    imu_gyro_noise: 0.0      # rad/s
+    imu_gyro_bias: 0.0       # rad/s, per-episode constant
+    imu_accel_noise: 0.0     # m/s^2
+    imu_accel_bias: 0.0      # m/s^2, per-episode constant
+    imu_gravity_noise: 0.0   # unit vector, AHRS tilt error
     max_timesteps: 50000
     episode_length_s: 20.0
     base_angle_termination_thresh: 0.7
+  # PPO knobs that vary per phase. Everything else stays in agents/skrl_ppo_cfg.yaml;
+  # this block only overrides what a curriculum phase needs to change.
+  agent:
+    # Entropy bonus. Owns the value that skrl_ppo_cfg.yaml would otherwise supply.
+    # Trade-off measured on this task: at 0.0 the policy std collapses (0.835 -> 0.072
+    # across the `Final` run) and learning stops where exploration does; at 0.005 std
+    # holds ~0.48 but costs ~-0.11/step in smoothness penalties (dof_acc_l2,
+    # action_rate_l2, ang_vel_xy_l2), which a noisier policy pays by construction --
+    # about -105 reward per episode. phase3 exists to search between the two.
+    entropy_loss_scale: 0.0
   domain_randomization:
     joint_friction_range: [0.0, 0.0]
     joint_stiffness_range: [0.0, 0.0]
@@ -100,13 +123,20 @@ default: &default
 phases:
   phase1:
     inherits: default
+    agent:
+      entropy_loss_scale: 0.0
     env:
-      obs_history_len: 0
+      obs_history_len: 4
       terrain: rough
       num_envs: 2000
       action_scale: 0.25
       observation_noise_scale: 0.05
-      max_timesteps: 300000
+      imu_gyro_noise: 0.05
+      imu_gyro_bias: 0.02
+      imu_accel_noise: 0.35
+      imu_accel_bias: 0.15
+      imu_gravity_noise: 0.03
+      max_timesteps: 100000
       episode_length_s: 20.0
       base_angle_termination_thresh: 0.7
     domain_randomization:
@@ -128,7 +158,7 @@ phases:
       rew_scale_action_rate_l2: -0.01
 
       rew_scale_foot_height_reward: 0.4
-      target_foot_height: 0.08
+      target_foot_height: 0.10
       foot_height_sigma: 0.005
 
     commands:
@@ -145,23 +175,48 @@ phases:
 
   phase2:
     inherits: phase1
+    agent:
+      entropy_loss_scale: 0.0
     env:
-      max_timesteps: 300000
+      max_timesteps: 200000
+    domain_randomization:
+      action_latency_range_steps: [0, 2]
+      motor_backlash_range: [-0.04, 0.04]
+      joint_stiffness_range: [-5.0, 5.0]
+      joint_pd_damping_range: [-0.1, 0.1]
+      payload_mass_range: [-1.0, 3.0]
+      com_displacement_range: [-0.05, 0.1]
+      com_displacement_range_y: [-0.05, 0.05]
+
     rewards:
       rew_scale_foot_height_reward: 0.0
       rew_scale_foot_height_penalty: -0.4
-      target_foot_height: 0.08
+      target_foot_height: 0.10
       foot_height_sigma: 0.005
 
       rew_scale_foot_landing_vel: -0.3
       foot_landing_vel_sigma: 0.6
 
-      rew_scale_dof_pos_l2_stance: -0.5
+      rew_scale_dof_pos_l2_stance: -1.0
 
       rew_scale_gait_phase_sym: -0.15
 
       rew_scale_pos_deviation_l1: -0.1
       rew_scale_yaw_deviation_l1: -0.1
 
-      rew_scale_grf_balance: -0.2
+      rew_scale_grf_balance: -0.5
+
+      rew_scale_feet_air_penalty_static: -0.5
+
+  phase3:
+    inherits: phase2
+    env:
+      max_timesteps: 500000
+    rewards:
+      rew_scale_foot_height_penalty: -0.5
+      rew_scale_feet_air_penalty_static: -3.0
+      rew_scale_dof_pos_l2_stance: -5.0
+    commands:
+      zero_command_fraction: 0.10
+
 
