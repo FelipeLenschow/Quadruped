@@ -117,6 +117,13 @@ class StateEstimator:
         runs, the accelerometer bias is unobservable, and its error integrates
         into velocity without bound - measured at -49 m/s on a robot standing
         still, which then poisoned the policy's observation.
+
+        Past this threshold the accelerometer is dropped from the prediction
+        entirely rather than integrated-and-then-scaled. Scaling a prediction
+        that still adds a*dt every step is a leaky integrator, not a decay: it
+        settles at 0.5*a rather than at zero, so a residual of a quarter of a
+        m/s2 (the Go2 accelerometer reads ~9.52 at rest, not 9.81) parks the
+        estimate at ~0.12 m/s for as long as the robot is off its feet.
     """
 
     def __init__(
@@ -218,6 +225,17 @@ class StateEstimator:
 
         R = rot_from_quat(quat_wxyz)
 
+        # ── 0. Contact bookkeeping ────────────────────────────────
+        # Resolved before the predict step because it selects which prediction
+        # model applies, not just what to do with the result afterwards.
+        in_contact = bool(np.any(feet_contact > 0.5))
+        if in_contact:
+            self._no_contact_time = 0.0
+        else:
+            self._no_contact_time += self.dt
+        relaxing = (not in_contact
+                    and self._no_contact_time > self.no_contact_relax_time)
+
         # ── 1. Predict ─────────────────────────────────────────────────────
         v   = self._x[:3]
         b   = self._x[3:]
@@ -235,7 +253,15 @@ class StateEstimator:
                    if gyro_body is not None else np.zeros(3))
 
         x_pred = np.empty(6)
-        x_pred[:3] = v + (a_linear - np.cross(omega_p, v)) * self.dt
+        if relaxing:
+            # Off the feet for longer than a flight phase: the robot is held,
+            # fallen or hanging, so its true velocity is ~0 and all a_linear
+            # still carries is unobservable bias. Integrating it and scaling
+            # the result settles at 0.5*a_linear, not at zero, so drop the
+            # accelerometer here and decay what is already in the state.
+            x_pred[:3] = v * self._relax_factor
+        else:
+            x_pred[:3] = v + (a_linear - np.cross(omega_p, v)) * self.dt
         x_pred[3:] = b                            # bias random walk: no change
 
         P_pred = self._F @ self._P @ self._F.T + self._Q
@@ -244,8 +270,7 @@ class StateEstimator:
         self._P = P_pred
 
         # ── 2. Update — leg odometry ────────────────────────────────────────
-        if (joint_pos is not None and joint_vel is not None
-                and np.any(feet_contact > 0.5)):
+        if joint_pos is not None and joint_vel is not None and in_contact:
 
             kin  = self._get_kin()
             omega = (np.asarray(gyro_body, dtype=np.float64)
@@ -279,18 +304,14 @@ class StateEstimator:
                 self._P = (np.eye(6) - K @ self._H) @ self._P
 
         # ── 3. Divergence guards ───────────────────────────────────────────
-        # Nothing above bounds the estimate: with no foot in contact the update
-        # block is skipped entirely and the bias error integrates forever.
-        if np.any(feet_contact > 0.5):
-            self._no_contact_time = 0.0
-        else:
-            self._no_contact_time += self.dt
-            if self._no_contact_time > self.no_contact_relax_time:
-                # No information is arriving, so relax toward the prior (zero)
-                # instead of integrating bias, and inflate the covariance so the
-                # first real contact corrects hard.
-                self._x[:3] *= self._relax_factor
-                self._P[:3, :3] += self._Q[:3, :3]
+        if relaxing:
+            # No information is arriving, so inflate the covariance - both the
+            # velocity block and the bias block, so the first real contact
+            # corrects hard. The bias is frozen while the feet are up and a
+            # fall can leave it far from any real offset (-0.45 m/s2 on z in
+            # the 2026-08-28 deploy), so it has to be free to move too.
+            self._P[:3, :3] += self._Q[:3, :3]
+            self._P[3:, 3:] += self._Q[3:, 3:]
 
         speed = float(np.linalg.norm(self._x[:3]))
         if speed > self.max_speed:
@@ -327,8 +348,11 @@ class StateEstimator:
 if __name__ == "__main__":
     """
     Synthetic test: robot accelerates at 1 m/s² forward for 1 second (50 steps).
-    With leg odometry off (no joint data), the LKF is driven purely by IMU.
-    With a known bias, check that bias is estimated and velocity is corrected.
+    With no foot ever in contact, the relax path takes over after 0.3 s and the
+    estimate decays instead of tracking the (unobservable) IMU integral - a
+    quadruped cannot accelerate for a second with all four feet up, and a
+    parked non-zero velocity is exactly the failure this guards against.
+    The second scenario is the one that checks bias estimation and correction.
     """
     import numpy as np
 
@@ -341,7 +365,7 @@ if __name__ == "__main__":
     print("Scenario: 1 m/s² forward acceleration for 1 s (50 Hz), bias=[0.05,0,0]")
     print()
 
-    # ── Test 1: IMU-only (no leg odometry) ─────────────────────────────────
+    # ── Test 1: no contact at all → relax path, not IMU integration ───────
     v_true = 0.0
     for i in range(50):
         v_true += 1.0 * 0.02  # true velocity accumulation
@@ -352,9 +376,9 @@ if __name__ == "__main__":
         accel = np.array([1.0 + true_bias[0], true_bias[1], 9.81 + true_bias[2]])
         v_est = est.update(q_upright, accel, [0, 0, 0, 0])
 
-    print(f"  IMU-only after 1s:")
-    print(f"    True velocity:  {v_true:.3f} m/s")
-    print(f"    Est. velocity:  {v_est[0]:.3f} m/s  (bias={true_bias[0]:.3f}, no correction)")
+    print(f"  No-contact after 1s:")
+    print(f"    True velocity:  {v_true:.3f} m/s  (unobservable: no foot down)")
+    print(f"    Est. velocity:  {v_est[0]:.3f} m/s  (relaxing toward 0, not parked)")
     print(f"    Est. bias:      {est.accel_bias[0]:.4f} m/s² (no FK → bias not estimated)")
 
     # ── Test 2: Stationary with 4-feet contact and FK ──────────────────────
