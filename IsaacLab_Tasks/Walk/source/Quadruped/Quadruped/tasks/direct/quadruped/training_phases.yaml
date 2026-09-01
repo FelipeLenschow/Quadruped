@@ -28,8 +28,14 @@ default: &default
     rew_scale_track_ang_vel_z_exp: 0.0
 
     rew_scale_feet_air_time: 0.0
-    rew_scale_foot_height_penalty: 0.0
-    rew_scale_foot_height_reward: 0.0
+    # Swing-apex term: scale * (gaussian_match - foot_height_bias), charged per landing.
+    # Scale is POSITIVE; the bias is what the match must beat to earn anything, and replaces
+    # what used to be a separate penalty and reward scale:
+    #   0.0 = pure reward  (pays for a good apex, nothing for a bad one)
+    #   1.0 = pure penalty (earns nothing at target, charges for a bad apex)
+    #   0.5 = both         (pays at target, charges away from it)
+    rew_scale_foot_height: 0.0
+    foot_height_bias: 0.5
     rew_scale_foot_landing_vel: 0.0
 
     rew_scale_flat_orientation_l2: 0.0
@@ -127,7 +133,8 @@ phases:
       rew_scale_dof_acc_l2: -3.0e-7
       rew_scale_action_rate_l2: -0.01
 
-      rew_scale_foot_height_reward: 0.4
+      rew_scale_foot_height: 0.4
+      foot_height_bias: 0.0
       target_foot_height: 0.08
       foot_height_sigma: 0.005
 
@@ -148,8 +155,8 @@ phases:
     env:
       max_timesteps: 300000
     rewards:
-      rew_scale_foot_height_reward: 0.0
-      rew_scale_foot_height_penalty: -0.4
+      rew_scale_foot_height: 0.4
+      foot_height_bias: 1.0
       target_foot_height: 0.08
       foot_height_sigma: 0.005
 
@@ -160,8 +167,13 @@ phases:
 
       rew_scale_gait_phase_sym: -0.15
 
-      rew_scale_pos_deviation_l1: -0.1
-      rew_scale_yaw_deviation_l1: -0.1
-
-      rew_scale_grf_balance: -0.2
+  phase3:
+    inherits: phase2
+    env:
+      max_timesteps: 300000
+    rewards:
+      rew_scale_foot_height: 1.0
+      foot_height_bias: 0.5
+      target_foot_height: 0.12
+      rew_scale_foot_landing_vel: -0.1
 

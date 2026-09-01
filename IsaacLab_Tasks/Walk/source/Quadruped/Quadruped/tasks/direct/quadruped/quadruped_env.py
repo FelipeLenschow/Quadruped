@@ -134,11 +134,10 @@ class QuadrupedEnv(DirectRLEnv):
         # penalty is charged on this, not on the current step's value -- see _compute_reward_terms.
         self.last_feet_vel_z = torch.zeros(self.num_envs, 4, device=self.device)
         self.feet_air_time_reward_val = torch.zeros(self.num_envs, device=self.device)
-        self.foot_height_penalty_val = torch.zeros(self.num_envs, device=self.device)
-        # Same apex measurement as the penalty, opposite direction: the Gaussian MATCH
-        # (rew_scale_foot_height_reward, POSITIVE) instead of the mismatch. Both are filled
-        # every step; which one actually does anything is decided by the phase's scales.
-        self.foot_height_reward_val = torch.zeros(self.num_envs, device=self.device)
+        # Swing-apex term: (foot_height_bias - gaussian_match), summed over feet that landed.
+        # One buffer covering what used to be a separate penalty and reward -- see the block
+        # comment in _compute_reward_terms for what the bias does.
+        self.foot_height_val = torch.zeros(self.num_envs, device=self.device)
         self.foot_landing_vel_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_static_val = torch.zeros(self.num_envs, device=self.device)
@@ -813,34 +812,36 @@ class QuadrupedEnv(DirectRLEnv):
         # individual foot -- correcting that would need a height scan (see the Stairs task module).
         feet_heights = feet_heights - self.scene.env_origins[:, 2].unsqueeze(1)
 
-        # -- Swing-apex height terms, charged once per swing at touchdown --
-        # ONE measurement (this swing's apex vs target_foot_height, scored by a Gaussian), TWO
-        # ways to pay for it, both available at once so a curriculum can switch direction between
-        # phases without changing the math:
+        # -- Swing-apex height term, charged once per swing at touchdown --
+        # ONE measurement (this swing's apex vs target_foot_height, scored by a Gaussian) and ONE
+        # scale, with foot_height_bias setting where it crosses zero:
         #
-        #   rew_scale_foot_height_reward (POSITIVE, foot_height_reward_val)  pays the Gaussian MATCH.
-        #     Early phases: the robot starts out scuffing/dragging and needs a reason to pick a
-        #     foot up at all. Every landing at ~target_foot_height banks up to +|scale| per foot.
-        #     This is a lift incentive, so it has cp7's failure mode built in -- the optimum drifts
-        #     ABOVE target (a taller arc is also a cheap way to earn more landings), and standing
-        #     still earns nothing, so the policy is pushed toward stepping more than the task needs.
-        #     That is the point at the start, and the reason to turn it off later.
+        #     reward = rew_scale_foot_height * (match - foot_height_bias)
         #
-        #   rew_scale_foot_height_penalty (NEGATIVE, foot_height_penalty_val) charges the MISMATCH
-        #     (1 - match) -- the same conversion gait_phase_sym went through, for the same reason.
-        #     Later phases: it costs nothing to stand still and only charges for stepping at the
-        #     wrong height, above target (jumping) and below it (scuffing) alike, which is what
-        #     removes the high-stepping exploit the lift reward creates. feet_air_time is then the
-        #     only thing paying for taking a step at all.
+        # The scale is POSITIVE and the bias is what the match has to beat to earn anything, so
+        # the bias slides the term continuously between the two behaviours that used to be
+        # separate scales:
         #
-        # match + mismatch == 1, so running BOTH at once differs from either alone only by a
-        # per-landing constant (+|lift| * landings) -- i.e. it re-adds a payout for landing at all.
-        # Intended usage is one phase at a time: lift while the gait is being found, penalty once
-        # it is. Blending them is a deliberate choice, not a free lunch.
+        #   bias = 0.0  pure REWARD. Pays up to +scale per landing at ~target_foot_height and
+        #     costs nothing for a bad one -- a lift incentive for early phases where the robot is
+        #     still scuffing and needs a reason to pick a foot up. Carries cp7's failure mode: the
+        #     optimum drifts ABOVE target because a taller arc also earns, and stepping more often
+        #     earns more, so it pushes the policy to step more than the task needs.
         #
-        # 1 - exp(-(apex-target)^2/sigma) is bounded in [0, 1], so one wild apex costs at most a
-        # single unit of scale and cannot swamp the rest of the reward the way an unbounded squared
-        # error would.
+        #   bias = 1.0  pure PENALTY. Earns nothing at target, charges down to -scale per foot for
+        #     missing it, above target (jumping) and below it (scuffing) alike. Standing still is
+        #     free, so feet_air_time is the only thing paying to take a step at all.
+        #
+        #   bias = 0.5  BOTH AT ONCE. A landing at target earns +0.5*scale, one far from it pays
+        #     -0.5*scale. The lift incentive survives without the payout growing with step count,
+        #     because a bad landing now costs what a good one earns. This is the default.
+        #
+        # Because match is bounded in [0, 1], the term is bounded in
+        # [-scale*bias, scale*(1-bias)] per foot, so one wild apex costs at most a single unit of
+        # scale and cannot swamp the rest of the reward the way an unbounded squared error would.
+        #
+        # A phase written against the old split pair maps over exactly, and keeps its magnitude:
+        # the old lift scale with bias 0.0, the old penalty scale (as a positive) with bias 1.0.
         #
         # feet_height_max is the running peak of the current swing (monotonic within a swing, reset
         # on landing further down), so on the step a foot touches down it holds that swing's apex.
@@ -853,13 +854,13 @@ class QuadrupedEnv(DirectRLEnv):
         foot_height_match = torch.exp(
             -torch.square(self.feet_height_max - self.cfg.target_foot_height) / self.cfg.foot_height_sigma
         )
-        foot_height_mismatch = 1.0 - foot_height_match
         # Only feet that landed THIS step are counted (`landed`, computed above). Masked by command
         # like every other gait-shaping term, so a robot told to hold still neither pays nor earns
         # for shuffling a foot -- target_foot_height is meaningless when it is not supposed to step.
         landed_moving = landed.float() * moving_mask.unsqueeze(1)
-        self.foot_height_penalty_val = torch.sum(foot_height_mismatch * landed_moving, dim=1)
-        self.foot_height_reward_val = torch.sum(foot_height_match * landed_moving, dim=1)
+        self.foot_height_val = torch.sum(
+            (foot_height_match - self.cfg.foot_height_bias) * landed_moving, dim=1
+        )
 
         # -- Landing impact PENALTY: vertical foot speed at touchdown, charged once per landing --
         # Target is a foot set down at zero vertical speed. Mismatch again, so
@@ -1177,8 +1178,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_action_rate_l2,
             self.cfg.rew_scale_feet_air_time,
             self.cfg.rew_scale_flat_orientation_l2,
-            self.cfg.rew_scale_foot_height_penalty,
-            self.cfg.rew_scale_foot_height_reward,
+            self.cfg.rew_scale_foot_height,
             self.cfg.rew_scale_foot_landing_vel,
             self.cfg.rew_scale_feet_air_penalty,
             self.cfg.rew_scale_feet_air_penalty_static,
@@ -1207,8 +1207,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.actions,
             self.previous_actions,
             self.feet_air_time_reward_val,
-            self.foot_height_penalty_val,
-            self.foot_height_reward_val,
+            self.foot_height_val,
             self.foot_landing_vel_val,
             self.feet_air_penalty_val,
             self.feet_air_penalty_static_val,
@@ -1531,8 +1530,7 @@ def compute_rewards(
     rew_scale_action_rate_l2: float,
     rew_scale_feet_air_time: float,
     rew_scale_flat_orientation_l2: float,
-    rew_scale_foot_height_penalty: float,
-    rew_scale_foot_height_reward: float,
+    rew_scale_foot_height: float,
     rew_scale_foot_landing_vel: float,
     rew_scale_feet_air_penalty: float,
     rew_scale_feet_air_penalty_static: float,
@@ -1561,8 +1559,7 @@ def compute_rewards(
     actions: torch.Tensor,
     previous_actions: torch.Tensor,
     feet_air_time_reward_val: torch.Tensor,
-    foot_height_penalty_val: torch.Tensor,
-    foot_height_reward_val: torch.Tensor,
+    foot_height_val: torch.Tensor,
     foot_landing_vel_val: torch.Tensor,
     feet_air_penalty_val: torch.Tensor,
     feet_air_penalty_static_val: torch.Tensor,
@@ -1658,12 +1655,10 @@ def compute_rewards(
         torch.square(projected_gravity[:, :2]), dim=1
     )
 
-    # 12. Foot Height, swing-apex scored at touchdown -- two directions, see the block comment in
-    # _compute_reward_terms. Penalty on the mismatch (rew_scale_foot_height_penalty must be NEGATIVE)
-    # and/or reward on the match (rew_scale_foot_height_reward must be POSITIVE, for early phases
-    # that need the feet pushed up in the first place).
-    rew_foot_height_penalty = rew_scale_foot_height_penalty * foot_height_penalty_val
-    rew_foot_height_reward = rew_scale_foot_height_reward * foot_height_reward_val
+    # 12. Foot Height, swing-apex scored at touchdown. Single term carrying both directions:
+    # foot_height_val is (match - bias) per landing, so with a POSITIVE scale a landing at
+    # target_foot_height earns and one away from it pays. See _compute_reward_terms.
+    rew_foot_height = rew_scale_foot_height * foot_height_val
 
     # 12b. Landing Impact Penalty (touchdown vertical-speed mismatch -- scale must be NEGATIVE)
     rew_foot_landing_vel = rew_scale_foot_landing_vel * foot_landing_vel_val
@@ -1701,8 +1696,7 @@ def compute_rewards(
     log["reward/action_rate_l2"] = rew_action_rate_l2.mean()
     log["reward/feet_air_time"] = rew_feet_air_time.mean()
     log["reward/flat_orientation_l2"] = rew_flat_orientation_l2.mean()
-    log["reward/foot_height_penalty"] = rew_foot_height_penalty.mean()
-    log["reward/foot_height_reward"] = rew_foot_height_reward.mean()
+    log["reward/foot_height"] = rew_foot_height.mean()
     log["reward/foot_landing_vel"] = rew_foot_landing_vel.mean()
     log["reward/base_height_l2"] = rew_base_height_l2.mean()
     log["reward/feet_air_penalty"] = rew_feet_air_penalty.mean()
@@ -1734,8 +1728,7 @@ def compute_rewards(
         + rew_action_rate_l2
         + rew_feet_air_time
         + rew_flat_orientation_l2
-        + rew_foot_height_penalty
-        + rew_foot_height_reward
+        + rew_foot_height
         + rew_foot_landing_vel
         + rew_base_height_l2
         + rew_feet_air_penalty

@@ -48,7 +48,7 @@ agent:
   learning_rate: 5.0e-04
   learning_rate_scheduler: KLAdaptiveLR
   learning_rate_scheduler_kwargs:
-    kl_threshold: 0.008
+    kl_threshold: 0.03
   state_preprocessor: RunningStandardScaler
   state_preprocessor_kwargs: null
   value_preprocessor: RunningStandardScaler
@@ -59,6 +59,12 @@ agent:
   ratio_clip: 0.2
   value_clip: 0.2
   clip_predicted_values: True
+  # Kept at 0.0. 0.005 was tried to stop the action std collapsing during fine-tuning
+  # and did stop it, but the entropy gradient on log_std is a constant push with
+  # nothing balancing it, so std grew EXPONENTIALLY - a steady ~3% per logged point,
+  # 0.073 -> 0.118 in 31 min with no sign of settling. The noise-sensitive penalties
+  # (action_rate_l2, dof_acc_l2, ang_vel_xy_l2) and track_lin_vel_xy_exp all degraded
+  # with it, for ~6% gain on the foot-height objective it was meant to serve.
   entropy_loss_scale: 0.0
   value_loss_scale: 2.0
   kl_threshold: 0.0

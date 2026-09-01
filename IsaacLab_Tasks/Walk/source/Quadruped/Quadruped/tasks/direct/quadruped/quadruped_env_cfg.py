@@ -391,13 +391,15 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # NEGATIVE scale: this weights a PENALTY on how far the swing apex ended up from
     # target_foot_height, charged once per foot per landing (the historical values in the table
     # above are from when it was a positive lift reward, hence the "was encouraging jumping" note).
-    rew_scale_foot_height_penalty = _phase_cfg["rewards"]["rew_scale_foot_height_penalty"]
-    # POSITIVE scale on the SAME swing-apex measurement, paying the Gaussian match instead of
-    # charging the mismatch: the lift incentive, for early phases where the robot has no reason to
-    # pick a foot up yet. Turn it off (and the penalty on) once the gait exists -- as a payout it
-    # rewards stepping high and often, which is the exploit the penalty form exists to remove.
-    # .get() so a phase yaml predating this term still loads.
-    rew_scale_foot_height_reward = _phase_cfg["rewards"].get("rew_scale_foot_height_reward", 0.0)
+    rew_scale_foot_height = _phase_cfg["rewards"]["rew_scale_foot_height"]
+    # Where the swing-apex term crosses zero: the Gaussian match the apex has to beat to earn
+    # anything. The reward is scale * (match - bias), with the scale POSITIVE:
+    #   bias = 0.0  pure reward   -- pays for matching, costs nothing for missing
+    #   bias = 1.0  pure penalty  -- earns nothing at target, charges for missing it
+    #   bias = 0.5  both at once  -- pays +0.5*scale at target, charges -0.5*scale when off
+    # The old split reward/penalty pair are bias 0.0 and 1.0 respectively, at the same magnitude,
+    # so a phase that used either is reproducible with one scale and the matching bias.
+    foot_height_bias = _phase_cfg["rewards"].get("foot_height_bias", 0.5)
     target_foot_height = _phase_cfg["rewards"]["target_foot_height"]
     foot_height_sigma = _phase_cfg["rewards"]["foot_height_sigma"]
     # Landing impact: NEGATIVE scale on the foot's vertical speed at touchdown (target is zero --
