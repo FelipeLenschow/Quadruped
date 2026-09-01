@@ -10,6 +10,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Float32MultiArray
 
 import mujoco
 import mujoco.viewer
@@ -18,6 +19,7 @@ import mujoco.viewer
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from Telemetry.estimator import rot_from_quat
+from Mujoco.foot_contact_overlay import FootContactOverlay, FOOT_NAMES
 
 class MujocoTwinNode(Node):
     """
@@ -116,12 +118,23 @@ class MujocoTwinNode(Node):
         else:
             self.cmd_base_addr = -1
 
+        # Foot FSR overlay: same bars, same threshold tick, same scale as the
+        # MuJoCo driver's viewer - here fed from /sensors/foot_force instead of
+        # from local physics, so it works against the simulator and the real
+        # robot alike (both publish raw FSR counts on that topic).
+        self.contact_overlay = FootContactOverlay(self.model)
+        if not self.contact_overlay.available:
+            self.get_logger().warn(
+                "No foot sites in the twin model; contact bars disabled.")
+
         # 2. State Variables
         self.base_pos = np.array([0.0, 0.0, 0.50], dtype=np.float64)
         self.base_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
         self.joint_pos = np.zeros(12, dtype=np.float64)
         self.cmd_joint_pos = np.zeros(12, dtype=np.float64)
         self.base_lin_vel_body = np.zeros(3, dtype=np.float64)
+        self.foot_force_raw = np.zeros(len(FOOT_NAMES), dtype=np.float64)
+        self.foot_force_valid = False
 
         self.last_time = time.time()
         self.lock = threading.Lock()
@@ -131,6 +144,8 @@ class MujocoTwinNode(Node):
         self.create_subscription(JointState, "/sensors/joint_states", self.joint_cb, 10)
         self.create_subscription(JointState, "/commands/joint_commands", self.cmd_joint_cb, 10)
         self.create_subscription(Imu, "/sensors/imu", self.imu_cb, 10)
+        self.create_subscription(
+            Float32MultiArray, "/sensors/foot_force", self.foot_force_cb, 10)
         
         odom_topic = "/odom/state_estimator" if use_estimator else "/odom/state_simulator"
         self.get_logger().info(f"MuJoCo Twin subscribing to: {odom_topic}")
@@ -157,6 +172,14 @@ class MujocoTwinNode(Node):
                     self.cmd_joint_pos[idx] = msg.position[i]
                 except ValueError:
                     pass
+
+    def foot_force_cb(self, msg: Float32MultiArray):
+        n = len(self.foot_force_raw)
+        if len(msg.data) < n:
+            return
+        with self.lock:
+            self.foot_force_raw[:] = msg.data[:n]
+            self.foot_force_valid = True
 
     def imu_cb(self, msg: Imu):
         with self.lock:
@@ -205,7 +228,16 @@ class MujocoTwinNode(Node):
                         if addr >= 0:
                             self.data.qpos[addr] = self.cmd_joint_pos[i]
 
+                    foot_force = self.foot_force_raw.copy()
+                    have_force = self.foot_force_valid
+
                 mujoco.mj_forward(self.model, self.data)
+
+                if have_force and self.contact_overlay.available \
+                        and viewer.user_scn is not None:
+                    self.contact_overlay.draw(
+                        viewer.user_scn, self.data, foot_force)
+
                 viewer.sync()
                 time.sleep(1.0 / 60.0)
 

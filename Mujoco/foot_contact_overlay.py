@@ -1,0 +1,121 @@
+"""Foot FSR overlay shared by the MuJoCo driver and the passive twin viewer.
+
+The overlay draws, above each foot, a bar that is linear in raw FSR counts
+above `fsr_bias`, plus a tick at `contact_threshold`. The threshold is only a
+few counts above the sensor's no-load offset, so a foot can hover right at the
+line and drop out of contact without anything else in the scene showing it -
+the tick is there so that margin is visible instead of inferred.
+
+Both consumers feed it the SAME raw counts: the driver from its simulated FSR,
+the twin from /sensors/foot_force (published in raw units by both the MuJoCo
+driver and the real robot's driver), so what the viewer shows lines up with
+what the policy is actually gated on.
+"""
+
+import numpy as np
+import mujoco
+
+from Configs.config_loader import load_config
+
+FOOT_NAMES = ("FL", "FR", "RL", "RR")
+
+
+class FootContactOverlay:
+    # Bar geometry, in metres. BAR_SPAN counts fill BAR_HEIGHT, and the
+    # threshold tick is drawn at its own height on the same scale.
+    BAR_HEIGHT = 0.18
+    BAR_SPAN = 28.0       # raw counts from bias to the top of the bar
+    BAR_WIDTH = 0.010
+    MARKER_R = 0.038
+    BAR_LIFT = 0.048      # clears the marker, so a below-threshold bar still shows
+
+    def __init__(self, model, config=None, foot_names=FOOT_NAMES,
+                 site_fmt="{}_foot"):
+        cfg = load_config() if config is None else config
+        est_cfg = cfg.get("state_estimator", {})
+        self.contact_threshold = float(est_cfg.get("contact_threshold", 22.0))
+        self.fsr_bias = float(est_cfg.get("fsr_bias", 16.0))
+        self.foot_names = list(foot_names)
+
+        # Foot site ids resolved once - draw() runs on every render.
+        self.foot_site_id = [
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_fmt.format(f))
+            for f in self.foot_names
+        ]
+
+    @property
+    def available(self):
+        """False when the model has no foot sites to hang the bars on."""
+        return any(s != -1 for s in self.foot_site_id)
+
+    def draw(self, scn, data, raw_counts, contact=None):
+        """Draw a contact marker and an FSR bar over each foot.
+
+        `scn` is the viewer's user_scn, `raw_counts` the four raw FSR readings
+        in FL, FR, RL, RR order. `contact` overrides the binary flags; left out,
+        the same threshold the drivers apply is applied here.
+        """
+        if scn is None:
+            return
+        scn.ngeom = 0
+
+        raw_counts = np.asarray(raw_counts, dtype=np.float64)
+        if contact is None:
+            contact = raw_counts > self.contact_threshold
+        contact = np.asarray(contact, dtype=np.float64)
+
+        def add(gtype, size, pos, rgba, mat=None):
+            if scn.ngeom >= scn.maxgeom:
+                return
+            g = scn.geoms[scn.ngeom]
+            mujoco.mjv_initGeom(
+                g, gtype,
+                np.asarray(size, dtype=np.float64),
+                np.asarray(pos, dtype=np.float64),
+                (np.eye(3) if mat is None else mat).flatten(),
+                np.asarray(rgba, dtype=np.float32),
+            )
+            scn.ngeom += 1
+
+        thr_frac = np.clip(
+            (self.contact_threshold - self.fsr_bias) / self.BAR_SPAN, 0.0, 1.0)
+
+        for i, s_id in enumerate(self.foot_site_id):
+            if s_id == -1:
+                continue
+            base = data.site_xpos[s_id].copy()
+
+            raw = float(raw_counts[i])
+            in_contact = contact[i] > 0.5
+            frac = np.clip((raw - self.fsr_bias) / self.BAR_SPAN, 0.0, 1.0)
+
+            # Marker on the foot itself: green in contact, dark red when the
+            # policy is being told the foot is airborne.
+            color = (0.1, 0.9, 0.2, 0.85) if in_contact else (0.7, 0.1, 0.1, 0.55)
+            add(mujoco.mjtGeom.mjGEOM_SPHERE, [self.MARKER_R, 0, 0], base, color)
+
+            # The bar starts above the marker; a foot sitting just under the
+            # threshold has a short bar, and it must not be hidden inside it.
+            bar_base = base + [0, 0, self.BAR_LIFT]
+
+            # Empty bar (full span), so the threshold tick has context.
+            add(mujoco.mjtGeom.mjGEOM_BOX,
+                [self.BAR_WIDTH, self.BAR_WIDTH, self.BAR_HEIGHT * 0.5],
+                bar_base + [0, 0, self.BAR_HEIGHT * 0.5],
+                (0.85, 0.85, 0.9, 0.30))
+
+            # Filled portion, same colour as the marker. Slightly narrower than
+            # the outline so both stay readable where they overlap.
+            h = self.BAR_HEIGHT * frac
+            if h > 1e-4:
+                add(mujoco.mjtGeom.mjGEOM_BOX,
+                    [self.BAR_WIDTH * 0.7, self.BAR_WIDTH * 0.7, h * 0.5],
+                    bar_base + [0, 0, h * 0.5],
+                    color)
+
+            # Threshold tick: a wide, bright slab at contact_threshold. A bar
+            # hovering right at this line is a foot about to drop out.
+            add(mujoco.mjtGeom.mjGEOM_BOX,
+                [self.BAR_WIDTH * 2.4, self.BAR_WIDTH * 2.4, 0.004],
+                bar_base + [0, 0, self.BAR_HEIGHT * thr_frac],
+                (1.0, 0.85, 0.1, 0.95))
