@@ -27,6 +27,8 @@ from pipeline import LocomotionPipeline
 from Configs.config_loader import load_config
 from Controller.robot_defaults import DEFAULT_STANCE_QPOS
 from Mujoco.foot_contact_overlay import FootContactOverlay
+from Mujoco import terrain as terrain_mod
+from Mujoco import robot_mods
 
 
 class Ros2MujocoDriver(Node):
@@ -87,8 +89,62 @@ class Ros2MujocoDriver(Node):
         if not os.path.exists(mjcf_path):
             mjcf_path = os.path.join(os.path.dirname(__file__), "scene.xml")
 
-        print(f"[MujocoDriver] Initializing for {self.robot_type.upper()}. Model: {mjcf_path}")
-        self.model = mujoco.MjModel.from_xml_path(mjcf_path)
+        # Terrain comes from the launcher via the environment, same channel as
+        # the robot and phase selection. "rough" rewrites the scene onto a
+        # heightfield; the generated file is only needed until the model is
+        # compiled, so it is deleted immediately afterwards.
+        self.terrain = os.environ.get("QUADRUPED_TERRAIN", "flat").strip() or "flat"
+        self.terrain_params = terrain_mod.resolve(self.config)
+        _tmp_scenes = []
+        try:
+            scene_path = terrain_mod.scene_path(
+                mjcf_path, self.terrain, self.terrain_params, _tmp_scenes)
+        except (ValueError, RuntimeError) as exc:
+            print(f"[MujocoDriver] Terrain '{self.terrain}' unavailable ({exc}); "
+                  f"falling back to flat.")
+            self.terrain, scene_path = "flat", mjcf_path
+
+        print(f"[MujocoDriver] Initializing for {self.robot_type.upper()}. "
+              f"Model: {mjcf_path}  Terrain: {self.terrain}")
+        try:
+            self.model = mujoco.MjModel.from_xml_path(scene_path)
+        finally:
+            for f in _tmp_scenes:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+
+        mods = robot_mods.add_foot_mass(
+            self.model, robot_mods.resolve(self.config))
+        if mods is not None:
+            print(f"[MujocoDriver] Foot mass: +{mods['per_foot']:.3f} kg per foot "
+                  f"({mods['total_added']:.2f} kg total). Knee swing inertia "
+                  f"{mods['swing_inertia_before']:.5f} -> "
+                  f"{mods['swing_inertia_after']:.5f} kg m^2 "
+                  f"(+{100*(mods['swing_inertia_after']/mods['swing_inertia_before']-1):.0f}%)")
+
+        slide, torsion, n_feet = terrain_mod.apply_foot_friction(
+            self.model, self.terrain_params)
+        if n_feet:
+            print(f"[MujocoDriver] Foot friction: {slide:.2f} sliding, "
+                  f"{torsion:.3f} torsional ({n_feet} feet)")
+        else:
+            print("[MujocoDriver] WARNING: no foot geoms named "
+                  f"{terrain_mod.FOOT_GEOMS} - stock friction left in place.")
+
+        stats = terrain_mod.randomize(self.model, self.terrain_params)
+        if stats is not None:
+            span = self.terrain_params["extent"] * 2
+            print(f"[MujocoDriver] Rough terrain: {stats['ptp']*1000:.0f} mm "
+                  f"peak-to-peak over {span:.0f}x{span:.0f} m, "
+                  f"{stats['cell']*100:.1f} cm cells "
+                  f"(seed={self.terrain_params['seed']})")
+            # The step between neighbouring cells is what a toe catches on, so
+            # it is the number to compare against the policy's swing clearance.
+            print(f"[MujocoDriver] Adjacent-cell step: {stats['step']*1000:.0f} mm "
+                  f"max, {stats['step_p95']*1000:.0f} mm p95")
+
         self.data = mujoco.MjData(self.model)
         self.model.opt.timestep = 0.001
 

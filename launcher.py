@@ -688,7 +688,10 @@ def run_cli_menu():
         else:
             robot_cfg = "RANDOM" # Will be overridden by YAML or fallback to default
         
-        if action in ["isaac_lab"]:
+        # MuJoCo reads the same QUADRUPED_TERRAIN as training does; "rough"
+        # puts it on a randomised heightfield instead of an infinite plane.
+        # Amplitude and patch size live under `terrain:` in Configs/config.yaml.
+        if action in ["isaac_lab", "mujoco"]:
             terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
             terrain_cfg = "rough" if terrain_choice == "2" else "flat"
         else:
@@ -899,7 +902,7 @@ def main():
     print("\n" + "=" * 50)
     print(f"Launching {action.upper()} Mode for {module_name}!")
     print(f"Robot:    {robot_cfg}")
-    if action in ["isaac_lab"]:
+    if action in ["isaac_lab", "mujoco"]:
         print(f"Terrain:  {terrain_cfg}")
     print(f"Domain ID: {domain_id}")
     if training_phase:

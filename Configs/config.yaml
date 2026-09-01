@@ -43,6 +43,20 @@ state_estimator:
     process_noise_bias: 0.001  # Q diagonal — accel bias states (m/s²)²/step
     measurement_noise:  0.05   # R diagonal — leg odometry measurement (m/s)²
 
+# --- Terrain (MuJoCo driver) ---
+terrain:
+  amplitude: 0.08
+  extent: 6.0
+  resolution: 400
+  smoothing: 1
+  seed: 69
+  foot_friction_slide: 1.1
+  foot_friction_torsion: 0.05
+
+# --- Simulated robot modifications (MuJoCo driver) ---
+robot_mods:
+  foot_mass: 0.01
+
 # --- Safety Limits (Radians) ---
 # Official Unitree Go2 Hardware Limits
 joint_limits:
