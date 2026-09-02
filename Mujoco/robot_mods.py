@@ -1,23 +1,3 @@
-"""Runtime physical modifications to the simulated robot.
-
-Applied to the compiled MjModel rather than edited into the MJCF, so the
-vendored menagerie files stay pristine and the values are tunable from
-Configs/config.yaml without touching a scene.
-
-Currently: extra foot mass.
-
-The menagerie Go2 has no foot body - the foot is a geom hanging off the calf
-link, so there is no mass to scale. Adding foot weight therefore means adding a
-point mass at the contact point and recomputing the calf's inertial properties
-around it.
-
-Foot mass matters out of proportion to its size. It sits at the far end of the
-swing leg, so it enters the knee's swing inertia as m*r^2 with r the full calf
-length - a tenth of a kilogram at the foot costs more swing effort than a
-kilogram on the trunk, and it is exactly the mass a policy has to fling to
-clear an obstacle.
-"""
-
 import numpy as np
 import mujoco
 
@@ -50,9 +30,10 @@ def add_foot_mass(model, params):
     """Add a point mass at each foot, updating the calf's mass, CoM and inertia.
 
     MuJoCo stores inertia as principal moments (`body_inertia`) in a frame given
-    by `body_iquat`, about a centre at `body_ipos`. All four move when mass is
-    added off-centre, so the tensor is rebuilt in the body frame, re-referenced
-    to the new centre of mass, and re-diagonalised.
+    by `body_iquat`, about a centre at `body_ipos`. The tensor is rebuilt in the
+    body frame, re-referenced to the new centre of mass, and written back in the
+    compiled inertial frame - `body_iquat` is left untouched because MuJoCo's
+    collision bounding boxes are stored in it.
 
     Returns a dict of before/after figures, or None when `foot_mass` is 0.
     """
@@ -90,15 +71,13 @@ def add_foot_mass(model, params):
         I_new = (I1 + _parallel_axis(m1, c1 - c_new)
                  + _parallel_axis(extra, p2 - c_new))
 
-        # Symmetrise before eigendecomposition: the arithmetic above is
-        # symmetric in exact maths, and eigh assumes it.
+        # Symmetrise: the arithmetic above is symmetric in exact maths.
         I_new = 0.5 * (I_new + I_new.T)
-        evals, evecs = np.linalg.eigh(I_new)
-        if np.linalg.det(evecs) < 0:      # keep a right-handed frame
-            evecs[:, 0] *= -1.0
 
-        quat = np.zeros(4)
-        mujoco.mju_mat2Quat(quat, evecs.flatten())
+        # Project back onto the compiled inertial frame rather than
+        # re-diagonalising into a new one - see the module docstring for why
+        # body_iquat must not move.
+        inertia_new = np.diag(R.T @ I_new @ R)
 
         # Swing inertia about the knee (body origin), the number that says how
         # much harder this leg is to throw forward.
@@ -107,8 +86,7 @@ def add_foot_mass(model, params):
 
         model.body_mass[bid] = m_new
         model.body_ipos[bid] = c_new
-        model.body_inertia[bid] = evals
-        model.body_iquat[bid] = quat
+        model.body_inertia[bid] = inertia_new
         n += 1
 
     if n == 0:
