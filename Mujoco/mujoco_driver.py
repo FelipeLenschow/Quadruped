@@ -27,6 +27,7 @@ from pipeline import LocomotionPipeline
 from Configs.config_loader import load_config
 from Controller.robot_defaults import DEFAULT_STANCE_QPOS
 from Mujoco.foot_contact_overlay import FootContactOverlay
+from Mujoco.velocity_arrow_overlay import VelocityArrowOverlay
 from Mujoco import terrain as terrain_mod
 from Mujoco import robot_mods
 
@@ -259,6 +260,9 @@ class Ros2MujocoDriver(Node):
         # bar on the same scale.
         self.contact_overlay = FootContactOverlay(
             self.model, config=self.config, foot_names=self.foot_names)
+        # Commanded vs measured base velocity, drawn over the trunk.
+        self.velocity_overlay = VelocityArrowOverlay(self.model)
+        self.base_lin_vel_b = np.zeros(3)
 
         # History for PD deriv
         self.pos_err_hist = np.zeros((1, 12), dtype=np.float32)
@@ -321,6 +325,7 @@ class Ros2MujocoDriver(Node):
         global_ang_vel = self.data.cvel[1][:3]
         gyro = R.T @ global_ang_vel
         vel_b = R.T @ self.data.qvel[:3]
+        self.base_lin_vel_b = vel_b
 
         # Accelerometer specific force
         try:
@@ -518,9 +523,15 @@ class Ros2MujocoDriver(Node):
                 
                 if not headless:
                     if viewer.user_scn is not None:
-                        self.contact_overlay.draw(
-                            viewer.user_scn, self.data,
-                            self.foot_force_raw, self.foot_contact)
+                        with viewer.lock():
+                            # contact_overlay clears the scene, so it goes first and
+                            # the arrows are appended to it.
+                            self.contact_overlay.draw(
+                                viewer.user_scn, self.data,
+                                self.foot_force_raw, self.foot_contact)
+                            self.velocity_overlay.draw(
+                                viewer.user_scn, self.data,
+                                self.cmd_vel, self.base_lin_vel_b, reset=False)
                     viewer.sync()
 
                 self.step_counter += 1

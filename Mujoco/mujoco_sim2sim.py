@@ -21,6 +21,7 @@ import mujoco.viewer
 # Add root to sys.path so we can import modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from Controller.policy_runner import PolicyRunner
+from Mujoco.velocity_arrow_overlay import VelocityArrowOverlay
 # Logger removed - use ROS 2 bag/plotjuggler instead
 from unitree_sdk_mock import MockUDP, LowState, LowCmd
 
@@ -156,6 +157,7 @@ def main():
     commands = np.array([cmd_vx, 0.0, 0.0, 0.0], dtype=np.float32)
     _stop = threading.Event()
     show_debug = False
+    old_termios = None
 
     def _keyboard_thread():
         if not sys.stdin.isatty(): return
@@ -203,6 +205,8 @@ def main():
 
     pos_err_hist = np.zeros((3, 12), dtype=np.float32)
     vel_hist = np.zeros((3, 12), dtype=np.float32)
+    # Last base velocity seen by the policy, held for the viewer overlay.
+    meas_lin_vel = np.zeros(3, dtype=np.float64)
     udp = MockUDP(model, data, mapping)
     step_count = 0
     start_wall = time.time()
@@ -254,6 +258,7 @@ def main():
             if i % 5 == 0 and i < DECIMATION - 1: state = udp.Recv()
 
         last_actions[:] = actions
+        meas_lin_vel[:] = state.base_lin_vel
         step_count += 1
         if step_count % 50 == 0:
             print(f"\r[Step {step_count:6d}] h={data.qpos[2]:.3f} vx={state.base_lin_vel[0]:+.2f}  ", end="", flush=True)
@@ -265,11 +270,18 @@ def main():
                 if args.duration > 0 and step_count * STEP_DT >= args.duration: break
                 time.sleep(max(0, (start_wall + step_count*STEP_DT) - time.time()))
         else:
+            vel_overlay = VelocityArrowOverlay(model)
             with mujoco.viewer.launch_passive(model, data) as viewer:
                 viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-                viewer.cam.trackbodyid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
+                track_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
+                if track_id == -1:
+                    track_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base")
+                viewer.cam.trackbodyid = track_id
                 while viewer.is_running() and not _stop.is_set():
                     run_step()
+                    if vel_overlay.available and viewer.user_scn is not None:
+                        with viewer.lock():
+                            vel_overlay.draw(viewer.user_scn, data, commands, meas_lin_vel)
                     viewer.sync()
                     time.sleep(max(0, (start_wall + step_count*STEP_DT) - time.time()))
     except KeyboardInterrupt: pass

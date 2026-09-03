@@ -20,6 +20,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from Telemetry.estimator import rot_from_quat
 from Mujoco.foot_contact_overlay import FootContactOverlay, FOOT_NAMES
+from Mujoco.velocity_arrow_overlay import VelocityArrowOverlay
+from geometry_msgs.msg import Twist
 
 class MujocoTwinNode(Node):
     """
@@ -133,6 +135,7 @@ class MujocoTwinNode(Node):
         self.joint_pos = np.zeros(12, dtype=np.float64)
         self.cmd_joint_pos = np.zeros(12, dtype=np.float64)
         self.base_lin_vel_body = np.zeros(3, dtype=np.float64)
+        self.cmd_vel = np.zeros(4, dtype=np.float64)
         self.foot_force_raw = np.zeros(len(FOOT_NAMES), dtype=np.float64)
         self.foot_force_valid = False
 
@@ -146,10 +149,17 @@ class MujocoTwinNode(Node):
         self.create_subscription(Imu, "/sensors/imu", self.imu_cb, 10)
         self.create_subscription(
             Float32MultiArray, "/sensors/foot_force", self.foot_force_cb, 10)
+        self.create_subscription(Twist, "/cmd_vel", self.cmd_vel_cb, 10)
         
-        odom_topic = "/odom/state_estimator" if use_estimator else "/odom/state_simulator"
-        self.get_logger().info(f"MuJoCo Twin subscribing to: {odom_topic}")
-        self.create_subscription(Odometry, odom_topic, self.odom_cb, 10)
+        self.vel_overlay = VelocityArrowOverlay(self.model)
+        
+        # Until the first FSR message the feet are bare, which looks identical
+        # to a broken overlay. Say so, once every 5 s, until data shows up.
+        self.fsr_status_timer = self.create_timer(5.0, self.fsr_status_cb)
+        
+        self.get_logger().info("MuJoCo Twin subscribing to both /odom/state_estimator and /odom/state_simulator")
+        self.create_subscription(Odometry, "/odom/state_estimator", self.odom_cb, 10)
+        self.create_subscription(Odometry, "/odom/state_simulator", self.odom_cb, 10)
 
         # 4. Start Viewer Thread
         self.viewer_thread = threading.Thread(target=self._viewer_loop, daemon=True)
@@ -179,7 +189,27 @@ class MujocoTwinNode(Node):
             return
         with self.lock:
             self.foot_force_raw[:] = msg.data[:n]
+            first = not self.foot_force_valid
             self.foot_force_valid = True
+        if first:
+            self.get_logger().info(
+                "Foot FSR contact bars live: first /sensors/foot_force message "
+                f"{np.round(self.foot_force_raw, 0)} (threshold "
+                f"{self.contact_overlay.contact_threshold:.0f} raw).")
+
+    def cmd_vel_cb(self, msg: Twist):
+        with self.lock:
+            self.cmd_vel[0] = msg.linear.x
+            self.cmd_vel[1] = msg.linear.y
+            self.cmd_vel[2] = msg.angular.z
+
+    def fsr_status_cb(self):
+        if self.foot_force_valid:
+            self.fsr_status_timer.cancel()
+            return
+        self.get_logger().warn(
+            "No /sensors/foot_force yet - foot contact bars are not being drawn. "
+            "Is a driver or an MCAP replay publishing that topic?")
 
     def imu_cb(self, msg: Imu):
         with self.lock:
@@ -233,10 +263,20 @@ class MujocoTwinNode(Node):
 
                 mujoco.mj_forward(self.model, self.data)
 
-                if have_force and self.contact_overlay.available \
-                        and viewer.user_scn is not None:
-                    self.contact_overlay.draw(
-                        viewer.user_scn, self.data, foot_force)
+                if viewer.user_scn is not None:
+                    with viewer.lock():
+                        contact_drawn = False
+                        if have_force and self.contact_overlay.available:
+                            self.contact_overlay.draw(
+                                viewer.user_scn, self.data, foot_force)
+                            contact_drawn = True
+
+                        if self.vel_overlay.available:
+                            # contact_overlay clears the scene, so if it drew, we append.
+                            # Otherwise we must clear the scene ourselves.
+                            self.vel_overlay.draw(
+                                viewer.user_scn, self.data,
+                                self.cmd_vel, self.base_lin_vel_body, reset=not contact_drawn)
 
                 viewer.sync()
                 time.sleep(1.0 / 60.0)
