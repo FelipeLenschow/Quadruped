@@ -169,6 +169,8 @@ class QuadrupedEnv(DirectRLEnv):
                 self.num_envs, self.cfg.obs_history_len * 49, device=self.device
             )
 
+        self._build_obs_sensor_model()
+
         # Internal Curriculum Sequence
         self.agent_steps = 0
         self.curriculum_phase_idx = 0
@@ -313,6 +315,62 @@ class QuadrupedEnv(DirectRLEnv):
         # Clone environments if replicate_physics is enabled
         if self.scene.cfg.replicate_physics:
             self.scene.clone_environments(copy_from_source=False)
+
+    # Observation vector layout, 49 dims. Any change here must match _get_observations.
+    OBS_GROUPS = {
+        "base_lin_vel":       (0, 3),
+        "base_ang_vel":       (3, 6),
+        "projected_gravity":  (6, 9),
+        "commands":           (9, 13),
+        "joint_pos":          (13, 25),
+        "joint_vel":          (25, 37),
+        "actions":            (37, 49),
+    }
+
+    def _build_obs_sensor_model(self) -> None:
+        """Expand the per-group noise/bias dicts into 49-wide vectors, once.
+
+        Leaves self.obs_noise_std as None when the yaml configures no sensor model,
+        which is the signal for _get_observations to fall back to the original flat
+        observation_noise_scale over every dimension.
+
+        Groups omitted from a dict get zero. `commands` and `actions` are therefore
+        clean unless explicitly listed: the command comes from the operator and the
+        action is what this policy just emitted, so neither carries sensor error on
+        hardware, and adding some only degrades the input.
+        """
+        noise_cfg = getattr(self.cfg, "observation_noise", None)
+        bias_cfg = getattr(self.cfg, "observation_bias", None)
+
+        if not noise_cfg and not bias_cfg:
+            self.obs_noise_std = None
+            self.obs_bias_bound = None
+            self.obs_bias = None
+            return
+
+        # observation_noise_scale doubles as a global multiplier on the sensor model,
+        # so one number per phase still dials the whole thing up or down.
+        gain = float(self.cfg.observation_noise_scale)
+
+        def _expand(cfg_dict):
+            vec = torch.zeros(49, device=self.device)
+            for name, value in (cfg_dict or {}).items():
+                if name not in self.OBS_GROUPS:
+                    raise ValueError(
+                        f"unknown observation group '{name}' -- expected one of "
+                        f"{sorted(self.OBS_GROUPS)}"
+                    )
+                lo, hi = self.OBS_GROUPS[name]
+                vec[lo:hi] = float(value) * gain
+            return vec
+
+        self.obs_noise_std = _expand(noise_cfg) if noise_cfg else torch.zeros(49, device=self.device)
+        if bias_cfg:
+            self.obs_bias_bound = _expand(bias_cfg)
+            self.obs_bias = torch.zeros(self.num_envs, 49, device=self.device)
+        else:
+            self.obs_bias_bound = None
+            self.obs_bias = torch.zeros(self.num_envs, 49, device=self.device)
 
     def _resample_commands(self, env_ids: Sequence[int]):
         """Resamples the velocity commands for the specified environments."""
@@ -854,10 +912,17 @@ class QuadrupedEnv(DirectRLEnv):
         foot_height_match = torch.exp(
             -torch.square(self.feet_height_max - self.cfg.target_foot_height) / self.cfg.foot_height_sigma
         )
-        # Only feet that landed THIS step are counted (`landed`, computed above). Masked by command
-        # like every other gait-shaping term, so a robot told to hold still neither pays nor earns
-        # for shuffling a foot -- target_foot_height is meaningless when it is not supposed to step.
-        landed_moving = landed.float() * moving_mask.unsqueeze(1)
+        # Only feet that landed THIS step are counted (`landed`, computed above), and only while the
+        # robot is actually commanded to move -- target_foot_height is meaningless when it is not
+        # supposed to step, so a robot told to hold still neither pays nor earns for shuffling a foot.
+        # This is a HARD gate at static_velocity_threshold, NOT the smooth moving_mask the other
+        # stepping terms use. With foot_height_bias >= 0.5 this term is mostly a penalty, and ramping
+        # it in over [threshold, static_command_ramp] charged a fraction of that penalty for landings
+        # under commands so small the robot is not really expected to walk under them -- a partial
+        # cost for a step it was never asked to take. Below the threshold the term is off entirely;
+        # above it the full term applies at every commanded speed.
+        commanded_moving = (cmd_norm > self.cfg.static_velocity_threshold).float()
+        landed_moving = landed.float() * commanded_moving.unsqueeze(1)
         self.foot_height_val = torch.sum(
             (foot_height_match - self.cfg.foot_height_bias) * landed_moving, dim=1
         )
@@ -996,7 +1061,8 @@ class QuadrupedEnv(DirectRLEnv):
         # A pair only contributes when it is actually stepping (valid), and the whole term is
         # scaled by moving_mask like every other stepping term -- it used to gate on a bare
         # boolean (cmd_norm > static_velocity_threshold), which put a cliff at the threshold
-        # while foot_height/feet_air_time ramped smoothly over [threshold, static_command_ramp].
+        # while feet_air_time ramped smoothly over [threshold, static_command_ramp]. (foot_height
+        # deliberately keeps the hard gate -- see its comment above.)
         if self.cfg.rew_scale_gait_phase_sym != 0.0:
             # Current simulation time for all envs  (N,)
             t_now = self.episode_length_buf.float() * self.step_dt  # proxy: steps * dt
@@ -1139,8 +1205,12 @@ class QuadrupedEnv(DirectRLEnv):
         )
 
         # Add observation noise (Sim2Real)
-        obs_noise = torch.randn_like(obs) * self.cfg.observation_noise_scale
-        obs = obs + obs_noise
+        # Per-channel white noise + per-episode constant bias when a sensor model is
+        # configured; otherwise the original flat sigma over all 49 dims.
+        if self.obs_noise_std is not None:
+            obs = obs + torch.randn_like(obs) * self.obs_noise_std + self.obs_bias
+        else:
+            obs = obs + torch.randn_like(obs) * self.cfg.observation_noise_scale
 
         if self.cfg.obs_history_len > 0:
             full_obs = torch.cat([obs, self.obs_history_buf], dim=-1)
@@ -1323,6 +1393,13 @@ class QuadrupedEnv(DirectRLEnv):
         self.previous_actions[env_ids] = 0.0
         self.last_strike_time[env_ids] = 0.0
         self.stride_duration[env_ids] = 1.0
+        # Per-episode sensor bias: resampled here so it is constant WITHIN an episode
+        # (that is the whole point -- see _build_obs_sensor_model) and independent across them.
+        if self.obs_bias_bound is not None:
+            self.obs_bias[env_ids] = (
+                (torch.rand((len(env_ids), 49), device=self.device) * 2.0 - 1.0)
+                * self.obs_bias_bound
+            )
         self.gait_phase_sym_val[env_ids] = 0.0
         if self.cfg.obs_history_len > 0:
             self.obs_history_buf[env_ids] = 0.0

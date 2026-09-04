@@ -274,6 +274,30 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # ── Observation noise (sim2real) ──────────────────────────────────────────
     observation_noise_scale = _phase_cfg["env"]["observation_noise_scale"]
 
+    # ── Per-channel sensor model ──────────────────────────────────────────────
+    # observation_noise_scale above is a single sigma applied to all 49 obs dims,
+    # which cannot be right: projected gravity is a unit vector, joint velocity is
+    # in rad/s, and encoder position is accurate to ~1e-3 rad. One number is
+    # simultaneously far too much for the encoders and too little for the velocity
+    # estimate. It also noises the COMMAND and PREVIOUS-ACTION channels, neither of
+    # which is a sensor -- the command comes from the operator and the action is
+    # what this policy just emitted, so both are known exactly on hardware.
+    #
+    # These two dicts replace it when present, keyed by observation group:
+    #   observation_noise -- per-step white noise, standard deviation
+    #   observation_bias  -- constant offset sampled ONCE per episode, uniform in
+    #                        [-b, +b]. This is the part white noise cannot model: a
+    #                        real IMU has a persistent offset the policy must
+    #                        tolerate, and Unitree joint zero-point calibration
+    #                        drifts per joint. Zero-mean per-step noise is averaged
+    #                        away by the network; a fixed bias is not.
+    #
+    # Both are scaled by observation_noise_scale, so a phase can dial the whole
+    # sensor model with one number. Absent from the yaml, the old flat behaviour is
+    # used unchanged.
+    observation_noise = _phase_cfg.get("domain_randomization", {}).get("observation_noise", None)
+    observation_bias = _phase_cfg.get("domain_randomization", {}).get("observation_bias", None)
+
     # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  DOMAIN RANDOMIZATION                                                 ║
     # ╚════════════════════════════════════════════════════════════════════════╝

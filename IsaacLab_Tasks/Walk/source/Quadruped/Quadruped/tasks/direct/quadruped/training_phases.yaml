@@ -65,16 +65,14 @@ default: &default
 
     rew_scale_gait_phase_sym: 0.0
 
-    # ── Shape parameters (NOT weights -- kept non-zero, see header note) ──
-    target_feet_air_time: 0.5
-    feet_air_time_sigma: 0.02
-    target_feet_air_time_slow: 0.5
+    target_feet_air_time: 0.15
+    feet_air_time_sigma: 0.01
+    target_feet_air_time_slow: 0.20
     feet_air_time_speed_lo: 0.1
     feet_air_time_speed_hi: 0.35
     target_foot_height: 0.10
     foot_height_sigma: 0.01
-    # Divisor, so it must stay non-zero even here (see header note). 0.6 puts the knee of
-    # 1 - exp(-vz^2/sigma) at ~0.8 m/s: 0.3 m/s -> 0.14, 0.8 -> 0.66, 1.5+ -> saturated.
+
     foot_landing_vel_sigma: 0.6
     target_base_height: 0.25
     max_contact_force_pct: 1.0
@@ -88,7 +86,7 @@ default: &default
   commands:
     command_lin_vel_std: 0.5
     command_ang_vel_std: 0.5
-    vel_tracking_sigma_exp: 0.0
+    vel_tracking_sigma_exp: 2.0
     command_x_range: [-1.0, 1.0]
     command_y_range: [-1.0, 1.0]
     command_yaw_range: [-1.0, 1.0]
@@ -109,14 +107,29 @@ phases:
     env:
       obs_history_len: 0
       terrain: rough
-      num_envs: 2000
+      num_envs: 1000
       action_scale: 0.25
-      observation_noise_scale: 0.05
-      max_timesteps: 300000
+      observation_noise_scale: 1.0
+      max_timesteps: 500000
       episode_length_s: 20.0
       base_angle_termination_thresh: 0.7
     domain_randomization:
       joint_friction_range: [0.03, 0.3]
+      payload_mass_range: [-0.5, 1.0]        # kg on the base: Jetson, mount, cabling
+      com_displacement_range: [-0.02, 0.02]  # m, fore/aft
+      com_displacement_range_y: [-0.01, 0.01]  # m, lateral -- keep centred on 0
+      observation_noise:
+        base_lin_vel: 0.08       # m/s -- the Kalman estimate, easily the worst channel
+        base_ang_vel: 0.03       # rad/s -- gyro is good
+        projected_gravity: 0.02  # unit vector; ~1 deg of attitude error
+        joint_pos: 0.004         # rad -- encoders are accurate
+        joint_vel: 0.20          # rad/s -- differentiated encoders, noisy
+      observation_bias:
+        base_lin_vel: 0.05       # m/s -- estimator drift, persists within an episode
+        base_ang_vel: 0.02       # rad/s -- gyro bias
+        projected_gravity: 0.02  # IMU mounting / calibration tilt
+        joint_pos: 0.015         # rad -- Unitree zero-point calibration, PER JOINT.
+
     events:
       enable_pushes: true
       push_velocity_range: [-0.4, 0.4]
@@ -153,12 +166,39 @@ phases:
   phase2:
     inherits: phase1
     env:
-      max_timesteps: 300000
+      max_timesteps: 500000
+      observation_noise_scale: 1.25
+    domain_randomization:
+      joint_friction_range: [0.03, 0.5]
+      payload_mass_range: [-1.0, 2.5]
+      com_displacement_range: [-0.05, 0.05]
+      com_displacement_range_y: [-0.03, 0.03]
+      joint_stiffness_range: [-5.0, 5.0]
+      joint_pd_damping_range: [-0.2, 0.2]
+      action_latency_range_steps: [0, 1]
+      motor_backlash_range: [0.0, 0.01]   # rad, per joint
+      observation_noise:
+        base_lin_vel: 0.10       # m/s -- the Kalman estimate, easily the worst channel
+        base_ang_vel: 0.03       # rad/s -- gyro is good
+        projected_gravity: 0.02  # unit vector; ~1 deg of attitude error
+        joint_pos: 0.004         # rad -- encoders are accurate
+        joint_vel: 0.30          # rad/s -- differentiated encoders, noisy
+      observation_bias:
+        base_lin_vel: 0.05       # m/s -- estimator drift, persists within an episode
+        base_ang_vel: 0.02       # rad/s -- gyro bias
+        projected_gravity: 0.02  # IMU mounting / calibration tilt
+        joint_pos: 0.015         # rad -- Unitree zero-point calibration, PER JOINT.
+
+    events:
+      enable_pushes: true
+      push_velocity_range: [-0.8, 0.8]
     rewards:
-      rew_scale_foot_height: 0.4
-      foot_height_bias: 1.0
+      rew_scale_foot_height: 1.0
+      foot_height_bias: 0.75
       target_foot_height: 0.08
-      foot_height_sigma: 0.005
+      foot_height_sigma: 0.002
+
+      rew_scale_feet_air_time: 0.2
 
       rew_scale_foot_landing_vel: -0.3
       foot_landing_vel_sigma: 0.6
@@ -167,13 +207,7 @@ phases:
 
       rew_scale_gait_phase_sym: -0.15
 
-  phase3:
-    inherits: phase2
-    env:
-      max_timesteps: 300000
-    rewards:
-      rew_scale_foot_height: 1.0
-      foot_height_bias: 0.5
-      target_foot_height: 0.12
-      rew_scale_foot_landing_vel: -0.1
+    commands:
+      standby_duration_s: 1.0
+      zero_command_fraction: 0.15
 
