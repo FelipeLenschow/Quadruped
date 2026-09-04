@@ -120,27 +120,63 @@ class RealDriver(Node):
         # it sink under control. The motor applies this itself, so it is bounded
         # by the motor, not by the (zero) safety torque budget.
         self.emergency_kd = 5.0
-        self.contact_threshold = 50.0
+        # Counts ABOVE each foot's own no-load offset, not an absolute reading.
+        # The four FSRs sit at visibly different zeros, so one absolute cut is a
+        # different gate on every foot: the foot with the highest offset trips
+        # early and the lowest may never trip at all. If the gate is too high the
+        # feet never register contact, the estimator never gets its leg-odometry
+        # correction, and the velocity estimate diverges without bound - which
+        # feeds garbage straight into the policy.
+        self.contact_threshold = 10.0
+        _fsr_bias = 16.0
+        self._calib_time = 1.0
+        self._calib_offset_max = 25.0
+        self._calib_spread_max = 3.0
         try:
             with open(config_path, 'r') as f:
                 _cfg = yaml.safe_load(f) or {}
             self.emergency_kd = float(_cfg.get("safety", {}).get("emergency_kd", 5.0))
-            # Was hardcoded to 50 while config.yaml carried the knob unread. If it
-            # is too high the feet never register contact, the estimator never
-            # gets its leg-odometry correction, and the velocity estimate diverges
-            # without bound - which feeds garbage straight into the policy.
-            self.contact_threshold = float(
-                _cfg.get("state_estimator", {}).get("contact_threshold", 50.0))
+            _est = _cfg.get("state_estimator", {}) or {}
+            self.contact_threshold = float(_est.get("contact_threshold", 10.0))
+            _fsr_bias = float(_est.get("fsr_bias", 16.0))
+            self._calib_time = float(_est.get("fsr_calibration_time", 1.0))
+            self._calib_offset_max = float(_est.get("fsr_offset_max", 25.0))
+            self._calib_spread_max = float(_est.get("fsr_spread_max", 3.0))
         except Exception:
             pass
+
+        # Per-foot no-load offset [FL, FR, RL, RR], measured at startup by
+        # _collect_fsr_sample. Until that finishes, the configured bias stands in
+        # for all four so contact still works from the first tick.
+        self.fsr_offset = np.full(4, _fsr_bias, dtype=np.float64)
+        self._calib_samples = []
+        self._calib_n = max(0, int(round(self._calib_time / 0.005)))  # 200 Hz loop
+        self._calib_done = self._calib_n == 0
         self.get_logger().info(
-            f"[RealDriver] Contact threshold: {self.contact_threshold:.0f} (raw FSR)")
+            f"[RealDriver] Contact threshold: {self.contact_threshold:.0f} counts "
+            f"above each foot's offset (start {_fsr_bias:.0f}, "
+            + (f"calibrating over {self._calib_time:.1f}s)"
+               if not self._calib_done else "calibration disabled)"))
+        if not self._calib_done:
+            self.get_logger().warn(
+                "[RealDriver] Keep the feet UNLOADED for the next "
+                f"{self._calib_time:.1f}s - the FSR zero is being measured now.")
 
         # Raw foot force, so the threshold can be chosen by measuring instead of
         # guessing: watch /sensors/foot_force while loading each foot.
         self.foot_force_pub = self.create_publisher(
             Float32MultiArray, "/sensors/foot_force", 10)
         self._ff_tick = 0
+
+        # The gate itself - [threshold, offset x4] - broadcast at 1 Hz. The twin
+        # viewer runs on the operator's laptop, off a DIFFERENT Configs/config.yaml
+        # than this one: changing the threshold here and reading it off the screen
+        # there showed the laptop's stale value while the robot gated on the new
+        # one. The offsets are measured here and cannot be guessed off-robot at
+        # all, so nothing off-robot infers either - both are published.
+        self.foot_cal_pub = self.create_publisher(
+            Float32MultiArray, "/sensors/foot_force_calibration", 10)
+        self.create_timer(1.0, self._publish_contact_calibration)
 
         self.create_subscription(Float32, "/control/kp", self.kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
@@ -200,26 +236,68 @@ class RealDriver(Node):
         contact = [0.0, 0.0, 0.0, 0.0]
         if hasattr(raw, 'foot_force'):
             ff = raw.foot_force
-            thr = self.contact_threshold
+            fsr = np.array([ff[1], ff[0], ff[3], ff[2]], dtype=np.float64)  # FL,FR,RL,RR
 
-            # 200 Hz loop -> publish at 50 Hz
+            if not self._calib_done:
+                self._collect_fsr_sample(fsr)
+
+            # 200 Hz loop -> publish at 50 Hz. Raw, uncorrected: the offsets go
+            # out on /sensors/foot_force_calibration, so a recording keeps what
+            # the sensor said and stays comparable with the simulated FSR.
             self._ff_tick += 1
             if self._ff_tick % 4 == 0:
                 msg = Float32MultiArray()
-                msg.data = [float(ff[1]), float(ff[0]), float(ff[3]), float(ff[2])]  # FL,FR,RL,RR
+                msg.data = [float(v) for v in fsr]
                 self.foot_force_pub.publish(msg)
-            contact = [
-                float(ff[1] > thr),  # FL
-                float(ff[0] > thr),  # FR
-                float(ff[3] > thr),  # RL
-                float(ff[2] > thr),  # RR
-            ]
+
+            contact = [float(m) for m in (fsr - self.fsr_offset > self.contact_threshold)]
         # print(q)
         #[0.031, 1.31, -2.85, 0.014, 1.32, -2.83, -0.320, 1.323, -2.83, 0.31, 1.31, -2.80] #Laydown
 
         return {
             'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro, 'accel': accel, 'contact': contact
         }
+
+    def _publish_contact_calibration(self):
+        """Broadcast the FSR gate so viewers show what the robot actually applies."""
+        msg = Float32MultiArray()
+        msg.data = [float(self.contact_threshold)] + [float(o) for o in self.fsr_offset]
+        self.foot_cal_pub.publish(msg)
+
+    def _collect_fsr_sample(self, raw):
+        """Average the unloaded FSR readings into a per-foot zero, once, at startup."""
+        self._calib_samples.append(np.asarray(raw, dtype=np.float64))
+        if len(self._calib_samples) < self._calib_n:
+            return
+
+        samples = np.asarray(self._calib_samples)
+        mean, spread = samples.mean(axis=0), samples.std(axis=0)
+        self._calib_samples = []
+        self._calib_done = True
+
+        names = ("FL", "FR", "RL", "RR")
+        # A foot taking load during the window reads high and steady; a foot
+        # being moved reads noisy. Either way the zero is not a zero, and
+        # adopting it would raise that foot's gate by however much it was
+        # carrying - so keep the configured bias for that foot and say which.
+        bad = (mean > self._calib_offset_max) | (spread > self._calib_spread_max)
+        offsets = np.where(bad, self.fsr_offset, mean)
+        self.get_logger().info(
+            "[RealDriver] FSR zero: "
+            + "  ".join(f"{n}={m:.1f}+-{s:.1f}" for n, m, s in zip(names, mean, spread))
+            + f"  -> contact above {self.contact_threshold:.0f} counts over each")
+        if bad.any():
+            rejected = ", ".join(
+                f"{n} ({m:.1f}+-{s:.1f})" for n, m, s, b in zip(names, mean, spread, bad) if b
+            )
+            self.get_logger().warn(
+                f"[RealDriver] Rejected FSR zero for {rejected} - loaded or moving "
+                f"during calibration (limits: offset<={self._calib_offset_max:.0f}, "
+                f"spread<={self._calib_spread_max:.1f}). Kept "
+                f"{self.fsr_offset[0]:.0f} from config; restart the driver with the "
+                "feet unloaded to measure it.")
+        self.fsr_offset = offsets
+        self._publish_contact_calibration()
 
     def control_loop(self):
         """Internal inference logic."""

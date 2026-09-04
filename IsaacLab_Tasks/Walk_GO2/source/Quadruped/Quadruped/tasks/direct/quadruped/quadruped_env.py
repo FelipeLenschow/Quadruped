@@ -90,6 +90,16 @@ class QuadrupedEnv(DirectRLEnv):
             self.num_envs, device=self.device
         )
         self.joint_vel_l2_static_val = torch.zeros(self.num_envs, device=self.device)
+
+        # First-step reaction time tracking:
+        # Records sim-time when the velocity command first became non-zero.
+        # The first foot landing after that gets a reaction-time reward instead
+        # of the normal (air_time - 0.5) reward, which is near-zero / negative
+        # for the first step.
+        self.vel_nonzero_start_time = torch.zeros(self.num_envs, device=self.device)
+        self.first_step_taken = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+        self.prev_cmd_is_nonzero = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
         self.command_timer = torch.full(
             (self.num_envs,), 100.0, device=self.device
         )  # Force immediate resample
@@ -371,14 +381,38 @@ class QuadrupedEnv(DirectRLEnv):
         )
         # First contact this step: currently contact AND NOT previously contact
         first_contact = contact & ~self.last_feet_contact
+        any_first_contact = first_contact.any(dim=1)
         # Increment air time
         self.feet_air_time += self.step_dt
-        # Calculate reward for feet that just landed: (air_time - threshold) * first_contact
-        # Threshold from config is 0.5 (based on reference params).
-        # We do NOT clamp this value, so steps shorter than 0.5s are correctly penalized.
-        rew_air_time = torch.sum(
+
+        # -- First-step reaction time tracking --
+        # Detect when velocity command transitions from zero to non-zero.
+        current_time = self.episode_length_buf.float() * self.step_dt
+        cmd_is_nonzero = torch.norm(self.commands[:, :2], dim=1) > 0.1
+        cmd_just_became_nonzero = cmd_is_nonzero & ~self.prev_cmd_is_nonzero
+        # Record the time when the command went non-zero and mark first step
+        # as not yet taken.
+        self.vel_nonzero_start_time[cmd_just_became_nonzero] = current_time[cmd_just_became_nonzero]
+        self.first_step_taken[cmd_just_became_nonzero] = False
+        self.prev_cmd_is_nonzero = cmd_is_nonzero
+
+        # Normal air-time reward: (air_time - 0.5) per foot that just landed.
+        normal_air_time_rew = torch.sum(
             (self.feet_air_time - 0.5) * first_contact.float(), dim=1
-        ) * (torch.norm(self.commands[:, :2], dim=1) > 0.1)
+        ) * cmd_is_nonzero.float()
+
+        # First-step reaction time reward: time from command going non-zero
+        # to the first foot landing.  Shorter reaction → higher reward.
+        # reaction_time = current_time - vel_nonzero_start_time
+        # reward = max(0, 1.0 - reaction_time)   (1.0 if instant, 0 if >= 1s)
+        needs_first_step = ~self.first_step_taken & cmd_is_nonzero & any_first_contact
+        reaction_time = current_time - self.vel_nonzero_start_time
+        first_step_rew = torch.clamp(1.0 - reaction_time, min=0.0) * needs_first_step.float()
+        # Mark first step as taken for envs that just landed.
+        self.first_step_taken[needs_first_step] = True
+
+        # Blend: use first-step reward when applicable, normal reward otherwise.
+        rew_air_time = torch.where(needs_first_step, first_step_rew, normal_air_time_rew)
         self.feet_air_time_reward_val = rew_air_time
 
         # -- Update foot height reward logic --
@@ -710,6 +744,11 @@ class QuadrupedEnv(DirectRLEnv):
 
         # 4. Reset Action Buffer
         self.actions[env_ids] = 0.0
+
+        # 4.1 Reset first-step tracking
+        self.vel_nonzero_start_time[env_ids] = 0.0
+        self.first_step_taken[env_ids] = True
+        self.prev_cmd_is_nonzero[env_ids] = False
 
         # 5. Resample Commands
         self._resample_commands(env_ids)

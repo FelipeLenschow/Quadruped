@@ -138,6 +138,11 @@ class MujocoTwinNode(Node):
         self.cmd_vel = np.zeros(4, dtype=np.float64)
         self.foot_force_raw = np.zeros(len(FOOT_NAMES), dtype=np.float64)
         self.foot_force_valid = False
+        # Binary contact comes from the driver, not from thresholding the raw
+        # counts here: the gate that matters is the one the robot applied to its
+        # own FSR, and this machine's Configs/config.yaml is not the robot's.
+        self.foot_contact = np.zeros(len(FOOT_NAMES), dtype=np.float64)
+        self.foot_contact_valid = False
 
         self.last_time = time.time()
         self.lock = threading.Lock()
@@ -149,6 +154,11 @@ class MujocoTwinNode(Node):
         self.create_subscription(Imu, "/sensors/imu", self.imu_cb, 10)
         self.create_subscription(
             Float32MultiArray, "/sensors/foot_force", self.foot_force_cb, 10)
+        self.create_subscription(
+            Float32MultiArray, "/estimator/feet_contact", self.foot_contact_cb, 10)
+        self.create_subscription(
+            Float32MultiArray, "/sensors/foot_force_calibration",
+            self.foot_calibration_cb, 10)
         self.create_subscription(Twist, "/cmd_vel", self.cmd_vel_cb, 10)
         
         self.vel_overlay = VelocityArrowOverlay(self.model)
@@ -194,8 +204,29 @@ class MujocoTwinNode(Node):
         if first:
             self.get_logger().info(
                 "Foot FSR contact bars live: first /sensors/foot_force message "
-                f"{np.round(self.foot_force_raw, 0)} (threshold "
-                f"{self.contact_overlay.contact_threshold:.0f} raw).")
+                f"{np.round(self.foot_force_raw, 0)} raw (contact above "
+                f"{self.contact_overlay.contact_threshold:.0f} counts over each "
+                "foot's zero).")
+
+    def foot_contact_cb(self, msg: Float32MultiArray):
+        n = len(self.foot_contact)
+        if len(msg.data) < n:
+            return
+        with self.lock:
+            self.foot_contact[:] = msg.data[:n]
+            self.foot_contact_valid = True
+
+    def foot_calibration_cb(self, msg: Float32MultiArray):
+        """Adopt the driver's gate - threshold plus per-foot zeros - and say so."""
+        if len(msg.data) < 1 + len(FOOT_NAMES):
+            return
+        thr, offsets = float(msg.data[0]), msg.data[1:1 + len(FOOT_NAMES)]
+        if not self.contact_overlay.set_calibration(thr, offsets):
+            return
+        zeros = "  ".join(f"{n}={o:.1f}" for n, o in zip(FOOT_NAMES, offsets))
+        self.get_logger().info(
+            f"Foot contact gate from the driver: {thr:.0f} counts above  {zeros}"
+            "  (the local Configs/config.yaml does not decide this)")
 
     def cmd_vel_cb(self, msg: Twist):
         with self.lock:
@@ -204,12 +235,23 @@ class MujocoTwinNode(Node):
             self.cmd_vel[2] = msg.angular.z
 
     def fsr_status_cb(self):
-        if self.foot_force_valid:
+        if self.foot_force_valid and self.foot_contact_valid:
             self.fsr_status_timer.cancel()
             return
+        if not self.foot_force_valid:
+            self.get_logger().warn(
+                "No /sensors/foot_force yet - foot contact bars are not being drawn. "
+                "Is a driver or an MCAP replay publishing that topic?")
+            return
+        # Bars are drawn, markers are guesses: without the driver's flags the
+        # overlay falls back to this machine's threshold, which is exactly the
+        # value that can be stale relative to the robot's. Said once - a replay
+        # of a bag without that topic would otherwise repeat it forever.
         self.get_logger().warn(
-            "No /sensors/foot_force yet - foot contact bars are not being drawn. "
-            "Is a driver or an MCAP replay publishing that topic?")
+            "No /estimator/feet_contact yet - contact markers fall back to the "
+            f"local gate ({self.contact_overlay.contact_threshold:.0f} counts over "
+            "the local offsets), which may not be the one the robot is applying.")
+        self.fsr_status_timer.cancel()
 
     def imu_cb(self, msg: Imu):
         with self.lock:
@@ -260,6 +302,8 @@ class MujocoTwinNode(Node):
 
                     foot_force = self.foot_force_raw.copy()
                     have_force = self.foot_force_valid
+                    foot_contact = (self.foot_contact.copy()
+                                    if self.foot_contact_valid else None)
 
                 mujoco.mj_forward(self.model, self.data)
 
@@ -268,7 +312,8 @@ class MujocoTwinNode(Node):
                         contact_drawn = False
                         if have_force and self.contact_overlay.available:
                             self.contact_overlay.draw(
-                                viewer.user_scn, self.data, foot_force)
+                                viewer.user_scn, self.data, foot_force,
+                                foot_contact)
                             contact_drawn = True
 
                         if self.vel_overlay.available:

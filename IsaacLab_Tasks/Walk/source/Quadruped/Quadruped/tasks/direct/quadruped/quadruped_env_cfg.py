@@ -66,6 +66,27 @@ def resolve_phase(all_phases, phase_name):
 
 _phase_cfg = resolve_phase(_all_phases, _phase_name)
 
+
+def _resolve_standby_range(value):
+    """Normalise a standby setting into a (lo, hi) pair of seconds.
+
+    A scalar means a fixed hold; a two-element sequence means draw uniformly in
+    that range each episode. Returned as a tuple so the value is hashable and
+    safe as a config default.
+    """
+    if isinstance(value, (list, tuple)):
+        if len(value) != 2:
+            raise ValueError(
+                "standby_duration_s as a range needs exactly [lo, hi], got %r" % (value,)
+            )
+        lo, hi = float(value[0]), float(value[1])
+        if lo > hi:
+            raise ValueError("standby_duration_s range is inverted: %r" % (value,))
+        return (lo, hi)
+    v = float(value)
+    return (v, v)
+
+
 _curriculum_phases = []
 if _is_sequence:
     phase_keys = list(_all_phases["phases"].keys())
@@ -433,7 +454,27 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     foot_landing_vel_sigma = _phase_cfg["rewards"].get("foot_landing_vel_sigma", 0.6)
 
     # Ground reaction forces / impact
-    rew_scale_grf_balance = _phase_cfg["rewards"]["rew_scale_grf_balance"]
+    # Stance-only: penalises uneven load sharing between contacting feet while the
+    # robot is commanded to hold still. Measured CV^2 on hardware is ~0.39 standing
+    # (a lopsided diagonal) against ~0.21 walking, where uneven loading is just what
+    # a trot does - hence the static mask rather than charging it all the time.
+    rew_scale_grf_balance_stance = _phase_cfg["rewards"]["rew_scale_grf_balance_stance"]
+    # NEGATIVE scale on how far each joint pushes past joint_limit_margin of its soft
+    # range. Zero inside the band, quadratic outside, so it is silent during normal
+    # motion. .get() so a phase yaml predating this term still loads.
+    rew_scale_joint_limits = _phase_cfg["rewards"].get("rew_scale_joint_limits", 0.0)
+    # Fraction of each joint's half-range that is free. 0.9 leaves the outer 10% at
+    # each end charged; lower values start pushing back sooner.
+    joint_limit_margin = _phase_cfg["rewards"].get("joint_limit_margin", 0.9)
+    # POSITIVE scale, paid once on the first landing after the command goes from zero
+    # to non-zero. Payout decays linearly to 0 over first_step_timeout seconds.
+    rew_scale_first_step = _phase_cfg["rewards"].get("rew_scale_first_step", 0.0)
+    first_step_timeout = _phase_cfg["rewards"].get("first_step_timeout", 1.0)
+    # The command must have been at rest for at least this long before a zero ->
+    # non-zero transition arms the reward. Without it every episode armed on its own
+    # first step, and the term paid out for the feet settling after the spawn drop -
+    # a landing that has nothing to do with stepping off from a stance.
+    first_step_min_static_s = _phase_cfg["rewards"].get("first_step_min_static_s", 0.5)
     rew_scale_grf_target = _phase_cfg["rewards"]["rew_scale_grf_target"]
     rew_scale_max_contact_force = _phase_cfg["rewards"]["rew_scale_max_contact_force"]
     max_contact_force_pct = _phase_cfg["rewards"]["max_contact_force_pct"]
@@ -491,7 +532,15 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
 
     # Zero-command fraction and single-axis fractions
     zero_command_fraction = _phase_cfg["commands"]["zero_command_fraction"]
-    standby_duration_s = _phase_cfg["commands"]["standby_duration_s"]
+    # Opening zero-command hold. Accepts a scalar for a fixed hold or [lo, hi] to
+    # draw a fresh duration per episode, per env. Randomising it stops the policy
+    # from learning the stance->walk transition as a fixed time on the episode
+    # clock, which it can do when every env starts walking at the same instant.
+    standby_duration_range_s = _resolve_standby_range(
+        _phase_cfg["commands"]["standby_duration_s"]
+    )
+    # Longest possible hold; kept for callers wanting a single conservative bound.
+    standby_duration_s = standby_duration_range_s[1]
     x_only_command_fraction = _phase_cfg["commands"]["x_only_command_fraction"]
     y_only_command_fraction = _phase_cfg["commands"]["y_only_command_fraction"]
     yaw_only_command_fraction = _phase_cfg["commands"]["yaw_only_command_fraction"]

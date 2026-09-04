@@ -63,18 +63,21 @@ class Ros2MujocoDriver(Node):
             self.config.get("safety", {}).get("emergency_kd", 5.0))
 
         # Simulated FSR. The real foot sensor is a raw integer with a big no-load
-        # offset (~16 in the air, ~30 loaded), so contact_threshold=22 is only a
-        # few counts above the noise floor and an unevenly loaded foot falls
-        # under it. Feeding the policy MuJoCo's ground-truth contact boolean
+        # offset (~16 in the air, ~30 loaded) that differs from foot to foot, so
+        # the gate is counts above each foot's own offset rather than an absolute
+        # reading. Feeding the policy MuJoCo's ground-truth contact boolean
         # instead hides that failure mode completely, which is why it only ever
         # showed up on hardware. Map the touch sensor's newtons back onto the
         # robot's raw scale and apply the SAME threshold the robot applies.
         _est_cfg = self.config.get("state_estimator", {})
-        self.contact_threshold = float(_est_cfg.get("contact_threshold", 22.0))
+        self.contact_threshold = float(_est_cfg.get("contact_threshold", 10.0))
         self.fsr_bias = float(_est_cfg.get("fsr_bias", 16.0))
         self.fsr_scale = float(_est_cfg.get("fsr_scale", 2.66))
         self.fsr_noise = float(_est_cfg.get("fsr_noise", 0.7))
         self.foot_names = ["FL", "FR", "RL", "RR"]
+        # The robot measures these at startup; here the simulated sensor is built
+        # from fsr_bias, so that IS its calibration - one value, known exactly.
+        self.fsr_offset = np.full(4, self.fsr_bias, dtype=np.float64)
         # Latest readings, kept for the viewer overlay.
         self.foot_force_raw = np.zeros(4, dtype=np.float32)
         self.foot_force_n = np.zeros(4, dtype=np.float32)
@@ -174,6 +177,18 @@ class Ros2MujocoDriver(Node):
         self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
         self.foot_force_pub = self.create_publisher(
             Float32MultiArray, "/sensors/foot_force", 10)
+        # Same 1 Hz [threshold, offset x4] broadcast the real driver sends, so the
+        # twin viewer draws its bars from the driver in front of it instead of
+        # from its own copy of config.yaml (which, off-robot, is not the robot's).
+        self.foot_cal_pub = self.create_publisher(
+            Float32MultiArray, "/sensors/foot_force_calibration", 10)
+        self.create_timer(1.0, self._publish_contact_calibration)
+        # The viewer colours its markers from the published flags, exactly like
+        # the twin does, so both windows show one source of truth instead of two
+        # look-alike derivations of it.
+        self.create_subscription(
+            Float32MultiArray, "/estimator/feet_contact", self._est_contact_cb, 10)
+        self.published_contact = None
         self._startup_console_check = False
 
         # 4. Physics Thread
@@ -186,9 +201,19 @@ class Ros2MujocoDriver(Node):
         print(
             f"[MujocoDriver] Simulated FSR: bias={self.fsr_bias:.0f} "
             f"scale={self.fsr_scale:.2f} N/count noise={self.fsr_noise:.1f} "
-            f"-> contact threshold {self.contact_threshold:.0f} raw "
-            f"({(self.contact_threshold - self.fsr_bias) * self.fsr_scale:.1f} N)"
+            f"-> contact above {self.contact_threshold:.0f} counts over the "
+            f"{self.fsr_bias:.0f} offset ({self.contact_threshold * self.fsr_scale:.1f} N)"
         )
+
+    def _publish_contact_calibration(self):
+        """Broadcast the FSR gate so viewers show what the driver actually applies."""
+        msg = Float32MultiArray()
+        msg.data = [float(self.contact_threshold)] + [float(o) for o in self.fsr_offset]
+        self.foot_cal_pub.publish(msg)
+
+    def _est_contact_cb(self, msg: Float32MultiArray):
+        if len(msg.data) >= 4:
+            self.published_contact = np.array(msg.data[:4], dtype=np.float64)
 
     def _init_physics(self):
         """Initialize MuJoCo physics and resolve joint addresses."""
@@ -275,9 +300,10 @@ class Ros2MujocoDriver(Node):
         contacts inside the foot site. The robot's sensor reports a raw integer
         with a large no-load offset instead, so convert with
 
-            raw = fsr_bias + N / fsr_scale + noise      (rounded, clamped >= 0)
+            raw = fsr_offset + N / fsr_scale + noise    (rounded, clamped >= 0)
 
-        and gate on the same config contact_threshold the real driver uses.
+        and gate on the margin over that offset, with the same config
+        contact_threshold the real driver applies to its measured offsets.
         """
         if self.touch_sensor_adr is not None:
             force_n = np.array(
@@ -298,12 +324,12 @@ class Ros2MujocoDriver(Node):
             force_n = np.array([acc[n] for n in self.foot_names], dtype=np.float64)
 
         force_n = np.maximum(force_n, 0.0)
-        raw = self.fsr_bias + force_n / max(self.fsr_scale, 1e-6)
+        raw = self.fsr_offset + force_n / max(self.fsr_scale, 1e-6)
         if self.fsr_noise > 0.0:
             raw += np.random.normal(0.0, self.fsr_noise, size=4)
         raw = np.maximum(np.round(raw), 0.0)
 
-        contact = (raw > self.contact_threshold).astype(np.float32)
+        contact = (raw - self.fsr_offset > self.contact_threshold).astype(np.float32)
         return raw.astype(np.float32), force_n.astype(np.float32), contact
 
     def _get_raw_sensor_data(self):
@@ -527,8 +553,10 @@ class Ros2MujocoDriver(Node):
                             # contact_overlay clears the scene, so it goes first and
                             # the arrows are appended to it.
                             self.contact_overlay.draw(
-                                viewer.user_scn, self.data,
-                                self.foot_force_raw, self.foot_contact)
+                                viewer.user_scn, self.data, self.foot_force_raw,
+                                self.published_contact
+                                if self.published_contact is not None
+                                else self.foot_contact)
                             self.velocity_overlay.draw(
                                 viewer.user_scn, self.data,
                                 self.cmd_vel, self.base_lin_vel_b, reset=False)

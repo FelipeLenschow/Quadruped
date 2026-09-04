@@ -19,16 +19,30 @@ motor:
 state_estimator:
   use_estimator: false    # Switch between perfect and estimated odom
   dt: 0.02                # Control loop dt (50Hz)
-  contact_threshold: 22.0 # Raw FSR value threshold for binary contact flag
+  # Contact gate, in raw FSR counts ABOVE each foot's own no-load reading - not
+  # an absolute value. The four sensors sit at visibly different zeros, so one
+  # absolute cut is a different gate on every foot: the highest-offset foot trips
+  # early, the lowest may never trip. 10 counts is ~27 N (see fsr_scale), against
+  # ~37 N per foot in an even stance.
+  contact_threshold: 10.0
 
-  # Simulated FSR (MuJoCo only). The real foot sensor is a raw integer with a
-  # large no-load offset - it reads ~16 with the foot in the air and only ~30
-  # with the foot loaded, so contact_threshold=22 sits barely above the noise
-  # floor and a lightly loaded foot drops below it. MuJoCo's touch sensor gives
-  # clean newtons, which hides that entirely. These map newtons back onto the
-  # robot's raw scale (raw = bias + N / scale, plus noise, rounded to int) so the
-  # SAME contact_threshold above is what the simulator applies, and tuning it
-  # here transfers to hardware.
+  # FSR zeroing on the real robot (deploy). At startup real_driver averages
+  # fsr_calibration_time of readings per foot and uses those as the zeros, so the
+  # threshold above means the same thing on all four. Keep the feet UNLOADED for
+  # that window - a loaded foot would zero out its own load and then never
+  # register contact. Guards against exactly that: a measured zero above
+  # fsr_offset_max (a foot carrying weight reads ~bias+14) or noisier than
+  # fsr_spread_max (a foot being moved) is rejected, and fsr_bias is kept for
+  # that foot. The driver logs every measured zero, so tune these from the log.
+  fsr_calibration_time: 1.0   # Seconds of samples at startup; 0 disables
+  fsr_offset_max: 25.0        # Reject a zero above this (foot was loaded)
+  fsr_spread_max: 3.0         # Reject a zero noisier than this (foot was moving)
+
+  # Simulated FSR (MuJoCo only). MuJoCo's touch sensor gives clean newtons, which
+  # hides the offset problem entirely. These map newtons back onto the robot's raw
+  # scale (raw = bias + N / scale, plus noise) so the SAME contact_threshold above
+  # is what the simulator applies. The simulated sensor is built from fsr_bias, so
+  # in sim that value IS the calibration the robot has to measure.
   #   scale: with a 15.2 kg Go2, an even stance is 149/4 = 37 N per foot, which
   #   the robot reads as 30 raw -> 37 / (30 - 16) = 2.66 N per raw unit.
   fsr_bias: 16.0          # Raw reading with the foot unloaded

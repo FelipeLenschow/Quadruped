@@ -374,7 +374,9 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.cfg.rew_scale_trot_symmetry,
                 self.cfg.hip_sym_multiplier,
                 self.cfg.rew_scale_torque_symmetry,
-                self.cfg.rew_scale_grf_balance,
+                self.cfg.rew_scale_grf_balance_stance,
+                getattr(self.cfg, "rew_scale_joint_limits", 0.0),
+                getattr(self.cfg, "rew_scale_first_step", 0.0),
                 self.cfg.rew_scale_grf_target,
                 self.cfg.rew_scale_max_contact_force,
                 self.cfg.rew_scale_base_acc_l2,
@@ -401,7 +403,9 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.feet_air_penalty_val[sl],
                 zero_val, # feet_air_penalty_static_val
                 zero_val, # joint_vel_l2_static_val
-                zero_val, # grf_balance_val
+                zero_val, # grf_balance_stance_val
+                zero_val, # joint_limit_val
+                zero_val, # first_step_val
                 zero_val, # grf_target_val
                 self.max_contact_force_val[sl],
                 zero_val, # pos_deviation_val

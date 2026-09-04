@@ -107,6 +107,30 @@ class QuadrupedEnv(DirectRLEnv):
             for v in self.robot_views:
                 idx, _ = v.find_joints(".*_hip_joint|.*_thigh_joint|.*_calf_joint")
                 self._view_joint_dof_idx.append(torch.tensor(idx, dtype=torch.long, device=self.device))
+
+        # Per-env soft joint limits for the joint-limit penalty. Built here rather
+        # than up with the other per-env tensors because it needs _joint_dof_idx /
+        # _view_joint_dof_idx, which are only resolved just above. In the mixed-robot
+        # case each view carries its own ranges, so they are gathered per view.
+        self.joint_limit_lower = torch.zeros((self.num_envs, 12), device=self.device)
+        self.joint_limit_upper = torch.zeros((self.num_envs, 12), device=self.device)
+        if getattr(self, "is_heterogeneous", False):
+            for i, view in enumerate(self.robot_views):
+                indices = self.robot_view_indices[i]
+                v_idx = self._view_joint_dof_idx[i]
+                self.joint_limit_lower[indices] = view.data.soft_joint_pos_limits[
+                    0, v_idx, 0
+                ].clone()
+                self.joint_limit_upper[indices] = view.data.soft_joint_pos_limits[
+                    0, v_idx, 1
+                ].clone()
+        else:
+            self.joint_limit_lower[:] = self.robot.data.soft_joint_pos_limits[
+                :, self._joint_dof_idx, 0
+            ]
+            self.joint_limit_upper[:] = self.robot.data.soft_joint_pos_limits[
+                :, self._joint_dof_idx, 1
+            ]
         
         self.actions = torch.zeros(
             self.num_envs, self.cfg.action_space, device=self.device
@@ -144,7 +168,24 @@ class QuadrupedEnv(DirectRLEnv):
         self.joint_vel_l2_static_val = torch.zeros(self.num_envs, device=self.device)
         self.dof_pos_l2_walk_val = torch.zeros(self.num_envs, device=self.device)
         self.dof_pos_l2_stance_val = torch.zeros(self.num_envs, device=self.device)
-        self.grf_balance_val = torch.zeros(self.num_envs, device=self.device)
+        self.grf_balance_stance_val = torch.zeros(self.num_envs, device=self.device)
+        self.joint_limit_val = torch.zeros(self.num_envs, device=self.device)
+        # First-step latency: state for rewarding a prompt step out of a standing
+        # start. `pending` is set when the command goes zero -> non-zero and cleared
+        # by the first landing (or by the command dropping back to zero).
+        self.first_step_val = torch.zeros(self.num_envs, device=self.device)
+        self.first_step_pending = torch.zeros(self.num_envs, device=self.device)
+        self.first_step_elapsed = torch.zeros(self.num_envs, device=self.device)
+        self.was_moving = torch.zeros(self.num_envs, device=self.device)
+        # How long the command has been at rest. Gates arming so the reward is only
+        # offered after a genuine stance, never for the post-reset settle.
+        self.static_elapsed = torch.zeros(self.num_envs, device=self.device)
+        # Per-env opening hold, redrawn each episode from standby_duration_range_s.
+        self.standby_duration = torch.full(
+            (self.num_envs,),
+            float(self.cfg.standby_duration_range_s[1]),
+            device=self.device,
+        )
         self.grf_target_val = torch.zeros(self.num_envs, device=self.device)
         self.max_contact_force_val = torch.zeros(self.num_envs, device=self.device)
         self.grf_peak_bw_val = torch.zeros(self.num_envs, device=self.device)
@@ -560,10 +601,13 @@ class QuadrupedEnv(DirectRLEnv):
 
         import os
         if os.environ.get("QUADRUPED_TELEOP", "0") != "1":
-            standby_duration = getattr(self.cfg, "standby_duration_s", 0.5)
-            if standby_duration > 0.0:
-                # Apply zero velocity standby ONLY at the start of the episode to allow stable standing.
-                standby_mask = (self.episode_length_buf * self.step_dt) < standby_duration
+            if float(self.cfg.standby_duration_range_s[1]) > 0.0:
+                # Apply zero velocity standby ONLY at the start of the episode to allow
+                # stable standing. The hold is per-env and redrawn each episode, so the
+                # envs do not all start walking on the same step.
+                standby_mask = (
+                    self.episode_length_buf * self.step_dt
+                ) < self.standby_duration
                 self.commands = torch.where(
                     standby_mask.unsqueeze(1),
                     torch.zeros_like(self.target_commands),
@@ -997,6 +1041,76 @@ class QuadrupedEnv(DirectRLEnv):
         self.dof_pos_l2_walk_val = dof_pos_err * moving_mask
         self.dof_pos_l2_stance_val = dof_pos_err * static_mask
 
+        # -- First-step latency, paid once per zero -> non-zero command transition --
+        # The failure this targets: out of a static stance the policy can sit with all
+        # four feet planted for over a second while commanded to walk, pivoting over a
+        # loaded foot instead of stepping (measured on hardware and reproduced in sim).
+        # Nothing else in the reward charges for that -- velocity tracking is already
+        # partially satisfied by leaning, and every gait-shaping term is either masked
+        # to static or only fires once a step is under way.
+        #
+        # Paid on the first LANDING after the transition, not on the first lift. Paying
+        # on lift is collectable by raising a foot and holding it up: foot_height only
+        # charges at touchdown, and with rew_scale_feet_air_penalty and feet_air_time
+        # both at 0 an airborne foot costs nothing at all. Requiring the step to
+        # complete puts the landing back under foot_height, so a shallow scuff taken
+        # only to collect this still pays the apex penalty.
+        #
+        # Payout decays linearly from 1.0 at the instant of the command to 0.0 at
+        # first_step_timeout, so it rewards promptness rather than merely stepping.
+        #
+        # A transition only counts if the robot had actually been standing first.
+        # static_elapsed is zeroed on reset, so an episode whose opening command is
+        # already non-zero does not arm: otherwise the term collected a near-full
+        # payout every episode for the feet touching down after the spawn drop, which
+        # is a landing the policy gets for free rather than a step it chose to take.
+        moving_now = (cmd_norm > self.cfg.static_velocity_threshold).float()
+        onset = moving_now * (1.0 - self.was_moving)
+        self.was_moving = moving_now
+        # Evaluated before static_elapsed is advanced, so the test sees the rest time
+        # accumulated up to the instant the command changed rather than after it.
+        armed = onset * (
+            self.static_elapsed >= self.cfg.first_step_min_static_s
+        ).float()
+        self.static_elapsed = (self.static_elapsed + self.step_dt) * (1.0 - moving_now)
+        # Start the clock on an armed transition; keep counting otherwise.
+        self.first_step_elapsed = torch.where(
+            armed > 0.5,
+            torch.zeros_like(self.first_step_elapsed),
+            self.first_step_elapsed + self.step_dt,
+        )
+        # Arm on transition, disarm if the command returns to zero before a step.
+        self.first_step_pending = torch.clamp(
+            self.first_step_pending + armed, max=1.0
+        ) * moving_now
+        paid = (self.first_step_pending > 0.5) & landed.any(dim=1)
+        self.first_step_val = torch.where(
+            paid,
+            (1.0 - self.first_step_elapsed / self.cfg.first_step_timeout).clamp(min=0.0),
+            torch.zeros_like(self.first_step_val),
+        )
+        self.first_step_pending = torch.where(
+            paid, torch.zeros_like(self.first_step_pending), self.first_step_pending
+        )
+
+        # Joint-limit proximity. Costs nothing through the inner joint_limit_margin
+        # fraction of each joint's soft range and rises quadratically beyond it, so it
+        # is silent during normal motion and only pushes back near the ends.
+        #
+        # Deliberately NOT dof_pos_l2: that measures distance from the DEFAULT pose,
+        # which is not where the limits are. The Go2 calf defaults to -1.5 in a range
+        # of [-2.72, -0.84], so it sits 1.22 rad from one end and 0.66 from the other
+        # - penalising deviation from default charges just as much for moving toward
+        # the middle of the range as toward a limit, and taxes the swing excursion
+        # that foot clearance depends on. This term leaves the interior free.
+        limit_mid = 0.5 * (self.joint_limit_lower + self.joint_limit_upper)
+        limit_half = 0.5 * (self.joint_limit_upper - self.joint_limit_lower)
+        limit_excess = (
+            (self.joint_pos - limit_mid).abs()
+            - self.cfg.joint_limit_margin * limit_half
+        ).clamp(min=0.0)
+        self.joint_limit_val = torch.sum(torch.square(limit_excess), dim=1)
+
         # GRF computations: two separate penalties
         feet_forces_z = self.net_contact_forces[:, self._feet_ids, 2].abs()  # (N, 4)
         contact_float = contact.float()
@@ -1005,7 +1119,15 @@ class QuadrupedEnv(DirectRLEnv):
         # 1) GRF balance (CV²): penalize relative unevenness among contacting feet
         mean_force = (feet_forces_z * contact_float).sum(dim=1) / n_contact
         force_var = ((feet_forces_z - mean_force.unsqueeze(1)).square() * contact_float).sum(dim=1) / n_contact
-        self.grf_balance_val = force_var / mean_force.square().clamp(min=1.0)
+        # Masked to STANCE. Uneven load sharing is a fault when the robot is meant to
+        # be standing - measured on hardware, a planted Go2 sits on one diagonal at
+        # CV^2 ~0.39 (FL 25 / FR 47 / RL 45 / RR 24 raw), and that lopsided stance is
+        # what decides whether the first step out of it succeeds. While WALKING the
+        # same quantity is ~0.21 and is not a fault at all: a trot transfers weight
+        # impulsively by design, so charging for it taxes normal gait mechanics.
+        self.grf_balance_stance_val = (
+            force_var / mean_force.square().clamp(min=1.0)
+        ) * static_mask
 
         # 2) GRF target (mg/n): penalize deviation from physics-based weight share
         # Uses cached robot weight so force spikes can't inflate their own target.
@@ -1024,7 +1146,7 @@ class QuadrupedEnv(DirectRLEnv):
         # most spikes entirely -- which is why this term logged ~1e-5 while the MuJoCo eval showed
         # 2.3x-bodyweight slams. net_forces_w_history keeps the last `history_length` substeps
         # (index 0 = most recent); with history_length == decimation it spans the whole control step.
-        # Only the peak-force term uses this: contact detection and the grf_balance/grf_target terms
+        # Only the peak-force term uses this: contact detection and the grf_balance_stance/grf_target terms
         # stay on the instantaneous value on purpose, since those describe steady stance-phase load
         # sharing and would be distorted by folding a landing spike into them.
         force_hist = self._contact_sensor.data.net_forces_w_history
@@ -1254,7 +1376,9 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_feet_air_penalty_static,
             self.cfg.rew_scale_joint_vel_l2_static,
             self.cfg.rew_scale_base_height_l2,
-            self.cfg.rew_scale_grf_balance,
+            self.cfg.rew_scale_grf_balance_stance,
+            self.cfg.rew_scale_joint_limits,
+            self.cfg.rew_scale_first_step,
             self.cfg.rew_scale_grf_target,
             self.cfg.rew_scale_max_contact_force,
             self.cfg.rew_scale_base_acc_l2,
@@ -1284,7 +1408,9 @@ class QuadrupedEnv(DirectRLEnv):
             self.joint_vel_l2_static_val,
             self.dof_pos_l2_walk_val,
             self.dof_pos_l2_stance_val,
-            self.grf_balance_val,
+            self.grf_balance_stance_val,
+            self.joint_limit_val,
+            self.first_step_val,
             self.grf_target_val,
             self.max_contact_force_val,
             self.pos_deviation_val,
@@ -1336,8 +1462,9 @@ class QuadrupedEnv(DirectRLEnv):
 
         # Suppress termination during the standby/landing phase so the robot is not
         # killed mid-bounce when it drops from spawn height.
-        standby_duration = getattr(self.cfg, "standby_duration_s", 0.5)
-        past_standby = (self.episode_length_buf * self.step_dt) > standby_duration
+        past_standby = (
+            self.episode_length_buf * self.step_dt
+        ) > self.standby_duration
 
         died = past_standby & ((base_height < 0.15) | upright_check)
 
@@ -1392,6 +1519,20 @@ class QuadrupedEnv(DirectRLEnv):
         self.last_base_lin_vel[env_ids] = 0.0
         self.previous_actions[env_ids] = 0.0
         self.last_strike_time[env_ids] = 0.0
+        # Clear first-step state so a new episode's opening command counts as a fresh
+        # transition rather than inheriting the previous episode's armed/elapsed state.
+        self.first_step_pending[env_ids] = 0.0
+        self.first_step_elapsed[env_ids] = 0.0
+        self.first_step_val[env_ids] = 0.0
+        self.was_moving[env_ids] = 0.0
+        self.static_elapsed[env_ids] = 0.0
+        lo, hi = self.cfg.standby_duration_range_s
+        if hi > lo:
+            self.standby_duration[env_ids] = (
+                torch.rand(len(env_ids), device=self.device) * (hi - lo) + lo
+            )
+        else:
+            self.standby_duration[env_ids] = lo
         self.stride_duration[env_ids] = 1.0
         # Per-episode sensor bias: resampled here so it is constant WITHIN an episode
         # (that is the whole point -- see _build_obs_sensor_model) and independent across them.
@@ -1613,7 +1754,9 @@ def compute_rewards(
     rew_scale_feet_air_penalty_static: float,
     rew_scale_joint_vel_l2_static: float,
     rew_scale_base_height_l2: float,
-    rew_scale_grf_balance: float,
+    rew_scale_grf_balance_stance: float,
+    rew_scale_joint_limits: float,
+    rew_scale_first_step: float,
     rew_scale_grf_target: float,
     rew_scale_max_contact_force: float,
     rew_scale_base_acc_l2: float,
@@ -1643,7 +1786,9 @@ def compute_rewards(
     joint_vel_l2_static_val: torch.Tensor,
     dof_pos_l2_walk_val: torch.Tensor,
     dof_pos_l2_stance_val: torch.Tensor,
-    grf_balance_val: torch.Tensor,
+    grf_balance_stance_val: torch.Tensor,
+    joint_limit_val: torch.Tensor,
+    first_step_val: torch.Tensor,
     grf_target_val: torch.Tensor,
     max_contact_force_val: torch.Tensor,
     pos_deviation_val: torch.Tensor,
@@ -1753,7 +1898,12 @@ def compute_rewards(
     rew_feet_air_penalty = rew_scale_feet_air_penalty * feet_air_penalty_val
     rew_feet_air_penalty_static = rew_scale_feet_air_penalty_static * feet_air_penalty_static_val
     rew_joint_vel_l2_static = rew_scale_joint_vel_l2_static * joint_vel_l2_static_val
-    rew_grf_balance = rew_scale_grf_balance * grf_balance_val
+    rew_grf_balance_stance = rew_scale_grf_balance_stance * grf_balance_stance_val
+    # Joint-limit proximity (scale must be NEGATIVE); zero inside the allowed band.
+    rew_joint_limits = rew_scale_joint_limits * joint_limit_val
+    # First-step promptness (scale POSITIVE); non-zero only on the step that completes
+    # the first swing after a standing start.
+    rew_first_step = rew_scale_first_step * first_step_val
     rew_grf_target = rew_scale_grf_target * grf_target_val
     rew_max_contact_force = rew_scale_max_contact_force * max_contact_force_val
 
@@ -1779,7 +1929,9 @@ def compute_rewards(
     log["reward/feet_air_penalty"] = rew_feet_air_penalty.mean()
     log["reward/feet_air_penalty_static"] = rew_feet_air_penalty_static.mean()
     log["reward/joint_vel_l2_static"] = rew_joint_vel_l2_static.mean()
-    log["reward/grf_balance"] = rew_grf_balance.mean()
+    log["reward/grf_balance_stance"] = rew_grf_balance_stance.mean()
+    log["reward/joint_limits"] = rew_joint_limits.mean()
+    log["reward/first_step"] = rew_first_step.mean()
     log["reward/grf_target"] = rew_grf_target.mean()
     log["reward/max_contact_force"] = rew_max_contact_force.mean()
     log["reward/pos_deviation"] = rew_pos_deviation.mean()
@@ -1811,7 +1963,9 @@ def compute_rewards(
         + rew_feet_air_penalty
         + rew_feet_air_penalty_static
         + rew_joint_vel_l2_static
-        + rew_grf_balance
+        + rew_grf_balance_stance
+        + rew_joint_limits
+        + rew_first_step
         + rew_grf_target
         + rew_max_contact_force
         + rew_pos_deviation
