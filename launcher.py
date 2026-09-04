@@ -703,7 +703,11 @@ def run_cli_menu():
             num_envs = input("Number of Envs (default 1): ").strip() or "1"
         
         if not IS_ROBOT:
-            headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
+            if action == "eval_policy":
+                # Batch evaluation runs faster without a viewer, so default to headless.
+                headless = input("Headless Mode? [Y/n] (default Y): ").lower().strip() != "n"
+            else:
+                headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
         
         if action == "train":
             # Dynamically extract phases from training_phases.yaml if available
@@ -760,10 +764,6 @@ def run_cli_menu():
             if ans == "y":
                 teleop = True
 
-    if action in ["mujoco", "gazebo", "real_deploy"]:
-        if not IS_ROBOT and action != "real_deploy":
-            headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
-
     if action in ["mujoco", "gazebo", "isaac_sim"]:
         ans = input("Use State Estimator? [Y/n] (default Y): ").lower().strip()
         use_estimator = ans != "n"
@@ -785,21 +785,8 @@ def run_cli_menu():
     # Auto-record prompt if launching driver
     record_session = False
     if action in ["mujoco", "gazebo", "isaac_sim", "real_deploy"]:
-        # First check config default
-        cfg_auto = False
-        try:
-            with open(CONFIG_PATH, 'r') as f:
-                cfg_data = yaml.safe_load(f)
-                cfg_auto = cfg_data.get("logging", {}).get("auto_record", False)
-        except Exception:
-            pass
-        
-        default_prompt = "Y/n" if cfg_auto else "y/N"
-        ans = input(f"Record this session to MCAP? [{default_prompt}]: ").lower().strip()
-        if ans == "":
-            record_session = cfg_auto
-        else:
-            record_session = (ans == "y")
+        # Recording is opt-in: default N regardless of logging.auto_record in config.yaml.
+        record_session = input("Record this session to MCAP? [y/N]: ").lower().strip() == "y"
 
     if action == "mcap":
         # MCAP Log & Replay sub-menu
