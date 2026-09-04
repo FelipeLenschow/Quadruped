@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Policy Evaluation Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/viewer_state.js"></script>
     <style>
         :root {
             --bg-dark: #0B0F19;
@@ -122,6 +123,96 @@
             margin-left: 12px;
             flex-shrink: 0;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Run folders: one entry per training run, holding its evaluated checkpoints */
+        .run-group {
+            margin-bottom: 10px;
+        }
+
+        .run-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 13px;
+            border-radius: 10px;
+            cursor: pointer;
+            user-select: none;
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            transition: background-color 0.2s ease, border-color 0.2s ease;
+        }
+
+        .run-header:hover {
+            background-color: rgba(255, 255, 255, 0.07);
+        }
+
+        .run-group.has-selection .run-header {
+            border-color: rgba(59, 130, 246, 0.4);
+            background-color: rgba(59, 130, 246, 0.08);
+        }
+
+        .run-header .chevron {
+            color: var(--text-muted);
+            font-size: 0.65rem;
+            line-height: 1;
+            transform: rotate(90deg);
+            transition: transform 0.2s ease;
+        }
+
+        .run-group.collapsed .run-header .chevron {
+            transform: rotate(0deg);
+        }
+
+        .run-header .run-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .run-header .run-name {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .run-header .run-meta {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            margin-top: 3px;
+        }
+
+        .run-dots {
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .run-dots span {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .run-items {
+            margin: 6px 0 0 13px;
+            padding-left: 13px;
+            border-left: 1px solid var(--border-color);
+        }
+
+        .run-group.collapsed .run-items {
+            display: none;
+        }
+
+        .run-items .report-item {
+            padding: 11px 13px;
+            margin-bottom: 6px;
+        }
+
+        .run-items .report-item.active {
+            padding-left: 10px;
         }
 
         /* Main Content Styles */
@@ -427,13 +518,45 @@
 
         const COLORS = ['#3b82f6', '#10b981', '#f43f5e', '#8b5cf6', '#f59e0b', '#06b6d4'];
 
+        // Restored from the last visit, so a trip to the training curves and back does not
+        // wipe the comparison the user had set up. See viewer_state.js.
+        const saved = ViewerState.get('eval');
         let allReports = [];
-        let selectedPaths = new Set();
-        let pathColors = new Map();
+        let selectedPaths = new Set(saved.selected || []);
+        let pathColors = new Map(Object.entries(saved.colors || {}));
+        let collapsedRuns = new Map(Object.entries(saved.collapsed || {}));   // run_id -> folded
         let charts = {};
 
-        let currentAxis = 'x';
-        let currentCategory = 'tracking';
+        let currentAxis = saved.axis || 'x';
+        let currentCategory = saved.category || 'tracking';
+
+        function saveEvalState() {
+            ViewerState.patch('eval', {
+                selected: [...selectedPaths],
+                colors: Object.fromEntries(pathColors),
+                collapsed: Object.fromEntries(collapsedRuns),
+                axis: currentAxis,
+                category: currentCategory,
+            });
+        }
+
+        // The runs behind the selected checkpoints, so the curves page can open on the same ones.
+        function publishFocus() {
+            ViewerState.setFocusedRuns(allReports
+                .filter(r => selectedPaths.has(r.metadata.file_path))
+                .map(r => identityOf(r.metadata).runId));
+        }
+
+        // Put the toolbar back the way it was left before anything renders.
+        function applySavedTabs() {
+            document.querySelectorAll('#axis-tabs .tab-btn').forEach(b =>
+                b.classList.toggle('active', b.dataset.axis === currentAxis));
+            document.querySelectorAll('#category-tabs .tab-btn').forEach(b =>
+                b.classList.toggle('active', b.dataset.cat === currentCategory));
+            document.querySelectorAll('.chart-group').forEach(g => g.style.display = 'none');
+            const group = document.getElementById('cat-' + currentCategory);
+            if (group) group.style.display = 'contents';
+        }
 
         // Initialize Tabs
         document.querySelectorAll('#axis-tabs .tab-btn').forEach(btn => {
@@ -441,6 +564,7 @@
                 document.querySelectorAll('#axis-tabs .tab-btn').forEach(b => b.classList.remove('active'));
                 e.target.classList.add('active');
                 currentAxis = e.target.getAttribute('data-axis');
+                saveEvalState();
                 updateDashboard();
             });
         });
@@ -455,6 +579,7 @@
                 document.querySelectorAll('.chart-group').forEach(g => g.style.display = 'none');
                 document.getElementById('cat-' + currentCategory).style.display = 'contents';
 
+                saveEvalState();
                 updateDashboard(); // Redraw visible charts
             });
         });
@@ -464,12 +589,18 @@
                 const response = await fetch('/api/reports');
                 const data = await response.json();
 
-                // Sort alphabetically by display name
-                allReports = data.reports.sort((a, b) => {
-                    const nameA = a.metadata.display_name || a.metadata.checkpoint_name || "";
-                    const nameB = b.metadata.display_name || b.metadata.checkpoint_name || "";
-                    return nameA.localeCompare(nameB);
+                // Grouping (by run folder) does the ordering; keep the raw list as served.
+                allReports = data.reports;
+
+                // A restored selection can name reports that have since been deleted.
+                const known = new Set(allReports.map(r => r.metadata.file_path));
+                [...selectedPaths].forEach(path => {
+                    if (!known.has(path)) {
+                        selectedPaths.delete(path);
+                        pathColors.delete(path);
+                    }
                 });
+                saveEvalState();
 
                 renderSidebar();
                 updateDashboard();
@@ -478,6 +609,74 @@
                 document.getElementById('report-list').innerHTML =
                     `<div style="color: #f43f5e; font-size: 0.9rem; text-align: center; margin-top: 20px;">Failed to load reports. Is the server running?</div>`;
             }
+        }
+
+        function escapeHtml(s) {
+            return String(s ?? '').replace(/[&<>"']/g, c =>
+                ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        // The server tags every report with its run and checkpoint. Derive the same fields from
+        // the report path when they are missing -- a viewer process started before that server
+        // change is still serving the old payload, and would otherwise pile every run into one
+        // "Unknown" folder.
+        function identityOf(meta) {
+            if (meta.run_name && meta.checkpoint_label) {
+                return { runId: meta.run_id || meta.run_name, runName: meta.run_name,
+                         label: meta.checkpoint_label, steps: meta.checkpoint_steps };
+            }
+
+            const parts = String(meta.file_path || '').split(/[\\/]/);
+            const fileName = parts.pop() || '';
+            if (parts[parts.length - 1] === 'checkpoints') parts.pop();
+
+            let label = meta.checkpoint_name || '';
+            if (!label || label === 'None' || label === 'Unknown') {
+                label = fileName.replace(/^.*mujoco_eval_report_?/, '');
+            }
+            label = label.replace(/\.(pt|json)$/, '').replace(/^agent_/, '');
+            const steps = /^\d+$/.test(label) ? parseInt(label, 10) : null;
+            if (steps !== null) {
+                label = steps >= 1000 ? `${Math.floor(steps / 1000)}k` : String(steps);
+            } else if (label === 'best_agent' || label === 'best') {
+                label = 'best';
+            } else if (!label) {
+                label = 'latest';
+            }
+
+            const runName = parts[parts.length - 1] || 'Unknown';
+            return { runId: parts.join('/') || runName, runName: runName, label: label, steps: steps };
+        }
+
+        // A single training run produces many evaluated checkpoints; fold them into one folder
+        // entry so the sidebar lists runs, not dozens of near-identical checkpoint rows.
+        function groupReports(reports) {
+            const groups = new Map();
+            reports.forEach(report => {
+                const meta = report.metadata;
+                const ident = identityOf(meta);
+                report.ident = ident;
+                if (!groups.has(ident.runId)) {
+                    groups.set(ident.runId, { key: ident.runId, name: ident.runName, reports: [], latest: '' });
+                }
+                const g = groups.get(ident.runId);
+                g.reports.push(report);
+                if ((meta.timestamp || '') > g.latest) g.latest = meta.timestamp || '';
+            });
+
+            const list = Array.from(groups.values());
+            list.forEach(g => g.reports.sort((a, b) => {
+                const sa = a.ident.steps, sb = b.ident.steps;
+                // Step-numbered checkpoints in training order; "best" / unlabelled ones after them.
+                if (sa == null && sb == null) {
+                    return a.ident.label.localeCompare(b.ident.label);
+                }
+                if (sa == null) return 1;
+                if (sb == null) return -1;
+                return sa - sb;
+            }));
+            list.sort((a, b) => b.latest.localeCompare(a.latest) || a.name.localeCompare(b.name));
+            return list;
         }
 
         function renderSidebar() {
@@ -489,39 +688,76 @@
                 return;
             }
 
-            allReports.forEach((report, index) => {
-                const meta = report.metadata;
-                const path = meta.file_path;
-                const isSelected = selectedPaths.has(path);
-                const color = isSelected ? pathColors.get(path) : 'transparent';
+            groupReports(allReports).forEach((group, groupIndex) => {
+                const selected = group.reports.filter(r => selectedPaths.has(r.metadata.file_path));
+                // Newest run (and anything already selected) opens by default; the rest start folded.
+                if (!collapsedRuns.has(group.key)) {
+                    const focused = ViewerState.focusedRuns().includes(group.key);
+                    collapsedRuns.set(group.key, !focused && groupIndex !== 0 && selected.length === 0);
+                }
+                const collapsed = collapsedRuns.get(group.key);
 
-                const item = document.createElement('div');
-                item.className = `report-item ${isSelected ? 'active' : ''}`;
-                item.dataset.path = path;
+                const wrap = document.createElement('div');
+                wrap.className = `run-group ${collapsed ? 'collapsed' : ''} ${selected.length ? 'has-selection' : ''}`;
 
-                const shortName = meta.display_name ? meta.display_name : (meta.checkpoint_name !== "None" ? meta.checkpoint_name : "Latest Run");
-
-                item.innerHTML = `
-                    <div class="content">
-                        <div class="name">${shortName}</div>
-                        <div class="meta">${meta.robot_type.toUpperCase()} • ${meta.timestamp}</div>
+                const header = document.createElement('div');
+                header.className = 'run-header';
+                const dots = selected
+                    .map(r => `<span style="background-color:${pathColors.get(r.metadata.file_path)}"></span>`)
+                    .join('');
+                header.innerHTML = `
+                    <span class="chevron">&#9654;</span>
+                    <div class="run-info">
+                        <div class="run-name">${escapeHtml(group.name)}</div>
+                        <div class="run-meta">${group.reports.length} checkpoint${group.reports.length === 1 ? '' : 's'}${selected.length ? ` &bull; ${selected.length} selected` : ''}</div>
                     </div>
-                    <div class="color-indicator" style="background-color: ${color};"></div>
+                    <div class="run-dots">${dots}</div>
                 `;
+                header.addEventListener('click', () => {
+                    collapsedRuns.set(group.key, !collapsed);
+                    saveEvalState();
+                    renderSidebar();
+                });
+                wrap.appendChild(header);
 
-                item.addEventListener('click', () => toggleSelection(path, item));
-                list.appendChild(item);
+                const items = document.createElement('div');
+                items.className = 'run-items';
+                group.reports.forEach(report => {
+                    const meta = report.metadata;
+                    const path = meta.file_path;
+                    const isSelected = selectedPaths.has(path);
+                    const color = isSelected ? pathColors.get(path) : 'transparent';
+
+                    const item = document.createElement('div');
+                    item.className = `report-item ${isSelected ? 'active' : ''}`;
+                    item.dataset.path = path;
+
+                    const shortName = report.ident.label;
+
+                    item.innerHTML = `
+                        <div class="content">
+                            <div class="name">${escapeHtml(shortName)}</div>
+                            <div class="meta">${escapeHtml((meta.robot_type || '').toUpperCase())} &bull; ${escapeHtml(meta.timestamp)}</div>
+                        </div>
+                        <div class="color-indicator" style="background-color: ${color};"></div>
+                    `;
+
+                    item.addEventListener('click', () => toggleSelection(path));
+                    items.appendChild(item);
+                });
+                wrap.appendChild(items);
+
+                list.appendChild(wrap);
             });
         }
 
-        function toggleSelection(path, element) {
+        function toggleSelection(path) {
             if (selectedPaths.has(path)) {
                 selectedPaths.delete(path);
                 pathColors.delete(path);
-                element.classList.remove('active');
             } else {
                 selectedPaths.add(path);
-                
+
                 const usedColors = new Set(pathColors.values());
                 let assignedColor = COLORS[0];
                 for (const color of COLORS) {
@@ -533,25 +769,14 @@
                 if (usedColors.size >= COLORS.length) {
                     assignedColor = COLORS[selectedPaths.size % COLORS.length];
                 }
-                
+
                 pathColors.set(path, assignedColor);
-                element.classList.add('active');
             }
 
-            updateSidebarColors();
+            saveEvalState();
+            publishFocus();
+            renderSidebar();
             updateDashboard();
-        }
-
-        function updateSidebarColors() {
-            document.querySelectorAll('.report-item').forEach(item => {
-                const path = item.dataset.path;
-                const indicator = item.querySelector('.color-indicator');
-                if (selectedPaths.has(path)) {
-                    indicator.style.backgroundColor = pathColors.get(path);
-                } else {
-                    indicator.style.backgroundColor = 'transparent';
-                }
-            });
         }
 
         function getRes(r, l, axis) {
@@ -837,6 +1062,7 @@
         }
 
         // Init
+        applySavedTabs();
         fetchReports();
     </script>
 </body>

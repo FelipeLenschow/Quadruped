@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>Training Curves</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="/viewer_state.js"></script>
 <style>
 :root{--bg-dark:#0B0F19;--panel-bg:#131A2A;--text-main:#E2E8F0;--text-muted:#94A3B8;
       --border-color:#1E293B;--accent:#3B82F6;--live:#10b981;--warn:#f59e0b}
@@ -67,6 +68,26 @@ th{color:var(--text-muted);font-weight:500;font-size:.72rem;text-transform:upper
      border-radius:9px;padding:11px 13px;font-size:.76rem;line-height:1.55;color:#CBD5E1;
      box-shadow:0 12px 32px rgba(0,0,0,.6);pointer-events:none;opacity:0;transition:opacity .12s}
 .tip.on{opacity:1}
+.peek{position:fixed;z-index:998;width:430px;background:var(--panel-bg);border:1px solid #334155;
+      border-radius:12px;padding:12px 14px 10px;box-shadow:0 16px 40px rgba(0,0,0,.65);
+      pointer-events:none;opacity:0;transition:opacity .1s;display:none}
+.peek.on{opacity:1;display:block}
+.peek h4{margin:0 0 2px;font-size:.85rem;font-weight:600;color:#fff}
+.picker{grid-column:1/-1;margin:6px 0 2px}
+.picker-btn{display:inline-flex;align-items:center;gap:7px;font-size:.68rem;text-transform:uppercase;
+     letter-spacing:.06em;color:var(--text-muted);border:1px solid var(--border-color);
+     background:rgba(255,255,255,.02);border-radius:99px;padding:5px 12px;cursor:pointer;
+     user-select:none}
+.picker-btn:hover{color:#7dd3fc;border-color:#334155}
+.picker-btn b{color:var(--accent);font-weight:600}
+.picker-panel{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:flex-start;margin-top:10px;
+     border:1px solid var(--border-color);border-radius:12px;padding:12px 14px;
+     background:rgba(255,255,255,.015)}
+.card .close{float:right;cursor:pointer;color:var(--text-muted);opacity:.45;font-size:1rem;
+     line-height:1;padding:0 2px}
+.card .close:hover{opacity:1;color:#f43f5e}
+.peek .sub{font-size:.68rem;color:var(--text-muted);margin-bottom:8px}
+.peek .wrap{height:190px}
 .tip b{color:#fff;display:block;margin-bottom:4px;font-size:.78rem}
 .tip code{background:#131A2A;padding:1px 5px;border-radius:4px;color:#7dd3fc;font-size:.72rem}
 .tip .note{display:block;margin-top:6px;color:#94A3B8;font-style:italic}
@@ -75,6 +96,11 @@ th{color:var(--text-muted);font-weight:500;font-size:.72rem;text-transform:upper
 </head>
 <body>
 <div class="tip" id="tip"></div>
+<div class="peek" id="peek">
+  <h4 id="peek-title"></h4>
+  <div class="sub" id="peek-sub"></div>
+  <div class="wrap"><canvas id="peek-canvas"></canvas></div>
+</div>
 <div class="sidebar">
   <div class="sidebar-header">
     <h2>Training Curves</h2>
@@ -118,9 +144,9 @@ th{color:var(--text-muted);font-weight:500;font-size:.72rem;text-transform:upper
     <div class="empty" id="empty">Select one or more runs to compare.</div>
     <div id="dash" style="display:none">
       <div class="card wide" style="margin-bottom:16px">
-        <h3 data-tip="__raw" data-tip-html="&lt;b&gt;Reward composition&lt;/b&gt;Every &lt;code&gt;reward/*&lt;/code&gt; term at its latest logged step, already scaled. Bars sum to the instantaneous reward mean.&lt;span class=&quot;note&quot;&gt;Use it to see which terms actually carry weight &amp;mdash; a term at 0.5% of the total is not shaping behaviour.&lt;/span&gt;">Reward composition</h3>
+        <h3 data-tip="__raw" data-tip-html="&lt;b&gt;Reward composition&lt;/b&gt;Every &lt;code&gt;reward/*&lt;/code&gt; term at its latest logged step, already scaled. Bars sum to the instantaneous reward mean, and the % inside each bar is that term&amp;rsquo;s share of the combined total (sum of the absolute value of every term in the run, so shares always add up to 100%).&lt;span class=&quot;note&quot;&gt;Use it to see which terms actually carry weight &amp;mdash; a term at 0.5% of the total is not shaping behaviour.&lt;/span&gt;">Reward composition</h3>
         <div class="sub" id="decomp-sub">Per-step contribution of each reward term at the latest logged step.</div>
-        <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px"><span style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Trend over last</span><select id="trendwin"><option value="0.10" selected>10%</option><option value="0.25">25%</option><option value="0.50">50%</option></select></div>
+        <div style="display:flex;align-items:center;gap:10px;margin:8px 0 12px;flex-wrap:wrap"><span style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">Trend over last</span><select id="trendwin"><option value="0.10" selected>10%</option><option value="0.25">25%</option><option value="0.50">50%</option></select><span style="font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-left:10px" data-tip="__raw" data-tip-html="&lt;b&gt;Bar units&lt;/b&gt;&lt;code&gt;Reward&lt;/code&gt; draws each term in reward units. &lt;code&gt;% of total&lt;/code&gt; divides every term by the sum of &lt;i&gt;absolute&lt;/i&gt; values of all terms in that run, so the bars show each term&amp;rsquo;s share of the total shaping pressure and the magnitudes add up to 100%.&lt;span class=&quot;note&quot;&gt;The net reward is a sum of positives and penalties that can sit near zero, which would make a signed denominator blow the percentages up &amp;mdash; the absolute sum is what keeps the shares readable.&lt;/span&gt;">Units</span><div class="seg" id="unitseg"><button data-u="0" class="on">Reward</button><button data-u="1">% of total</button></div></div>
         <div class="wrap" style="height:340px"><canvas id="decomp"></canvas></div>
       </div>
       <div class="grid" id="grid"></div>
@@ -322,14 +348,29 @@ function toggleCat(tags){
     if(all){ if(i>=0) activeTags.splice(i,1); }
     else   { if(i<0)  activeTags.push(t); }
   });
-  renderCharts(); renderDecomp();
+  saveState(); renderCharts(); renderDecomp();
 }
 function byCat(tags){
   const g={}; tags.forEach(t=>{(g[catOf(t)]=g[catOf(t)]||[]).push(t);});
   return CAT_ORDER.filter(c=>g[c]).map(c=>[c,g[c]]);
 }
 const COLORS=['#3b82f6','#10b981','#f43f5e','#8b5cf6','#f59e0b','#06b6d4','#ec4899','#84cc16'];
-let RUNS=[], sel=[], colorOf={}, data={}, charts={}, xmode='step', smooth=.40, timer=null, norm=0;
+// Restored from the last visit so switching to the evaluation dashboard and back keeps the
+// comparison intact -- selection, metrics and every toolbar setting. See viewer_state.js.
+const saved=ViewerState.get('training');
+let RUNS=[], sel=(saved.sel||[]).slice(), colorOf=Object.assign({},saved.colors||{}), data={}, charts={},
+    xmode=saved.xmode||'step', smooth=saved.smooth==null?.40:saved.smooth, timer=null,
+    norm=saved.norm||0, dunit=saved.dunit||0, refreshSecs=saved.refresh||0, firstLoad=true,
+    pickerOpen=saved.picker||false;
+
+function saveState(){
+  ViewerState.patch('training',{sel:sel,colors:colorOf,tags:activeTags,xmode:xmode,smooth:smooth,
+    norm:norm,dunit:dunit,refresh:refreshSecs,trend:document.getElementById('trendwin').value,
+    picker:pickerOpen,filter:document.getElementById('q').value||''});
+}
+// Only a selection change republishes the focus, so an idle toolbar tweak here never clears
+// the runs the evaluation dashboard put there.
+function saveSelection(){ saveState(); ViewerState.setFocusedRuns(sel); }
 
 // "Info / reward/foot_height_penalty" -> that run's rew_scale_foot_height_penalty.
 // Exact match first, then prefix: the logged name and the config key do not always agree.
@@ -346,7 +387,7 @@ const DEFAULT_TAGS=['Reward / Total reward (mean)','Info / reward/track_lin_vel_
   'Info / reward/foot_height_reward','Info / reward/foot_height_penalty',
   'Info / reward/foot_height','Info / diag/joint_acc_sum_sq_mean',
   'Policy / Standard deviation','Loss / Value loss'];
-let activeTags=[...DEFAULT_TAGS];
+let activeTags=(saved.tags||DEFAULT_TAGS).slice();
 
 const fmt=n=>n==null?'—':(Math.abs(n)>=1e5?n.toExponential(2):(Math.abs(n)>=100?n.toFixed(0):n.toFixed(4)));
 const short=t=>t.replace('Info / reward/','').replace('Info / diag/','').replace('Reward / ','')
@@ -393,7 +434,23 @@ async function loadRuns(){
   }
   document.getElementById('hdr').textContent=RUNS.length+' runs indexed';
   document.getElementById('empty').textContent='Select one or more runs to compare.';
+  if(firstLoad){ firstLoad=false; restoreSelection(); }
   renderRuns();
+}
+// A stored selection can name runs that are gone; an empty one falls back to whatever runs the
+// evaluation dashboard is showing. Runs the user picks here always win over that fallback.
+function restoreSelection(){
+  const known=new Set(RUNS.map(r=>r.id));
+  sel=sel.filter(id=>known.has(id));
+  if(!sel.length) sel=ViewerState.focusedRuns().filter(id=>known.has(id)).slice(0,COLORS.length);
+  Object.keys(colorOf).forEach(id=>{ if(!sel.includes(id)) delete colorOf[id]; });
+  sel.forEach(id=>{
+    if(colorOf[id]) return;
+    const used=new Set(Object.values(colorOf));
+    colorOf[id]=COLORS.find(c=>!used.has(c))||COLORS[0];
+  });
+  saveState();
+  if(sel.length) refresh();
 }
 function renderRuns(){
   const q=(document.getElementById('q').value||'').toLowerCase();
@@ -424,6 +481,7 @@ function toggle(id){
     const used=new Set(Object.values(colorOf));
     colorOf[id]=COLORS.find(c=>!used.has(c))||COLORS[0];
   }
+  saveSelection();
   renderRuns(); refresh();
 }
 
@@ -463,76 +521,155 @@ function toXY(series,id,tag){
 function ema(pts,a){ if(a<=0)return pts; let acc=null;
   return pts.map(p=>{acc=acc===null?p.y:acc*a+p.y*(1-a); return {x:p.x,y:acc};}); }
 
-// Grid is split into the same categories as the composition chart.
-function renderCharts(){
-  const host=document.getElementById('grid');
-  Object.keys(charts).forEach(k=>{ if(k!=='__d'){charts[k].destroy(); delete charts[k];} });
-  host.innerHTML='';
-  const xlabel=xmode==='step'?'Timesteps':xmode==='samples'?'Environment samples':'Hours';
-  // Every category with data gets a section whether or not anything in it is charted,
-  // so a metric can always be switched back on from the place its chart belongs.
-  byCat(allTags()).forEach(([cat,all])=>{
+const xLabel=()=>xmode==='step'?'Timesteps':xmode==='samples'?'Environment samples':'Hours';
+// The scale caveat under a chart title: same term, different rew_scale, different curve height.
+function metricNote(tag){
+  const uniq=[...new Set(sel.map(id=>scaleFor(tag,id)).filter(v=>v!==null))];
+  if(!uniq.length) return tag;
+  return tag + (norm
+    ? ' &mdash; divided by rew_scale ('+uniq.join(', ')+')'
+    : (uniq.length>1
+        ? ' &mdash; <span style="color:#f59e0b">scales differ: '+uniq.join(' vs ')+
+          ' &mdash; not directly comparable</span>'
+        : ' &mdash; scale '+uniq[0]));
+}
+function metricDatasets(tag){
+  return sel.filter(id=>data[id]?.series[tag]).map(id=>({
+    label:RUNS.find(r=>r.id===id)?.name||id,
+    data:ema(toXY(data[id].series[tag],id,tag),smooth),
+    borderColor:colorOf[id],backgroundColor:colorOf[id],
+    borderWidth:2,pointRadius:0,tension:.25,
+    borderDash:data[id].live?[6,3]:[]}));
+}
+function metricConfig(tag){
+  return {type:'line',data:{datasets:metricDatasets(tag)},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      interaction:{mode:'nearest',axis:'x',intersect:false},
+      plugins:{legend:{labels:{color:'#94A3B8',boxWidth:10,font:{size:10}}}},
+      scales:{x:{type:'linear',title:{display:true,text:xLabel(),color:'#64748B',font:{size:10}},
+                 ticks:{color:'#64748B',font:{size:10},maxTicksLimit:6},
+                 grid:{color:'rgba(148,163,184,.08)'}},
+              y:{ticks:{color:'#64748B',font:{size:10}},grid:{color:'rgba(148,163,184,.08)'}}}}};
+}
+
+function toggleTag(t){
+  const i=activeTags.indexOf(t); i>=0?activeTags.splice(i,1):activeTags.push(t);
+  saveState(); renderCharts(); renderDecomp();
+}
+// Every metric as a chip is a wall of buttons, and the composition chart already toggles a term
+// with one click -- so the full list stays folded behind its count until it is actually wanted.
+function buildPicker(known){
+  const box=document.createElement('div'); box.className='picker';
+  const on=activeTags.filter(t=>known.includes(t)).length;
+  const btn=document.createElement('span'); btn.className='picker-btn';
+  btn.innerHTML=(pickerOpen?'&#9662;':'&#9656;')+' Metrics <b>'+on+'</b>/'+known.length;
+  btn.title='Show or hide the metric list (charts also toggle from the composition chart above)';
+  btn.onclick=()=>{ pickerOpen=!pickerOpen; saveState(); renderCharts(); };
+  box.appendChild(btn);
+  if(!pickerOpen) return box;
+
+  const panel=document.createElement('div'); panel.className='picker-panel';
+  byCat(known).forEach(([cat,all])=>{
     all=all.slice().sort();
-    const on=all.filter(t=>activeTags.includes(t));
-    const sec=document.createElement('div');
-    sec.style.cssText='grid-column:1/-1;border-bottom:1px solid var(--border-color);'+
-                      'padding-bottom:8px;margin:10px 0 2px;display:flex;align-items:center;'+
-                      'gap:8px;flex-wrap:wrap';
+    const lit=all.filter(t=>activeTags.includes(t));
+    const grp=document.createElement('div');
+    grp.style.cssText='display:flex;align-items:center;gap:6px;flex-wrap:wrap';
     const h=document.createElement('span');
     h.className='cathead'; h.style.margin='0';
-    h.style.color=on.length?'var(--accent)':'var(--text-muted)';
-    h.innerHTML=cat+' <span style="opacity:.75">'+on.length+'/'+all.length+'</span>';
+    h.style.color=lit.length?'var(--accent)':'var(--text-muted)';
+    h.innerHTML=cat+' <span style="opacity:.75">'+lit.length+'/'+all.length+'</span>';
     h.title='Show or hide every chart in this group';
     h.onclick=()=>toggleCat(all);
-    sec.appendChild(h);
+    grp.appendChild(h);
     all.forEach(t=>{
       const b=document.createElement('span');
       b.className='tag'+(activeTags.includes(t)?' on':'');
       b.textContent=short(t);
-      b.onclick=()=>{const i=activeTags.indexOf(t); i>=0?activeTags.splice(i,1):activeTags.push(t);
-        renderCharts(); renderDecomp();};
-      sec.appendChild(b);
+      b.onclick=()=>toggleTag(t);
+      grp.appendChild(b);
     });
-    host.appendChild(sec);
-    on.forEach(tag=>{
-      const card=document.createElement('div'); card.className='card';
-      const uniq=[...new Set(sel.map(id=>scaleFor(tag,id)).filter(v=>v!==null))];
-      let note=tag;
-      if(uniq.length) note += norm
-        ? ' &mdash; divided by rew_scale ('+uniq.join(', ')+')'
-        : (uniq.length>1
-            ? ' &mdash; <span style="color:#f59e0b">scales differ: '+uniq.join(' vs ')+
-              ' &mdash; not directly comparable</span>'
-            : ' &mdash; scale '+uniq[0]);
-      card.innerHTML=`<h3 data-tip="${tag.replace(/"/g,'&quot;')}">${short(tag)}</h3>
-                      <div class="sub">${note}</div>
-                      <div class="wrap"><canvas></canvas></div>`;
-      host.appendChild(card);
-      const ds=sel.filter(id=>data[id]?.series[tag]).map(id=>({
-        label:RUNS.find(r=>r.id===id)?.name||id,
-        data:ema(toXY(data[id].series[tag],id,tag),smooth),
-        borderColor:colorOf[id],backgroundColor:colorOf[id],
-        borderWidth:2,pointRadius:0,tension:.25,
-        borderDash:data[id].live?[6,3]:[]}));
-      charts[tag]=new Chart(card.querySelector('canvas'),{type:'line',data:{datasets:ds},
-        options:{responsive:true,maintainAspectRatio:false,animation:false,
-          interaction:{mode:'nearest',axis:'x',intersect:false},
-          plugins:{legend:{labels:{color:'#94A3B8',boxWidth:10,font:{size:10}}}},
-          scales:{x:{type:'linear',title:{display:true,text:xlabel,color:'#64748B',font:{size:10}},
-                     ticks:{color:'#64748B',font:{size:10},maxTicksLimit:6},
-                     grid:{color:'rgba(148,163,184,.08)'}},
-                  y:{ticks:{color:'#64748B',font:{size:10}},grid:{color:'rgba(148,163,184,.08)'}}}}});
-    });
+    panel.appendChild(grp);
+  });
+  box.appendChild(panel);
+  return box;
+}
+
+// The charts are one flat run in activation order, so a term clicked in the composition chart
+// lands at the bottom instead of jumping into a category section further up.
+function renderCharts(){
+  const host=document.getElementById('grid');
+  Object.keys(charts).forEach(k=>{ if(k!=='__d'&&k!=='__peek'){charts[k].destroy(); delete charts[k];} });
+  host.innerHTML='';
+  const known=allTags();
+  host.appendChild(buildPicker(known));
+
+  activeTags.filter(t=>known.includes(t)).forEach(tag=>{
+    const card=document.createElement('div'); card.className='card';
+    card.innerHTML=`<span class="close" title="Hide this chart">&times;</span>
+                    <h3 data-tip="${tag.replace(/"/g,'&quot;')}">${short(tag)}</h3>
+                    <div class="sub">${metricNote(tag)}</div>
+                    <div class="wrap"><canvas></canvas></div>`;
+    card.querySelector('.close').onclick=()=>toggleTag(tag);
+    host.appendChild(card);
+    charts[tag]=new Chart(card.querySelector('canvas'),metricConfig(tag));
   });
 }
 
-// Draws trend directly on the bars: a tick where the term was at the start of the window,
-// and an arrow + % just past the bar end. Keeps one bar per run so the composition still reads.
+// Hovering a term in the composition chart previews its curve without charting it: the click
+// is what commits a chart to the grid, the hover is just a look.
+let peekTag=null;
+function showPeek(tag,ev){
+  const ds=metricDatasets(tag);
+  if(!ds.length) return hidePeek();
+  const el=document.getElementById('peek');
+  if(tag!==peekTag){
+    peekTag=tag;
+    document.getElementById('peek-title').textContent=short(tag);
+    document.getElementById('peek-sub').innerHTML=metricNote(tag);
+    if(charts.__peek)charts.__peek.destroy();
+    charts.__peek=new Chart(document.getElementById('peek-canvas'),metricConfig(tag));
+  }
+  el.classList.add('on');
+  placePeek(ev);
+}
+function placePeek(ev){
+  const el=document.getElementById('peek'), m=14;
+  const w=el.offsetWidth, h=el.offsetHeight;
+  let x=ev.clientX+22, y=ev.clientY+18;
+  if(x+w+m>innerWidth) x=Math.max(m,ev.clientX-w-22);
+  if(y+h+m>innerHeight) y=Math.max(m,innerHeight-h-m);
+  el.style.left=x+'px'; el.style.top=y+'px';
+}
+function hidePeek(){
+  document.getElementById('peek').classList.remove('on');
+  peekTag=null;
+}
+
+// Draws the share of the combined total inside each bar, plus trend directly on the bars:
+// a tick where the term was at the start of the window, and an arrow + change % just past the
+// bar end. Keeps one bar per run so the composition still reads.
 const trendPlugin={id:'trend',afterDatasetsDraw(chart){
   const ctx=chart.ctx, xs=chart.scales.x, base=xs.getPixelForValue(0);
   chart.data.datasets.forEach((ds,di)=>{
     const meta=chart.getDatasetMeta(di);
     if(meta.hidden) return;
+    // Share of the combined total, printed just inside the bar so it reads in either unit
+    // mode. Sits at the baseline end, away from the trend arrow at the far end.
+    if(ds.share) meta.data.forEach((bar,i)=>{
+      const sh=ds.share[i];
+      if(sh===undefined||!isFinite(sh)||!sh) return;
+      if((bar.height||14)<11) return;                       // bar too thin to hold text
+      const a=Math.abs(sh), dir=bar.x>=base?1:-1;
+      const txt=a<0.05?'<0.1%':a.toFixed(a<10?1:0)+'%';
+      ctx.save();
+      ctx.font='600 10px Inter, sans-serif';
+      if(Math.abs(bar.x-base)>ctx.measureText(txt).width+12){
+        ctx.fillStyle='rgba(11,15,25,.85)';
+        ctx.textAlign=dir>0?'left':'right'; ctx.textBaseline='middle';
+        ctx.fillText(txt,base+dir*6,bar.y);
+      }
+      ctx.restore();
+    });
     if(!ds.showTrend) return;          // finished runs: bars only, no tick or percentage
     meta.data.forEach((bar,i)=>{
       const t=ds.trend&&ds.trend[i]; if(!t) return;
@@ -636,11 +773,21 @@ function renderDecomp(){
     // Bar end uses the same windowed mean as the tick and the arrow, so the gap you read
     // off the chart IS the reported change. Using the last raw sample here made them
     // disagree by up to 50% on the small penalty terms.
+    const raw=live.map((t,i)=>{
+      if(tr[i]) return tr[i].now;
+      const x=data[id]?.series[t]; return x&&x.length?x[x.length-1][2]:0;});
+    // Share of the run's total shaping pressure. The denominator is the sum of ABSOLUTE
+    // values, not the net reward: rewards and penalties cancel in a signed sum that can sit
+    // near zero, which would send the percentages to infinity. With |.| every share is
+    // bounded and the magnitudes add up to 100%.
+    const tot=raw.reduce((a,v)=>a+Math.abs(v),0), k=tot>1e-12?100/tot:0;
+    const share=raw.map(v=>v*k);
     return {label:RUNS.find(r=>r.id===id)?.name||id,
-            data:live.map((t,i)=>{
-              if(tr[i]) return tr[i].now;
-              const x=data[id]?.series[t]; return x&&x.length?x[x.length-1][2]:0;}),
-            backgroundColor:colorOf[id], trend:tr, showTrend:!!data[id]?.live};
+            data:dunit?share:raw, raw:raw, share:share, total:tot,
+            backgroundColor:colorOf[id],
+            // ticks and arrows are drawn in bar space, so rescale them with the bars
+            trend:dunit?tr.map(t=>t&&Object.assign({},t,{now:t.now*k,was:t.was*k,d:t.d*k})):tr,
+            rawTrend:tr, showTrend:!!data[id]?.live};
   });
   // room for the labels that sit past the bar ends
   const vals=ds.flatMap(d=>d.data); const lo=Math.min(0,...vals), hi=Math.max(0,...vals);
@@ -648,6 +795,8 @@ function renderDecomp(){
   document.getElementById('decomp').parentElement.style.height=Math.max(320,live.length*34+110)+'px';
   document.getElementById('decomp-sub').innerHTML =
     'Per-step contribution of each reward term, largest first, averaged over the end of the trend window. '+
+    'The % inside a bar is that term\u2019s share of the combined total, i.e. |term| \u00F7 \u03A3|all terms| '+
+    'for that run \u2014 shares add up to 100%. '+
     'Click a term name to toggle its chart below, or a category rule to toggle the whole group '+
     '\u2014 charted terms are underlined. '+
     'Trend marks are drawn for live runs only. The pale tick shows where a term sat at the start of the window; '+
@@ -656,6 +805,7 @@ function renderDecomp(){
     (span?`, over steps ${span.fromStep.toLocaleString()}\u2013${span.toStep.toLocaleString()}`:'')+'.'+
     (norm?' <span style="color:#f59e0b">Always scaled \u2014 these bars are what the policy optimises.</span>':'');
   if(charts.__d)charts.__d.destroy();
+  hidePeek();
   charts.__d=new Chart(document.getElementById('decomp'),{type:'bar',
     data:{labels:live.map(short),datasets:ds,$tags:live,$cats:cats},plugins:[trendPlugin],
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,animation:false,
@@ -668,17 +818,29 @@ function renderDecomp(){
         if(!b||!b.tag) return;
         const i=activeTags.indexOf(b.tag);
         i>=0?activeTags.splice(i,1):activeTags.push(b.tag);
-        renderCharts(); renderDecomp();
+        saveState(); renderCharts(); renderDecomp();
       },
       onHover:(evt,els,chart)=>{
         const inBox=b=>evt.x>=b.x0&&evt.x<=b.x1&&evt.y>=b.y0&&evt.y<=b.y1;
-        const hit=(chart.$labelBoxes||[]).some(inBox)||(chart.$catBoxes||[]).some(inBox);
-        chart.canvas.style.cursor=hit?'pointer':'default';
+        const label=(chart.$labelBoxes||[]).find(inBox);
+        const overCat=(chart.$catBoxes||[]).some(inBox);
+        chart.canvas.style.cursor=(label||overCat)?'pointer':'default';
+        // The preview hangs off the term name -- the same target the click uses -- so the bars
+        // keep their own tooltip instead of having it covered by the preview card.
+        if(label&&evt.native) showPeek(label.tag,evt.native); else hidePeek();
       },
       plugins:{legend:{labels:{color:'#94A3B8',boxWidth:12,font:{size:12}}},
-        tooltip:{callbacks:{afterLabel:c=>{const t=c.dataset.trend&&c.dataset.trend[c.dataIndex];
+        tooltip:{callbacks:{
+          label:c=>{const d=c.dataset, r=d.raw[c.dataIndex], sh=d.share[c.dataIndex];
+            return dunit?`${d.label}: ${sh.toFixed(1)}% of total  (${r.toFixed(4)})`
+                        :`${d.label}: ${r.toFixed(4)}  (${sh.toFixed(1)}% of total)`;},
+          afterLabel:c=>{const t=c.dataset.rawTrend&&c.dataset.rawTrend[c.dataIndex];
           return t?`was ${t.was.toFixed(4)}  \u2192  now ${t.now.toFixed(4)}`:'';}}}},
-      scales:{x:{min:lo-pad,max:hi+pad,ticks:{color:'#64748B',font:{size:12}},grid:{color:'rgba(148,163,184,.08)'}},
+      scales:{x:{min:lo-pad,max:hi+pad,
+                 ticks:{color:'#64748B',font:{size:12},
+                        callback:function(v,i,ts){const t=Chart.Ticks.formatters.numeric.call(this,v,i,ts);
+                          return dunit?t+'%':t;}},
+                 grid:{color:'rgba(148,163,184,.08)'}},
               y:{ticks:{display:false},grid:{display:false}}}}});
 }
 function renderDiff(){
@@ -699,20 +861,43 @@ function renderDiff(){
 
 document.getElementById('normseg').onclick=e=>{if(!e.target.dataset.n)return;
   [...e.currentTarget.children].forEach(b=>b.classList.remove('on'));
-  e.target.classList.add('on'); norm=+e.target.dataset.n; renderCharts(); renderDecomp();};
-document.getElementById('trendwin').onchange=()=>renderDecomp();
-document.getElementById('q').oninput=renderRuns;
+  e.target.classList.add('on'); norm=+e.target.dataset.n; saveState(); renderCharts(); renderDecomp();};
+document.getElementById('trendwin').onchange=()=>{saveState(); renderDecomp();};
+document.getElementById('unitseg').onclick=e=>{if(!e.target.dataset.u)return;
+  [...e.currentTarget.children].forEach(b=>b.classList.remove('on'));
+  e.target.classList.add('on'); dunit=+e.target.dataset.u; saveState(); renderDecomp();};
+document.getElementById('q').oninput=()=>{saveState(); renderRuns();};
 document.getElementById('xseg').onclick=e=>{if(!e.target.dataset.x)return;
   [...e.currentTarget.children].forEach(b=>b.classList.remove('on'));
-  e.target.classList.add('on'); xmode=e.target.dataset.x; renderCharts();};
+  e.target.classList.add('on'); xmode=e.target.dataset.x; saveState(); renderCharts();};
 document.getElementById('sm').oninput=e=>{smooth=e.target.value/100;
-  document.getElementById('smv').textContent=smooth.toFixed(2).slice(1); renderCharts();};
+  document.getElementById('smv').textContent=smooth.toFixed(2).slice(1); saveState(); renderCharts();};
 document.getElementById('refseg').onclick=e=>{if(!e.target.dataset.r)return;
   [...e.currentTarget.children].forEach(b=>b.classList.remove('on'));
   e.target.classList.add('on');
+  refreshSecs=+e.target.dataset.r; saveState(); startAutoRefresh();};
+
+function startAutoRefresh(){
   if(timer)clearInterval(timer); timer=null;
-  const s=+e.target.dataset.r;
-  if(s)timer=setInterval(()=>{loadRuns();refresh();},s*1000);};
+  if(refreshSecs)timer=setInterval(()=>{loadRuns();refresh();},refreshSecs*1000);
+}
+function segOn(id,attr,val){
+  [...document.getElementById(id).children].forEach(b=>b.classList.toggle('on',b.dataset[attr]===String(val)));
+}
+// Toolbar first, so the restored runs are drawn with the settings they were left under.
+function applySavedToolbar(){
+  segOn('xseg','x',xmode); segOn('normseg','n',norm);
+  segOn('unitseg','u',dunit); segOn('refseg','r',refreshSecs);
+  document.getElementById('q').value=saved.filter||'';
+  document.getElementById('sm').value=Math.round(smooth*100);
+  document.getElementById('smv').textContent=smooth.toFixed(2).slice(1);
+  if(saved.trend) document.getElementById('trendwin').value=saved.trend;
+  startAutoRefresh();
+}
+document.getElementById('decomp').addEventListener('mouseleave',hidePeek);
+window.addEventListener('scroll',hidePeek,true);
+
+applySavedToolbar();
 loadRuns();
 </script>
 </body>

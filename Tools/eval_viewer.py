@@ -1,6 +1,7 @@
 import os
 import json
 import glob
+import re
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 import urllib.parse
 from pathlib import Path
@@ -162,6 +163,37 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "Tools", "viewer_frontend")
 VIEWER_MODULE = os.environ.get("VIEWER_MODULE", "Walk")
 MODULE_DIR = os.path.join(BASE_DIR, "IsaacLab_Tasks", VIEWER_MODULE)
 
+def _report_identity(file_path, meta):
+    """Split an eval report into the run it belongs to and the checkpoint inside that run, so the
+    viewer can fold the many checkpoints of one training run into a single folder entry.
+    Reports live at <run>/checkpoints/mujoco_eval_report_<checkpoint>.json; the checkpoint path in
+    the metadata may be a container path (/app/...) so the on-disk path is the reliable source."""
+    run_dir = os.path.dirname(file_path)
+    if os.path.basename(run_dir) == "checkpoints":
+        run_dir = os.path.dirname(run_dir)
+    run_name = os.path.basename(run_dir) or "Unknown"
+    try:
+        run_id = os.path.relpath(run_dir, BASE_DIR)
+    except ValueError:
+        run_id = run_dir
+
+    label = (meta or {}).get("checkpoint_name") or ""
+    if not label or label in ("None", "Unknown"):
+        label = re.sub(r"^.*mujoco_eval_report_?", "", os.path.basename(file_path))
+    label = re.sub(r"\.(pt|json)$", "", label)
+    label = re.sub(r"^agent_", "", label)
+    steps = int(label) if label.isdigit() else None
+    if steps is not None:
+        label = f"{steps // 1000}k" if steps >= 1000 else str(steps)
+    elif label in ("best_agent", "best"):
+        label = "best"
+    elif not label:
+        label = "latest"
+
+    return {"run_name": run_name, "run_id": run_id,
+            "checkpoint_label": label, "checkpoint_steps": steps}
+
+
 class EvalReportHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=FRONTEND_DIR, **kwargs)
@@ -253,23 +285,11 @@ class EvalReportHandler(SimpleHTTPRequestHandler):
                         # Add the file path to metadata for unique identification
                         data["metadata"]["file_path"] = file_path
                         
-                        # Generate a nice display name (e.g., "NiceGait6 - 275k")
-                        checkpoint_path = data["metadata"].get("checkpoint", "")
-                        if checkpoint_path and "checkpoints" in checkpoint_path:
-                            parts = checkpoint_path.split(os.sep)
-                            try:
-                                chk_idx = parts.index("checkpoints")
-                                run_name = parts[chk_idx - 1]
-                                agent_name = parts[-1].replace(".pt", "").replace("agent_", "")
-                                if agent_name.isdigit():
-                                    steps = int(agent_name)
-                                    if steps >= 1000:
-                                        agent_name = f"{steps//1000}k"
-                                data["metadata"]["display_name"] = f"{run_name} - {agent_name}"
-                            except Exception:
-                                data["metadata"]["display_name"] = data["metadata"].get("checkpoint_name", "Unknown")
-                        else:
-                            data["metadata"]["display_name"] = data["metadata"].get("checkpoint_name", "Unknown")
+                        # Tag with run/checkpoint identity so the sidebar can group by run folder,
+                        # e.g. run "NiceGait6" + checkpoint "275k" -> "NiceGait6 - 275k".
+                        ident = _report_identity(file_path, data["metadata"])
+                        data["metadata"].update(ident)
+                        data["metadata"]["display_name"] = f"{ident['run_name']} - {ident['checkpoint_label']}"
                         
                         reports.append(data)
                 except Exception as e:
