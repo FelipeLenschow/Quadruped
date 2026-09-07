@@ -65,7 +65,7 @@ terrain:
   smoothing: 1
   seed: 69
   foot_friction_slide: 1.1
-  foot_friction_torsion: 0.05
+  foot_friction_torsion: 0.02
 
 # --- Simulated robot modifications (MuJoCo driver) ---
 robot_mods:

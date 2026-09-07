@@ -544,6 +544,12 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     x_only_command_fraction = _phase_cfg["commands"]["x_only_command_fraction"]
     y_only_command_fraction = _phase_cfg["commands"]["y_only_command_fraction"]
     yaw_only_command_fraction = _phase_cfg["commands"]["yaw_only_command_fraction"]
+    # Fraction of resamples rescaled to a low ||cmd|| drawn from slow_command_range.
+    # Read with .get() so phase files written before this mode still load.
+    slow_command_fraction = _phase_cfg["commands"].get("slow_command_fraction", 0.0)
+    slow_command_range = tuple(
+        _phase_cfg["commands"].get("slow_command_range", [0.05, 0.3])
+    )
 
     # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  TERMINATION                                                          ║

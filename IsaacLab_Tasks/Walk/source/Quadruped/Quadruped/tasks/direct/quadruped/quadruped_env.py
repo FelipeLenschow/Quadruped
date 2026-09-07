@@ -176,6 +176,10 @@ class QuadrupedEnv(DirectRLEnv):
         self.first_step_val = torch.zeros(self.num_envs, device=self.device)
         self.first_step_pending = torch.zeros(self.num_envs, device=self.device)
         self.first_step_elapsed = torch.zeros(self.num_envs, device=self.device)
+        # Latency to the FIRST LIFT after arming, frozen at the moment a foot leaves the
+        # ground and used as the payout clock; `lifted` marks that it holds a real value.
+        self.first_step_lift_time = torch.zeros(self.num_envs, device=self.device)
+        self.first_step_lifted = torch.zeros(self.num_envs, device=self.device)
         self.was_moving = torch.zeros(self.num_envs, device=self.device)
         # How long the command has been at rest. Gates arming so the reward is only
         # offered after a genuine stance, never for the post-reset settle.
@@ -194,6 +198,11 @@ class QuadrupedEnv(DirectRLEnv):
         # LANDING EVENT rather than per env.
         self.foot_landing_speed_sum = torch.zeros(self.num_envs, device=self.device)
         self.foot_landing_count = torch.zeros(self.num_envs, device=self.device)
+        # Same sum+count accounting for first-step reaction latency, so the log reports a
+        # mean per PAID STEP (in seconds) rather than per env -- the number to compare
+        # against first_step_timeout when tuning it.
+        self.first_step_latency_sum = torch.zeros(self.num_envs, device=self.device)
+        self.first_step_latency_count = torch.zeros(self.num_envs, device=self.device)
         self.robot_total_weight = torch.zeros(self.num_envs, device=self.device)  # mg per env, updated on reset
         # Strike-time buffers for contact-driven gait phase symmetry reward
         # last_strike_time: simulation time of last touchdown per foot (N, 4) [FL, FR, RL, RR]
@@ -439,7 +448,7 @@ class QuadrupedEnv(DirectRLEnv):
         # Heading (unused for now, kept zero)
         self.target_commands[env_ids, 3] = 0.0
 
-        # Apply special command modes: zero, x-only, y-only, yaw-only
+        # Apply special command modes: zero, x-only, y-only, yaw-only, slow
         n_envs = len(env_ids)
         rand_vals = torch.rand(n_envs, device=self.device)
 
@@ -448,6 +457,7 @@ class QuadrupedEnv(DirectRLEnv):
         p_x = p_zero + getattr(self.cfg, "x_only_command_fraction", 0.0)
         p_y = p_x + getattr(self.cfg, "y_only_command_fraction", 0.0)
         p_yaw = p_y + getattr(self.cfg, "yaw_only_command_fraction", 0.0)
+        p_slow = p_yaw + getattr(self.cfg, "slow_command_fraction", 0.0)
 
         # Zero-command case
         zero_mask = rand_vals < p_zero
@@ -465,6 +475,33 @@ class QuadrupedEnv(DirectRLEnv):
         # Yaw-only command case
         yaw_only_mask = (rand_vals >= p_y) & (rand_vals < p_yaw)
         self.target_commands[env_ids[yaw_only_mask], 0:2] = 0.0
+
+        # Slow-command case: keep the direction just drawn and rescale it to a magnitude
+        # from slow_command_range.
+        #
+        # Uniform sampling over the command CUBE gives almost no low-speed coverage -- the
+        # r^2 volume effect leaves ||cmd|| under 0.3 in ~1.2% of draws (0.1-0.2 in 0.31%)
+        # while ~79% land above 0.5. The band where the robot has to choose between holding
+        # a stance and taking one slow step is therefore essentially never trained, and
+        # whatever it does there is nearly free in the aggregate return. That coverage gap,
+        # not the reward shape, is where the low-speed dead zone lives: a policy that walked
+        # at 0.05-0.15 m/s re-learned the dead zone within 180k steps even after the
+        # foot_height and tracking-sigma changes that made a slow step profitable.
+        #
+        # Direction is kept from the cube draw rather than resampled, so the mode covers slow
+        # walks, slides and turns in the same proportion as the main distribution. The
+        # magnitude is the 3-norm of (vx, vy, wz) -- the same quantity static_mask gates on --
+        # so slow_command_range is stated directly in the units of that gate: a range starting
+        # above static_command_ramp lands entirely in the "commanded to move" regime.
+        slow_mask = (rand_vals >= p_yaw) & (rand_vals < p_slow)
+        if slow_mask.any():
+            slow_ids = env_ids[slow_mask]
+            direction = self.target_commands[slow_ids, :3]
+            # clamp guards the (vanishingly rare) near-zero draw from blowing up the rescale
+            norm = torch.norm(direction, dim=1, keepdim=True).clamp(min=1e-6)
+            lo, hi = self.cfg.slow_command_range
+            magnitude = sample_uniform(lo, hi, (len(slow_ids), 1), device=self.device)
+            self.target_commands[slow_ids, :3] = direction / norm * magnitude
 
         # Reset timer
         self.command_timer[env_ids] = 0.0
@@ -1056,8 +1093,17 @@ class QuadrupedEnv(DirectRLEnv):
         # complete puts the landing back under foot_height, so a shallow scuff taken
         # only to collect this still pays the apex penalty.
         #
-        # Payout decays linearly from 1.0 at the instant of the command to 0.0 at
-        # first_step_timeout, so it rewards promptness rather than merely stepping.
+        # The PAYOUT, though, is clocked on the first LIFT, not on that landing: it decays
+        # linearly from 1.0 at the instant of the command to 0.0 at first_step_timeout,
+        # evaluated at the moment a foot first leaves the ground. What this term is meant
+        # to charge is reaction latency -- how long the robot stands there before committing
+        # to a step -- and clocking it on the landing folded swing duration into that, so a
+        # prompt lift followed by a deliberate, slow, well-controlled swing scored the same
+        # as a late one. Swing duration already has its own terms (feet_air_time targets it,
+        # foot_landing_vel charges arriving fast); paying this one for it too meant the two
+        # bid against each other, with first_step at 25.0 easily the louder voice. Splitting
+        # them leaves the landing as the gate that proves the step was real and the lift as
+        # the clock that prices the hesitation.
         #
         # A transition only counts if the robot had actually been standing first.
         # static_elapsed is zeroed on reset, so an episode whose opening command is
@@ -1083,15 +1129,43 @@ class QuadrupedEnv(DirectRLEnv):
         self.first_step_pending = torch.clamp(
             self.first_step_pending + armed, max=1.0
         ) * moving_now
-        paid = (self.first_step_pending > 0.5) & landed.any(dim=1)
+        # A foot leaving the ground: the inverse of `first_contact`, computed off the same
+        # last_feet_contact snapshot, so lift and landing are read from one contact history.
+        lifted_off = (~contact & self.last_feet_contact).any(dim=1)
+        # Freeze the clock at the FIRST lift while pending; later lifts in the same step
+        # cycle must not overwrite it. Cleared on arming so each transition times its own.
+        self.first_step_lifted = torch.where(
+            armed > 0.5, torch.zeros_like(self.first_step_lifted), self.first_step_lifted
+        )
+        first_lift = (self.first_step_pending > 0.5) & lifted_off & (self.first_step_lifted < 0.5)
+        self.first_step_lift_time = torch.where(
+            first_lift, self.first_step_elapsed, self.first_step_lift_time
+        )
+        self.first_step_lifted = torch.where(
+            first_lift, torch.ones_like(self.first_step_lifted), self.first_step_lifted
+        )
+        # Landing still gates the payment, and the recorded lift is required with it: a
+        # landing with no lift behind it is a foot that was already airborne when the
+        # command arrived, which is not a step this term asked for. Staying pending in
+        # that case simply defers payment to the next genuine step.
+        paid = (
+            (self.first_step_pending > 0.5)
+            & landed.any(dim=1)
+            & (self.first_step_lifted > 0.5)
+        )
         self.first_step_val = torch.where(
             paid,
-            (1.0 - self.first_step_elapsed / self.cfg.first_step_timeout).clamp(min=0.0),
+            (1.0 - self.first_step_lift_time / self.cfg.first_step_timeout).clamp(min=0.0),
             torch.zeros_like(self.first_step_val),
         )
         self.first_step_pending = torch.where(
             paid, torch.zeros_like(self.first_step_pending), self.first_step_pending
         )
+        # Diagnostic: reaction latency actually achieved, in seconds, on the steps that paid.
+        self.first_step_latency_sum = torch.where(
+            paid, self.first_step_lift_time, torch.zeros_like(self.first_step_lift_time)
+        )
+        self.first_step_latency_count = paid.float()
 
         # Joint-limit proximity. Costs nothing through the inner joint_limit_margin
         # fraction of each joint's soft range and rises quadratically beyond it, so it
@@ -1116,21 +1190,51 @@ class QuadrupedEnv(DirectRLEnv):
         contact_float = contact.float()
         n_contact = contact_float.sum(dim=1).clamp(min=1.0)
 
-        # 1) GRF balance (CV²): penalize relative unevenness among contacting feet
-        mean_force = (feet_forces_z * contact_float).sum(dim=1) / n_contact
-        force_var = ((feet_forces_z - mean_force.unsqueeze(1)).square() * contact_float).sum(dim=1) / n_contact
-        # Masked to STANCE. Uneven load sharing is a fault when the robot is meant to
-        # be standing - measured on hardware, a planted Go2 sits on one diagonal at
-        # CV^2 ~0.39 (FL 25 / FR 47 / RL 45 / RR 24 raw), and that lopsided stance is
-        # what decides whether the first step out of it succeeds. While WALKING the
-        # same quantity is ~0.21 and is not a fault at all: a trot transfers weight
-        # impulsively by design, so charging for it taxes normal gait mechanics.
+        # 1) GRF balance: squared deviation of each foot's vertical load from the even
+        # share, over ALL FOUR feet, with no contact mask.
+        #
+        # The target is the MEASURED mean, sum(F)/4, not the cached mg/4. In static
+        # equilibrium the two are identical -- the feet carry exactly the robot's weight,
+        # so sum(F) == mg and the term is unchanged -- but the measured mean keeps the
+        # penalty purely about EVENNESS and never charges for a total-load mismatch the
+        # policy is not responsible for: a push, a partial-support transient, or a payload
+        # the cached weight was sampled before. It also drops the term's dependence on
+        # robot_total_weight being right for the target, which matters across the payload
+        # randomisation and the three robot models.
+        #
+        # The contact mask is left off deliberately. This used to be a CV^2 taken over
+        # contacting feet only, and that made unloading a foot the cheapest way to satisfy
+        # it: push two feet under the 1 N contact threshold and they drop out of both the
+        # mean and the variance, so a symmetric two-legged diagonal scored a perfect 0.0
+        # while a real four-foot stance scored ~0.21. The penalty ranked the failure mode
+        # above the behaviour it was meant to produce. Measured against Final4's zero-command
+        # stance (FL 35.6 / FR 58.0 / RL 44.6 / RR 11.1 N, one diagonal carrying 102 N of
+        # 149 N): old form 0.21 for that stance vs 0.00 for a clean diagonal; this form
+        # 0.053 vs 0.25, ranked the right way round. Dividing by a fixed 4 rather than by
+        # the contact count is what keeps that true -- an unloaded foot still contributes
+        # its full (0 - mean)^2 to the sum, so a two-legged stance is charged 0.25 here.
+        #
+        # Normalised by mg^2 so it stays dimensionless and comparable across robots. Runs
+        # ~4x smaller than the old CV^2 for the same stance, so a scale tuned against that
+        # form needs multiplying by ~4 (the -2.5 that was queued for phase2 becomes -10).
+        #
+        # Masked to STANCE. Uneven load sharing is a fault when the robot is meant to be
+        # standing, and it is what decides whether the first step out of the stance
+        # succeeds. While WALKING the same quantity is not a fault at all: a trot transfers
+        # weight impulsively by design, so charging for it taxes normal gait mechanics.
+        mean_share = feet_forces_z.mean(dim=1, keepdim=True)  # sum(F)/4, (N, 1)
         self.grf_balance_stance_val = (
-            force_var / mean_force.square().clamp(min=1.0)
+            (feet_forces_z - mean_share).square().sum(dim=1)
+            / self.robot_total_weight.square().clamp(min=1.0)
         ) * static_mask
 
         # 2) GRF target (mg/n): penalize deviation from physics-based weight share
         # Uses cached robot weight so force spikes can't inflate their own target.
+        #
+        # NOTE: carries the same defect the balance term above was just fixed for -- the
+        # target is mg/n_contact and the sum is contact-masked, so lifting two feet halves
+        # the target and a two-legged stance scores perfectly. Inert at rew_scale_grf_target
+        # 0.0; give it the fixed mg/4 treatment before ever switching it on.
         target_force_per_foot = (self.robot_total_weight / n_contact).unsqueeze(1)  # mg/n
         force_deviation = ((feet_forces_z - target_force_per_foot).square() * contact_float).sum(dim=1) / n_contact
         self.grf_target_val = force_deviation / target_force_per_foot.squeeze(1).square().clamp(min=1.0)
@@ -1430,6 +1534,10 @@ class QuadrupedEnv(DirectRLEnv):
         # Mean vertical foot speed at touchdown, over every foot that landed anywhere in the batch
         # this step. Reads 0 on the rare step where nothing landed, so read it as a running average
         # in TensorBoard, not step by step.
+        n_first_steps = self.first_step_latency_count.sum()
+        self.extras["log"]["diag/first_step_latency_s"] = (
+            self.first_step_latency_sum.sum() / n_first_steps.clamp(min=1.0)
+        )
         n_landings = self.foot_landing_count.sum()
         self.extras["log"]["diag/foot_landing_speed_mps"] = (
             self.foot_landing_speed_sum.sum() / n_landings.clamp(min=1.0)
@@ -1523,6 +1631,8 @@ class QuadrupedEnv(DirectRLEnv):
         # transition rather than inheriting the previous episode's armed/elapsed state.
         self.first_step_pending[env_ids] = 0.0
         self.first_step_elapsed[env_ids] = 0.0
+        self.first_step_lift_time[env_ids] = 0.0
+        self.first_step_lifted[env_ids] = 0.0
         self.first_step_val[env_ids] = 0.0
         self.was_moving[env_ids] = 0.0
         self.static_elapsed[env_ids] = 0.0
