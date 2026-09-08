@@ -129,11 +129,12 @@ class LocomotionPipeline:
                     self.safety_processor._policy_blocked = False
                     self.safety_processor._shutdown_logged = False
                     self.safety_processor._robot_safe = True
-                    # Re-sync pose generator to current joint positions
+                    # Re-sync pose generator to current desired joint positions
                     # so it doesn't jump to the old cached targets.
                     pose_gen = self.policy_manager.policies.get("pose")
                     if pose_gen:
-                        pose_gen.sync_to_current()
+                        pose_gen.sync_to_current(
+                            self.mode_transition_start_targets)
         else:
             self.node.get_logger().warn(
                 f"[Pipeline] Unknown mode '{new_mode}'. Use 'pose' or 'policy'.")

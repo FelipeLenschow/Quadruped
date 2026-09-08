@@ -206,14 +206,28 @@ class PoseGenerator:
 
         return self._current_targets
 
-    def sync_to_current(self):
+    def sync_to_current(self, seed_qpos=None):
         """
-        Force the PoseGenerator to re-read actual joint positions on the
-        next step() call.  Called when switching back to pose mode after
-        the NN policy has moved the robot — prevents a sudden jump to
-        the previously held targets.
+        Re-seed the held targets so pose mode picks up where the previous
+        controller left off — prevents a sudden jump to the stale targets
+        cached before the NN policy took over.
+
+        Args:
+            seed_qpos: 12-dim commanded targets to hold (the last *desired*
+                angles). Pass this whenever the joints are under torque: the
+                measured angle sits below the commanded one by exactly the
+                PD error that holds the robot up (q_meas = q_des - tau/kp,
+                ~0.1-0.3 rad on thigh/calf at kp=25), so seeding from the
+                measurement zeroes the error and the robot sags.
+                Leave as None only when torque is off (limp / heartbeat
+                lost), where the measured position read on the next step()
+                is the honest starting point.
         """
-        self._initialized = False
+        if seed_qpos is not None:
+            self._current_targets = np.array(seed_qpos, dtype=np.float32).copy()
+            self._initialized = True
+        else:
+            self._initialized = False
         self._start_time = None
         self._pending_target = None
         self._pushup_active = False
