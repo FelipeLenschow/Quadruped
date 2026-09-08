@@ -220,6 +220,14 @@ class Ros2MujocoDriver(Node):
         # PD Decimation: 1000 Hz PD loop from 1000 Hz physics
         self.PD_DECIMATION = 1
 
+        # Viewer Decimation: redraw at ~60 Hz, not once per physics step. The
+        # overlays rebuild the whole scene (contact_overlay does scn.ngeom = 0)
+        # and viewer.sync() is not cheap, so doing both at 1000 Hz costs more
+        # than the physics does and drags the sim well below real time - the
+        # non-headless run measured 0.57x against the headless robot's 0.84x.
+        # Rendering is display only; physics and control are untouched by this.
+        self.VIEWER_DECIMATION = 16
+
         # Resolve joint addresses once
         self.isaac_names = [
             "FL_hip_joint",
@@ -506,6 +514,12 @@ class Ros2MujocoDriver(Node):
             self._reset_robot()
             next_time = time.time()
             self.step_counter = 0
+            # Real-time factor: sim seconds per wall second, measured over each
+            # logging window. The pacer below only sleeps when it is AHEAD, so a
+            # loop that cannot hold 1000 Hz silently runs slow - this is the only
+            # place that shows it.
+            rtf_wall_ref = time.time()
+            rtf_sim_ref = self.data.time
             
             # Use a slightly different loop condition for headless
             while rclpy.ok():
@@ -547,7 +561,8 @@ class Ros2MujocoDriver(Node):
                     self.data.qvel[0:6] = 0.0   # zero linear + angular base velocity
                     mujoco.mj_forward(self.model, self.data)  # resync kinematics
                 
-                if not headless:
+                if not headless and (
+                        self.step_counter % self.VIEWER_DECIMATION == 0):
                     if viewer.user_scn is not None:
                         with viewer.lock():
                             # contact_overlay clears the scene, so it goes first and
@@ -566,6 +581,13 @@ class Ros2MujocoDriver(Node):
 
                 # Logging for diagnosis (every 200 steps ~ 0.2s)
                 if self.step_counter % 200 == 0:
+                    wall_now = time.time()
+                    wall_elapsed = wall_now - rtf_wall_ref
+                    rtf = ((self.data.time - rtf_sim_ref) / wall_elapsed
+                           if wall_elapsed > 1e-6 else 0.0)
+                    rtf_wall_ref = wall_now
+                    rtf_sim_ref = self.data.time
+
                     inf_ms = 0.0
                     runner = self.pipeline.policy_manager.policies.get("main")
                     if runner:
@@ -584,12 +606,8 @@ class Ros2MujocoDriver(Node):
                         v_est = self.pipeline.telemetry.estimator.velocity
                         vx, vy = float(v_est[0]), float(v_est[1])
                         tag = " est"
-                    fsr = " ".join(
-                        f"{n}{int(r):3d}{'*' if c > 0.5 else ' '}"
-                        for n, r, c in zip(
-                            self.foot_names, self.foot_force_raw, self.foot_contact))
                     print(
-                        f"\r[Bridge] t={self.data.time:7.2f} h={h:.2f} vx={vx:+5.2f} vy={vy:+5.2f}{tag} wz={raw_data['gyro'][2]:+5.2f} | fsr {fsr} | inf={inf_ms:4.1f}ms   ",
+                        f"\r[Bridge] rtf={rtf:4.2f}x h={h:.2f} vx={vx:+5.2f} vy={vy:+5.2f}{tag} wz={raw_data['gyro'][2]:+5.2f} | inf={inf_ms:4.1f}ms   ",
                         end="",
                         flush=True,
                     )
