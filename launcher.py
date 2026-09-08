@@ -703,8 +703,9 @@ def run_cli_menu():
             num_envs = input("Number of Envs (default 1): ").strip() or "1"
         
         if not IS_ROBOT:
-            if action == "eval_policy":
-                # Batch evaluation runs faster without a viewer, so default to headless.
+            if action in ["eval_policy", "train"]:
+                # Both run long and much faster without a viewer -- a batch evaluation
+                # and a multi-thousand-env training run alike -- so default to headless.
                 headless = input("Headless Mode? [Y/n] (default Y): ").lower().strip() != "n"
             else:
                 headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"

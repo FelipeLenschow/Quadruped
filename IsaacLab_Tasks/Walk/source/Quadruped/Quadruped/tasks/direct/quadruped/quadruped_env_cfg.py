@@ -485,6 +485,9 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     rew_scale_ang_vel_xy_l2 = _phase_cfg["rewards"]["rew_scale_ang_vel_xy_l2"]
     rew_scale_dof_pos_l2_walk = _phase_cfg["rewards"]["rew_scale_dof_pos_l2_walk"]
     rew_scale_dof_pos_l2_stance = _phase_cfg["rewards"]["rew_scale_dof_pos_l2_stance"]
+    # L1 on hip-abduction deviation from default, charged only under a zero yaw command.
+    # .get() so phase files written before this term still load.
+    rew_scale_hip_dev_l1 = _phase_cfg["rewards"].get("rew_scale_hip_dev_l1", 0.0)
     rew_scale_base_acc_l2 = _phase_cfg["rewards"]["rew_scale_base_acc_l2"]
 
     # Smoothness / efficiency

@@ -99,8 +99,17 @@ class QuadrupedEnv(DirectRLEnv):
         self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*_thigh|.*_calf|trunk")
 
         self.net_contact_forces = torch.zeros(self.num_envs, 20, 3, device=self.device)
-        self._joint_dof_idx, _ = self.robot.find_joints(
+        self._joint_dof_idx, _joint_names = self.robot.find_joints(
             ".*_hip_joint|.*_thigh_joint|.*_calf_joint"
+        )
+        # Column positions of the four hip (abduction) joints WITHIN _joint_dof_idx, i.e.
+        # within self.joint_pos / self.desired_joint_pos. Resolved from the name list the
+        # same call returns rather than assuming a DOF ordering, so it holds for whatever
+        # order the USD happens to expose and for all three robot models.
+        self._hip_local_idx = torch.tensor(
+            [i for i, n in enumerate(_joint_names) if n.endswith("_hip_joint")],
+            dtype=torch.long,
+            device=self.device,
         )
         if getattr(self, "is_heterogeneous", False):
             self._view_joint_dof_idx = []
@@ -168,6 +177,7 @@ class QuadrupedEnv(DirectRLEnv):
         self.joint_vel_l2_static_val = torch.zeros(self.num_envs, device=self.device)
         self.dof_pos_l2_walk_val = torch.zeros(self.num_envs, device=self.device)
         self.dof_pos_l2_stance_val = torch.zeros(self.num_envs, device=self.device)
+        self.hip_dev_l1_val = torch.zeros(self.num_envs, device=self.device)
         self.grf_balance_stance_val = torch.zeros(self.num_envs, device=self.device)
         self.joint_limit_val = torch.zeros(self.num_envs, device=self.device)
         # First-step latency: state for rewarding a prompt step out of a standing
@@ -1078,6 +1088,33 @@ class QuadrupedEnv(DirectRLEnv):
         self.dof_pos_l2_walk_val = dof_pos_err * moving_mask
         self.dof_pos_l2_stance_val = dof_pos_err * static_mask
 
+        # -- Hip (abduction) deviation, L1, charged only when NOT commanded to turn --
+        # The hips are the joints that swing a leg sideways. Turning needs them; holding a
+        # heading does not, and hip excursion under a zero yaw command is what produces the
+        # splayed, laterally-loaded stance the GRF balance term then has to fight. L1 rather
+        # than L2 on purpose: the squared form is nearly flat near the default pose and so
+        # ignores exactly the small persistent offsets this is meant to remove, while its
+        # gradient grows without bound on the large excursions a real turn needs.
+        #
+        # Gated on the YAW command alone, not ||cmd||, so it stays active while the robot
+        # walks straight -- a forward trot has no reason to abduct.
+        #
+        # HARD gate at static_velocity_threshold (rad/s), not the ramp the static/moving
+        # terms use: either the robot was told to turn or it was not, and there is no
+        # partial hip excursion that a fraction of a yaw command makes correct.
+        #
+        # NOTE: a pure lateral (vy) command is executed largely THROUGH the hips and carries
+        # no yaw, so it is charged here too. If side-stepping degrades, gate this on the
+        # lateral command as well.
+        yaw_cmd = self.commands[:, 2].abs()
+        hip_dev = (
+            self.joint_pos[:, self._hip_local_idx]
+            - self.desired_joint_pos[:, self._hip_local_idx]
+        ).abs().sum(dim=1)
+        self.hip_dev_l1_val = hip_dev * (
+            yaw_cmd <= self.cfg.static_velocity_threshold
+        ).float()
+
         # -- First-step latency, paid once per zero -> non-zero command transition --
         # The failure this targets: out of a static stance the policy can sit with all
         # four feet planted for over a second while commanded to walk, pivoting over a
@@ -1469,6 +1506,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_ang_vel_xy_l2,
             self.cfg.rew_scale_dof_pos_l2_walk,
             self.cfg.rew_scale_dof_pos_l2_stance,
+            self.cfg.rew_scale_hip_dev_l1,
             self.cfg.rew_scale_dof_torques_l2,
             self.cfg.rew_scale_dof_acc_l2,
             self.cfg.rew_scale_action_rate_l2,
@@ -1512,6 +1550,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.joint_vel_l2_static_val,
             self.dof_pos_l2_walk_val,
             self.dof_pos_l2_stance_val,
+            self.hip_dev_l1_val,
             self.grf_balance_stance_val,
             self.joint_limit_val,
             self.first_step_val,
@@ -1853,6 +1892,7 @@ def compute_rewards(
     rew_scale_ang_vel_xy_l2: float,
     rew_scale_dof_pos_l2_walk: float,
     rew_scale_dof_pos_l2_stance: float,
+    rew_scale_hip_dev_l1: float,
     rew_scale_dof_torques_l2: float,
     rew_scale_dof_acc_l2: float,
     rew_scale_action_rate_l2: float,
@@ -1896,6 +1936,7 @@ def compute_rewards(
     joint_vel_l2_static_val: torch.Tensor,
     dof_pos_l2_walk_val: torch.Tensor,
     dof_pos_l2_stance_val: torch.Tensor,
+    hip_dev_l1_val: torch.Tensor,
     grf_balance_stance_val: torch.Tensor,
     joint_limit_val: torch.Tensor,
     first_step_val: torch.Tensor,
@@ -1981,6 +2022,7 @@ def compute_rewards(
     # dof_pos_l2_stance_val comment in _get_observations for why.
     rew_dof_pos_l2_walk = rew_scale_dof_pos_l2_walk * dof_pos_l2_walk_val
     rew_dof_pos_l2_stance = rew_scale_dof_pos_l2_stance * dof_pos_l2_stance_val
+    rew_hip_dev_l1 = rew_scale_hip_dev_l1 * hip_dev_l1_val
 
     # 11. Flat Orientation Penalty (Penalize Pitch/Roll)
     rew_flat_orientation_l2 = rew_scale_flat_orientation_l2 * torch.sum(
@@ -2028,6 +2070,7 @@ def compute_rewards(
     log["reward/dof_torques_l2"] = rew_dof_torques_l2.mean()
     log["reward/dof_pos_l2_walk"] = rew_dof_pos_l2_walk.mean()
     log["reward/dof_pos_l2_stance"] = rew_dof_pos_l2_stance.mean()
+    log["reward/hip_dev_l1"] = rew_hip_dev_l1.mean()
     log["reward/dof_acc_l2"] = rew_dof_acc_l2.mean()
     log["reward/base_acc_l2"] = rew_base_acc_l2.mean()
     log["reward/action_rate_l2"] = rew_action_rate_l2.mean()
@@ -2062,6 +2105,7 @@ def compute_rewards(
         + rew_dof_torques_l2
         + rew_dof_pos_l2_walk
         + rew_dof_pos_l2_stance
+        + rew_hip_dev_l1
         + rew_dof_acc_l2
         + rew_base_acc_l2
         + rew_action_rate_l2
