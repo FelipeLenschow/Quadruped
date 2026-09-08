@@ -19,12 +19,14 @@ from Configs.config_loader import load_config
 from Controller.robot_defaults import DEFAULT_STANCE_QPOS
 
 class MujocoEvaluator(Node):
-    def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False, headless=True):
+    def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False,
+                 headless=True, auto_reset_safety=True, rom_margin=0.0):
         super().__init__("mujoco_evaluator_node")
         self.robot_type = robot_type
         self.checkpoint = checkpoint
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
         self.headless = headless
+        self.safety_resets = 0
 
         # 0. Load Central Config
         self.config = load_config()
@@ -59,9 +61,128 @@ class MujocoEvaluator(Node):
             sim_dt=0.001
         )
 
+        # 3. Arm the pipeline for an unattended sweep.
+        #
+        # Two things a Console operator would normally do, and nobody is at a console here:
+        #
+        #  a) Wait for the supervisor. The physics thread evaluates safety on its very first step;
+        #     if no heartbeat has arrived by then, CommandSafetyProcessor latches an emergency stop
+        #     ("No supervisor heartbeat received yet") that only a console can clear, and the whole
+        #     sweep then measures a limp robot -- silently, because the report still comes out
+        #     well-formed and full of zeros. Waiting has to happen here, and has to spin the node
+        #     by hand, because rclpy.spin() only starts once __init__ has returned.
+        #  b) Switch to policy mode. The pipeline boots in "pose" mode and leaves it only when
+        #     something publishes /pipeline/mode, so otherwise it holds the stand pose through
+        #     every commanded speed. Switching later, mid-run, trips the ROM check on the pose
+        #     stance ("FL_calf_joint -2.651 rad < safe min -2.390") and latches the stop again.
+        self._wait_for_heartbeat()
+        self.pipeline.mode = "policy"
+
+        #  c) Stand in for the operator on the emergency stop. See _clear_safety_stop.
+        #
+        #     On by default, and deliberately not conditioned on stdin being a terminal: a sweep
+        #     launched from launcher.py or Tools/auto_eval.py inherits the launcher's terminal, so
+        #     "stdin is a TTY" means the launcher is interactive, not that anyone is watching this
+        #     sweep. Guessing that way left every latched stop uncleared, and one ROM trip at
+        #     x=1.0 m/s zeroed the rest of that sweep -- x=1.0 and the whole y and yaw axes.
+        #
+        #     stdin is detached with it: CommandSafetyProcessor answers a latched stop by blocking
+        #     on input() in a background thread, which on an inherited terminal swallows the
+        #     keystrokes meant for the launcher. Reading /dev/null makes that thread give up at
+        #     once, and this sweep needs no input of its own.
+        self.auto_reset_safety = auto_reset_safety
+        if self.auto_reset_safety:
+            try:
+                os.dup2(os.open(os.devnull, os.O_RDONLY), sys.stdin.fileno())
+            except Exception:
+                pass
+
+        #  d) Drop the joint ROM margin. See _apply_rom_margin.
+        self.rom_margin = rom_margin
+        if self.rom_margin is not None:
+            self._apply_rom_margin()
+            print(f"[MujocoEvaluator] Joint ROM safety margin set to {self.rom_margin:.2f} "
+                  f"for this sweep.")
+
         # 4. Physics Thread
         self.physics_thread = threading.Thread(target=self._evaluation_loop, daemon=True)
         self.physics_thread.start()
+
+    def _wait_for_heartbeat(self, timeout=20.0):
+        """Block until Operator/supervisor.py (or the Console) is broadcasting, or say why the
+        sweep is about to be meaningless."""
+        sp = self.pipeline.safety_processor
+        deadline = time.time() + timeout
+        # The torque limit rides a separate topic from the heartbeat, so waiting on the heartbeat
+        # alone can start the sweep during the moment when the limit is still its fail-safe zero.
+        while time.time() < deadline and not (sp.has_received_heartbeat and sp.global_max_torque > 0):
+            rclpy.spin_once(self, timeout_sec=0.1)
+        if sp.has_received_heartbeat:
+            print(f"[MujocoEvaluator] Supervisor heartbeat received "
+                  f"(torque limit {sp.global_max_torque:.1f} Nm).")
+        else:
+            print(f"[MujocoEvaluator] WARNING: no supervisor heartbeat after {timeout:.0f}s. "
+                  f"The safety processor will block the policy and this sweep will record a "
+                  f"motionless robot. Start Operator/supervisor.py (or the Console) first.")
+
+    def _apply_rom_margin(self):
+        """Hold the joint ROM safety margin at the sweep's value.
+
+        The margin (config.yaml joint_rom_safety_margin, 0.15) keeps a real robot away from its
+        physical joint stops, and at 15% of each joint's range it is well inside where a trotting
+        gait actually goes -- the knee alone loses 0.33 rad at each end. On hardware that caution
+        is the point; in a MuJoCo sweep there is nothing to protect, and every crossing gates the
+        policy for a step and skews the very numbers the sweep exists to measure. At 0 the check
+        still fires on the physical limits.
+
+        Pinned rather than assigned once. The supervisor rebroadcasts the config value at 10 Hz
+        and its callback runs on the spin thread, so re-applying from the physics thread still
+        loses the occasional race -- and one lost race is a latched stop that ends the sweep. The
+        safe joint bounds are only ever recomputed inside _recompute_safety_limits, so forcing the
+        margin there closes the window completely."""
+        sp = self.pipeline.safety_processor
+        if getattr(sp, "_rom_margin_pinned", False):
+            return
+        original = sp._recompute_safety_limits
+
+        def pinned_recompute():
+            sp.rom_safety_margin = self.rom_margin
+            original()
+
+        sp._recompute_safety_limits = pinned_recompute
+        sp._rom_margin_pinned = True
+        pinned_recompute()
+
+    def _clear_safety_stop(self):
+        """Stand in for the operator on the emergency stop.
+
+        CommandSafetyProcessor latches a stop on the first safety violation and clears it only when
+        a human presses ENTER (its _reset_worker blocks on input()) or a console sends
+        'safety = reset'. A sweep started from a launcher, a watcher or any pipe has no terminal,
+        so input() raises EOFError, the latch never clears, and every commanded speed is measured on
+        a robot with zero torque -- a report full of zeros that still looks perfectly well-formed.
+        The stop fires reliably at startup, before the policy has had a step to move the joints back
+        inside the ROM margin.
+
+        This is MuJoCo with no hardware attached, so clearing it is safe. Each clear is counted per
+        speed and lands in the report: a policy that keeps tripping safety should be visible, not
+        silently smoothed over.
+
+        Called once per physics step rather than from a polling thread. A gated robot is a limp
+        robot, and at 1 kHz even a 50 ms poll leaves it limp for 50 steps -- long enough to fall,
+        after which the tilt violation is permanent and that whole speed reads as a motionless
+        robot. Clearing inline caps the gap at a single step."""
+        sp = self.pipeline.safety_processor
+        if not sp.is_policy_blocked:
+            return
+        # Exactly what _reset_worker does when the operator hits ENTER.
+        sp._robot_safe = True
+        sp._shutdown_logged = False
+        sp._policy_blocked = False
+        self.safety_resets += 1
+        if self.safety_resets in (1, 10, 100) or self.safety_resets % 1000 == 0:
+            print(f"[MujocoEvaluator] cleared safety stop #{self.safety_resets} "
+                  f"(no operator on stdin)")
 
     def _init_physics(self):
         """Initialize MuJoCo physics and resolve joint addresses."""
@@ -236,6 +357,7 @@ class MujocoEvaluator(Node):
             for axis, speeds in axes_tests.items():
                 for speed in speeds:
                     print(f"\n[EVAL] Testing {axis} velocity: {speed}")
+                    resets_at_start = self.safety_resets
                     self._reset_robot()
                     
                     max_foot_heights = [0.0, 0.0, 0.0, 0.0]
@@ -284,6 +406,9 @@ class MujocoEvaluator(Node):
                             elif axis == "yaw":
                                 self.cmd_vel = [0.0, 0.0, speed, 0.0]
                             
+                        if self.auto_reset_safety:
+                            self._clear_safety_stop()
+
                         raw_data = self._get_raw_sensor_data()
                         self.current_targets = self.pipeline.step(
                             raw_state_kwargs=raw_data,
@@ -448,7 +573,12 @@ class MujocoEvaluator(Node):
                             "x_m": round(err_x_sum, 4),
                             "y_m": round(err_y_sum, 4),
                             "yaw_rad": round(err_yaw_sum, 4)
-                        }
+                        },
+                        # How many times the safety stop had to be cleared during THIS test. One
+                        # is normal (the stop that fires at reset); a large count means the policy
+                        # kept violating ROM or tilt here and spent the test being gated, so treat
+                        # that speed's numbers as suspect rather than as behaviour.
+                        "safety_resets": self.safety_resets - resets_at_start
                     }
     
                     print(f"   => Actual Vel: {avg_actual_vel:.3f}")
@@ -474,7 +604,8 @@ class MujocoEvaluator(Node):
                     "checkpoint": os.path.abspath(self.checkpoint) if self.checkpoint else "None",
                     "checkpoint_name": os.path.basename(self.checkpoint) if self.checkpoint else "None",
                     "robot_type": self.robot_type,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "safety_resets": self.safety_resets
                 },
                 "results": results
             }
@@ -502,6 +633,15 @@ def main():
     parser.add_argument("--obs_dim", type=int, default=49)
     parser.add_argument("--use_estimator", action="store_true")
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--rom_margin", default="0",
+                        help="joint ROM safety margin to hold during the sweep: a fraction of each "
+                             "joint's range (0, the default, means no margin -- the check still "
+                             "fires at the physical joint limits), or 'config' to leave whatever "
+                             "the supervisor broadcasts")
+    parser.add_argument("--auto_reset_safety", choices=["on", "off"], default="on",
+                        help="clear the safety emergency stop without an operator, and detach "
+                             "stdin so the stop's reset prompt cannot eat the launcher's keyboard "
+                             "(default on). 'off' restores the press-ENTER-to-continue behaviour")
     args = parser.parse_args()
 
     rclpy.init()
@@ -510,7 +650,9 @@ def main():
         checkpoint=args.internal_policy, 
         obs_dim=args.obs_dim,
         use_estimator=args.use_estimator,
-        headless=args.headless
+        headless=args.headless,
+        auto_reset_safety=(args.auto_reset_safety == "on"),
+        rom_margin=None if args.rom_margin == "config" else float(args.rom_margin)
     )
     try:
         rclpy.spin(node)

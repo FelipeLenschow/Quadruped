@@ -22,6 +22,12 @@ Two separate Python environments are in play; picking the wrong one is the most 
 4. For `train`, reads `<module>/source/**/training_phases.yaml` to list phases and can auto-chain a curriculum sequence (e.g. phase1 → phase6), feeding each segment's best checkpoint into the next `train.py` invocation.
 5. Dispatches to a subprocess, passing robot/terrain/phase selection as **environment variables** (`QUADRUPED_TRAINING_PHASE`, `QUADRUPED_ROBOT_CFG`, `QUADRUPED_TERRAIN`, `PYTHONPATH=<module>/source/Quadruped`) rather than CLI flags — task code reads these from `os.environ`.
 6. For sim/deploy actions, also starts `Controller/reward_estimator_node.py` in the background.
+7. For `train`, optionally starts `Tools/auto_eval.py` in the background (one watcher per curriculum
+   segment, stopped before the run folder is renamed). It watches the run's `checkpoints/` and puts
+   every Nth checkpoint (default 50k) through `Mujoco/eval_mujoco.py`, so the evaluation half of the
+   dashboard fills in while the run is still going. The sweep is spawned through a ROS 2 interpreter
+   (sourcing `/opt/ros/<distro>/setup.bash` and stripping the Isaac venv off `PATH`) because
+   `eval_mujoco.py` imports `rclpy`, which the Isaac venv does not have.
 
 ## `IsaacLab_Tasks/` structure
 

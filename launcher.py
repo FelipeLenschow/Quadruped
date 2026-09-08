@@ -352,6 +352,62 @@ def find_highest_step_checkpoint(run_dir):
         
     return os.path.abspath(all_pts[0]) if all_pts else None
 
+def prompt_auto_eval():
+    """Offer to evaluate checkpoints in MuJoCo while training runs, but only where that can
+    actually happen: eval_mujoco.py needs rclpy, which the Isaac venv does not have, so
+    Tools/auto_eval.py has to find a ROS 2 interpreter to spawn it with. Asking first and
+    failing later would waste the whole training run."""
+    try:
+        from Tools.auto_eval import resolve_eval_python
+        prefix = resolve_eval_python()
+    except Exception:
+        prefix = None
+    if not prefix:
+        print("  (Background MuJoCo evaluation unavailable here: nothing on this machine can "
+              "import rclpy.)")
+        return 0
+    if input("Evaluate checkpoints in MuJoCo while training? [y/N]: ").lower().strip() != "y":
+        return 0
+    raw = input("  Evaluate every how many steps? (default 50000): ").strip()
+    try:
+        return max(1, int(raw)) if raw else 50000
+    except ValueError:
+        return 50000
+
+
+def start_auto_eval_watcher(log_root, start_ts, robot_key, every, env):
+    """Background watcher that evaluates each new checkpoint on the interval. It prints to this
+    terminal (a line per evaluation); the sweep's own output goes to <run>/checkpoints/auto_eval.log."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Tools", "auto_eval.py")
+    os.makedirs(log_root, exist_ok=True)
+    cmd = [sys.executable, "-u", script,
+           "--log-root", os.path.abspath(log_root),
+           "--after", f"{start_ts:.0f}",
+           "--interval", str(every),
+           "--robot", robot_key,
+           "--parent-pid", str(os.getpid())]
+    try:
+        proc = subprocess.Popen(cmd, env=env, cwd=os.path.dirname(os.path.abspath(__file__)))
+        print(f"[Launcher] Background evaluation every {every} steps (PID {proc.pid}).")
+        return proc
+    except Exception as e:
+        print(f"[WARNING] Could not start the background evaluator: {e}")
+        return None
+
+
+def stop_auto_eval_watcher(proc):
+    """Stop it before the run folder is renamed -- an evaluation in flight writes its report next
+    to the checkpoint it was given, and that path would no longer exist."""
+    if not proc or proc.poll() is not None:
+        return
+    print("[Launcher] Stopping background evaluation...")
+    proc.terminate()
+    try:
+        proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
 def run_cli_menu():
     is_isaac = "env_isaacsim" in os.environ.get("VIRTUAL_ENV", "") or "env_isaacsim" in sys.executable
     is_robot = IS_ROBOT
@@ -529,6 +585,7 @@ def run_cli_menu():
             last_cmd.get("show_ghost", True),
             last_cmd.get("record_session", False),
             last_cmd.get("training_phase", ""),
+            last_cmd.get("auto_eval", 0),
         )
 
     # 1.2 Validation
@@ -677,6 +734,7 @@ def run_cli_menu():
     no_ground_truth = False
     show_ghost = True
     training_phase = ""
+    auto_eval = 0
 
     if action in ["train", "isaac_lab", "eval_policy", "isaac_sim", "mujoco", "gazebo"]:
         if action in ["isaac_sim", "mujoco", "gazebo", "eval_policy"]:
@@ -759,6 +817,7 @@ def run_cli_menu():
                 
             run_name = input("Enter Run Name (optional): ").strip()
             video = input("Record Video? [y/N]: ").lower().strip() == "y"
+            auto_eval = prompt_auto_eval()
             
         if action == "isaac_lab":
             ans = input("Enable Manual Keyboard Control? [y/N]: ").lower().strip()
@@ -843,7 +902,7 @@ def run_cli_menu():
                 selected_file = files[0]
             run_name = os.path.join(record_dir, selected_file)
 
-    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, no_ground_truth, show_ghost, record_session, training_phase
+    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, no_ground_truth, show_ghost, record_session, training_phase, auto_eval
 
 def main():
     (
@@ -864,6 +923,7 @@ def main():
         show_ghost,
         record_session,
         training_phase,
+        auto_eval,
     ) = run_cli_menu()
 
     # Save for next time
@@ -885,6 +945,7 @@ def main():
         "show_ghost": show_ghost,
         "record_session": record_session,
         "training_phase": training_phase,
+        "auto_eval": auto_eval,
     })
 
     print("\n" + "=" * 50)
@@ -898,6 +959,8 @@ def main():
         print(f"Phase:    {display_phase}")
     if ckpt:
         print(f"Checkpoint: {ckpt_display_name(ckpt)}")
+    if auto_eval:
+        print(f"Auto-eval: every {auto_eval} steps (MuJoCo, in the background)")
     print(f"Teleop:   {teleop}")
     print("=" * 50 + "\n")
 
@@ -1038,11 +1101,17 @@ def main():
                 
             start_ts = time.time()
             existing_dirs = set(os.listdir(log_root)) if os.path.exists(log_root) else set()
+            # One watcher per segment: it latches onto the run folder this segment creates, and is
+            # stopped below before rename_latest_run_dir moves that folder out from under it.
+            watcher = start_auto_eval_watcher(log_root, start_ts, robot_key, auto_eval, seg_env) \
+                if auto_eval else None
             try:
                 res = subprocess.run(cmd, env=seg_env, cwd=module_path)
             except KeyboardInterrupt:
                 print("\n[Launcher] Training interrupted by user.")
                 break
+            finally:
+                stop_auto_eval_watcher(watcher)
                 
             renamed_path = rename_latest_run_dir(log_root, start_ts, target_run_name, existing_dirs=existing_dirs)
             next_ckpt = find_highest_step_checkpoint(renamed_path) if renamed_path else None
