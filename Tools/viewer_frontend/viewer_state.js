@@ -1,10 +1,10 @@
-// Browser-local UI state shared by the two viewer pages.
+// Browser-local UI state for the dashboard.
 //
-// The dashboard is two documents -- the evaluation hub (/) and the training curves
-// (/training.html) -- so every hop between them is a full page load that would otherwise reset
-// each selection and toggle. Both pages key runs the same way (a run id is its directory path
-// under the repo: the eval reports sit in <run>/checkpoints/, the tfevents in <run> itself),
-// which also lets the focused runs travel from one page to the other.
+// One page holds both halves now -- the training curves and, below them, the evaluated
+// checkpoints of the same runs -- so this is no longer about carrying a selection between
+// documents; it is what survives a reload. Runs are keyed by their directory path under the repo
+// (the tfevents sit in <run>, the eval reports in <run>/checkpoints/), which is what lets the
+// checkpoint buttons attach to the run selected in the sidebar.
 (function (global) {
     const KEY = 'quadrupedViewer.v1';
 
@@ -27,22 +27,13 @@
     }
 
     global.ViewerState = {
-        // Stored settings for one page, e.g. ViewerState.get('eval').
+        // Stored settings for one part of the page, e.g. ViewerState.get('training').
         get(section) {
             return state[section] || {};
         },
         // Merge and persist; only the keys passed in are touched.
         patch(section, values) {
             state[section] = Object.assign({}, state[section], values);
-            write();
-        },
-        // The runs the user last selected, on whichever page. Read by the other page to open on
-        // the same runs -- only ever as a default, never overriding an explicit selection.
-        focusedRuns() {
-            return state.focusedRuns || [];
-        },
-        setFocusedRuns(ids) {
-            state.focusedRuns = Array.from(new Set(ids));
             write();
         },
     };

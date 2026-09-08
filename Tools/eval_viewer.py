@@ -82,6 +82,23 @@ def _find_event_files():
     return sorted(set(glob.glob(pat, recursive=True)))
 
 
+def _find_report_files():
+    pat = os.path.join(MODULE_DIR, "**", "*mujoco_eval_report*.json")
+    return sorted(set(glob.glob(pat, recursive=True)))
+
+
+def _reports_by_run_dir():
+    """run directory -> [report files]. Reports live in <run>/checkpoints/, so one level up from
+    the file is the run the dashboard lists."""
+    out = {}
+    for f in _find_report_files():
+        d = os.path.dirname(f)
+        if os.path.basename(d) == "checkpoints":
+            d = os.path.dirname(d)
+        out.setdefault(d, []).append(f)
+    return out
+
+
 def _canon_tag(tag):
     """skrl >= 2.1.0 logs environment_info keys bare ("reward/alive"); older skrl prefixed them
     ("Info / reward/alive"). Normalise historical runs to the prefixed spelling so runs recorded
@@ -92,7 +109,10 @@ def _canon_tag(tag):
 
 
 def _read_scalars(events_path):
-    """Cached scalar read. Re-reads only when the file grows, so live runs stay current."""
+    """Cached scalar read. Re-reads only when the file grows, so live runs stay current.
+    An eval-only run has no events file at all -- it charts nothing, it is not an error."""
+    if not events_path:
+        return {}
     try:
         st = os.stat(events_path)
     except OSError:
@@ -118,10 +138,19 @@ def _read_scalars(events_path):
 
 
 def _run_index():
+    """One entry per training run. A run is normally found by its tfevents file, but a run that
+    was evaluated and then copied without its tfevents (or evaluated from checkpoints alone) is
+    listed too -- it simply has no curves to draw, and its eval reports stay reachable."""
     runs = []
     now = time.time()
-    for ev in _find_event_files():
-        run_dir = os.path.dirname(ev)
+    reports = _reports_by_run_dir()
+    seen = set()
+    entries = [(os.path.dirname(ev), ev) for ev in _find_event_files()]
+    entries += [(d, None) for d in sorted(reports) if d not in {e[0] for e in entries}]
+    for run_dir, ev in entries:
+        if run_dir in seen:
+            continue
+        seen.add(run_dir)
         name = os.path.basename(run_dir)
         rel = os.path.relpath(run_dir, BASE_DIR)
         module = ""
@@ -133,17 +162,21 @@ def _run_index():
         env_cfg = _load_yaml(os.path.join(run_dir, "params", "env.yaml"))
         agent_cfg = _load_yaml(os.path.join(run_dir, "params", "agent.yaml"))
         cfg = _flatten_cfg(env_cfg, agent_cfg)
-        try:
-            mtime = os.stat(ev).st_mtime
-        except OSError:
-            mtime = 0
+        stamped = [ev] if ev else reports.get(run_dir, [])
+        mtime = 0
+        for f in stamped:
+            try:
+                mtime = max(mtime, os.stat(f).st_mtime)
+            except OSError:
+                pass
         runs.append({
             "name": name,
             "id": rel,
             "module": module,
             "events": ev,
             "last_write": mtime,
-            "live": (now - mtime) < LIVE_WINDOW_S,
+            "live": bool(ev) and (now - mtime) < LIVE_WINDOW_S,
+            "n_reports": len(reports.get(run_dir, [])),
             "num_envs": cfg.get("num_envs"),
             "obs_dim": cfg.get("observation_space"),
             "config": cfg,
@@ -261,9 +294,8 @@ class EvalReportHandler(SimpleHTTPRequestHandler):
             
             reports = []
             
-            # Search for mujoco_eval_report*.json under the selected task module only.
-            search_pattern = os.path.join(MODULE_DIR, "**", "*mujoco_eval_report*.json")
-            all_files = sorted(set(glob.glob(search_pattern, recursive=True)))
+            # Reports for the selected task module only, same glob the run index uses.
+            all_files = _find_report_files()
             
             for file_path in all_files:
                 try:
@@ -315,10 +347,9 @@ def main():
     httpd = HTTPServer(server_address, EvalReportHandler)
     
     print("="*60)
-    print(f"🚀 Policy Evaluation Dashboard running!")
-    print(f"📦 Module      {VIEWER_MODULE}  (set VIEWER_MODULE to change)")
-    print(f"🔗 Evaluation  http://localhost:{PORT}/")
-    print(f"📈 Training    http://localhost:{PORT}/training.html")
+    print(f"🚀 Quadruped training / evaluation dashboard running!")
+    print(f"📦 Module     {VIEWER_MODULE}  (set VIEWER_MODULE to change)")
+    print(f"🔗 Dashboard  http://localhost:{PORT}/")
     if not HAS_TB:
         print("⚠️  tensorboard not importable — training curves will be empty.")
         print("   Run this under env_isaacsim:  source ~/env_isaacsim/bin/activate")
