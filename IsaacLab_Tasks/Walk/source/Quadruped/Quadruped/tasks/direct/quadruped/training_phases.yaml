@@ -181,7 +181,7 @@ phases:
   phase2:
     inherits: phase1
     env:
-      max_timesteps: 500000
+      max_timesteps: 1000000
       observation_noise_scale: 1.25
     domain_randomization:
       joint_friction_range: [0.03, 0.5]
@@ -209,7 +209,7 @@ phases:
       push_velocity_range: [-0.8, 0.8]
     rewards:
       rew_scale_foot_height: 1.0
-      foot_height_bias: 0.5
+      foot_height_bias: 0.25
       target_foot_height: 0.08
       foot_height_sigma: 0.002
 
