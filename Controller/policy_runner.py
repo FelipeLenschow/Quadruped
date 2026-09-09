@@ -212,23 +212,24 @@ class PolicyRunner:
 
     def _inspect_checkpoint(self, path):
         """Detect obs_dim and layer sizes from checkpoint keys and shapes."""
+        self._ckpt_format = "skrl"
         obs_dim = 236
         layers = [512, 256, 128]  # Default fallback
         try:
             data = torch.load(path, map_location="cpu")
 
             # rsl_rl (unitree_rl_lab, and Isaac Lab's rsl_rl workflow) writes a different
-            # archive than skrl: model_state_dict / optimizer_state_dict / iter / infos.
-            # None of the lookups below match it, so obs_dim silently kept the 236 fallback
-            # and the mismatch only surfaced much later as a tensor-size error inside the
-            # observation scaler. Refuse it here, and say what to load instead: rsl_rl's
-            # play.py writes a TorchScript policy next to the run, which this loader reads.
+            # archive than skrl: model_state_dict / optimizer_state_dict / iter / infos, with
+            # the actor as a bare nn.Sequential under `actor.*`. None of the skrl lookups
+            # below match it, so obs_dim silently kept the 236 fallback and the mismatch only
+            # surfaced much later as a tensor-size error inside the observation scaler. Read
+            # the archive properly instead of refusing it: the topology is the same MLP and
+            # only the key names differ, so routing the user through rsl_rl's play.py to get
+            # a TorchScript export bought nothing but a detour through another repo.
             if "model_state_dict" in data and "policy" not in data:
-                raise ValueError(
-                    f"{os.path.basename(path)} is an rsl_rl checkpoint, which this loader "
-                    "cannot read. Run rsl_rl's play.py once and load the TorchScript it "
-                    "exports to <run_dir>/exported/policy.pt instead."
-                )
+                obs_dim, layers = self._inspect_rsl_rl(path, data["model_state_dict"])
+                self._ckpt_format = "rsl_rl"
+                return obs_dim, layers
 
             policy_state = data.get("policy", {})
 
@@ -257,10 +258,160 @@ class PolicyRunner:
             print(f"[PolicyRunner] Warning: Inspection failed: {e}")
         return obs_dim, layers
 
+    @staticmethod
+    def _rsl_rl_actor_layers(model_state):
+        """Indices of the actor's Linear layers, in order.
+
+        rsl_rl's ActorCritic builds the actor as nn.Sequential(Linear, act, Linear, act, ...,
+        Linear), so its weights sit on the even keys `actor.0`, `actor.2`, ... and the last
+        one is the output layer. PolicyMLP numbers its own net_container the same way (also
+        Linear/activation pairs), which is what reduces the weight transfer to a rename.
+        """
+        return sorted(
+            int(key.split(".")[1])
+            for key in model_state
+            if key.startswith("actor.") and key.endswith(".weight")
+        )
+
+    def _inspect_rsl_rl(self, path, model_state):
+        """obs_dim and hidden widths of an rsl_rl actor."""
+        indices = self._rsl_rl_actor_layers(model_state)
+        if not indices:
+            raise ValueError(
+                f"{os.path.basename(path)} looks like an rsl_rl checkpoint, but its "
+                "model_state_dict holds no 'actor.*' weights."
+            )
+        obs_dim = int(model_state[f"actor.{indices[0]}.weight"].shape[1])
+        layers = [int(model_state[f"actor.{i}.weight"].shape[0]) for i in indices[:-1]]
+        action_dim = int(model_state[f"actor.{indices[-1]}.weight"].shape[0])
+        print(
+            f"[PolicyRunner] rsl_rl checkpoint: actor {obs_dim} -> {layers} -> {action_dim}"
+        )
+        self._check_rsl_rl_activation(path)
+        return obs_dim, layers
+
+    @staticmethod
+    def _run_params(path, name="agent.yaml"):
+        """Parse `<run>/params/<name>` for a checkpoint at `<run>/checkpoints/<x>.pt`.
+
+        Isaac Lab writes the resolved training config beside every run, and it is the only
+        record of what the checkpoint archive itself does not carry: the activation the actor
+        was built with, and whether a missing preprocessor was configured away or lost.
+        Returns None when there is nothing to read -- a checkpoint copied out of its run
+        directory has no params/, so every caller has to stay correct without it.
+        """
+        cfg_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(path))), "params", name
+        )
+        if not os.path.exists(cfg_path):
+            return None
+        try:
+            import yaml
+
+            with open(cfg_path) as f:
+                return yaml.safe_load(f) or {}
+        except Exception as e:  # a missing or odd yaml must not block a valid checkpoint
+            print(f"[PolicyRunner] Could not read {cfg_path} ({e}).")
+            return None
+
+    def _check_rsl_rl_activation(self, path):
+        """Warn if the run was trained with an activation PolicyMLP does not implement.
+
+        The activation is the one piece of the topology the archive does not carry, and
+        PolicyMLP hardcodes ELU. unitree_rl_lab and Isaac Lab both default to elu so this
+        normally agrees, but a relu-trained actor would load without a murmur and produce a
+        plausible-looking, meaningless rollout -- the failure mode this file refuses to let
+        pass quietly everywhere else.
+        """
+        cfg = self._run_params(path)
+        if not cfg:
+            return
+        activation = (cfg.get("policy") or {}).get("activation")
+        if activation and str(activation).lower() != "elu":
+            print(
+                "[PolicyRunner] " + "!" * 60 + "\n"
+                f"[PolicyRunner] WARNING: the run's agent.yaml says the actor was trained\n"
+                f"[PolicyRunner]   with '{activation}', but PolicyMLP is hardcoded to ELU. The\n"
+                "[PolicyRunner]   weights load and the rollout looks plausible and means nothing.\n"
+                "[PolicyRunner] " + "!" * 60
+            )
+
+    def _scaler_is_configured_off(self, path):
+        """True if the run explicitly trained without an observation preprocessor.
+
+        A checkpoint carrying no scaler is either a catastrophe or entirely routine, and the
+        archive alone cannot tell you which -- skrl just omits the key in both cases. The
+        stock Isaac Lab velocity tasks set state_preprocessor: null and train on raw
+        observations; our own configs set RunningStandardScaler, so a missing scaler there
+        means the key moved or the save dropped it. The run's params/agent.yaml is the only
+        thing that separates the two, which is why the alarm below is reserved for the case
+        it cannot clear -- including the case where there is no params/ to consult.
+        """
+        agent_cfg = (self._run_params(path) or {}).get("agent")
+        if not isinstance(agent_cfg, dict):
+            return False
+        # skrl renamed this key in 2.1.0 exactly as it did inside the checkpoint.
+        for key in ("observation_preprocessor", "state_preprocessor"):
+            if key in agent_cfg:
+                return agent_cfg[key] is None
+        return False
+
+    def _load_rsl_rl_checkpoint(self, data):
+        """Load an rsl_rl ActorCritic into PolicyMLP + RunningStandardScaler.
+
+        Two renames and one conditional:
+          * every hidden `actor.<i>` becomes `net_container.<i>`, and the final Linear becomes
+            `policy_layer`. strict=True on the load, unlike the skrl path -- there is no
+            prefix guesswork here, so a key that fails to line up is a bug, not a variant.
+          * the critic and the action-noise `std` are training-only. Deterministic deployment
+            is the actor mean, which is the actor's output.
+          * normalization is genuinely optional here, unlike for skrl. rsl_rl trains on raw
+            observations unless empirical_normalization is on, so an absent normalizer is
+            correct rather than the silent catastrophe _load_checkpoint warns about. When one
+            is present it is an EmpiricalNormalization -- mean / var buffers applied as
+            (x - mean) / sqrt(var + eps), which is RunningStandardScaler under other names.
+        """
+        model_state = data["model_state_dict"]
+        indices = self._rsl_rl_actor_layers(model_state)
+
+        net_keys = {}
+        for pos, i in enumerate(indices):
+            dst = "policy_layer" if pos == len(indices) - 1 else f"net_container.{i}"
+            net_keys[f"{dst}.weight"] = model_state[f"actor.{i}.weight"]
+            net_keys[f"{dst}.bias"] = model_state[f"actor.{i}.bias"]
+        self.policy.load_state_dict(net_keys, strict=True)
+        print(f"[PolicyRunner] Loaded rsl_rl actor ({len(indices)} linear layers).")
+
+        # rsl_rl >= 2.3 keeps the normalizer inside the policy state dict; older versions save
+        # it alongside as obs_norm_state_dict. Accept either, and ignore the critic's copy --
+        # the critic sees a wider observation, so its buffers are the wrong width entirely.
+        norm = data.get("obs_norm_state_dict") or {
+            k.split("actor_obs_normalizer.")[-1]: v
+            for k, v in model_state.items()
+            if k.startswith("actor_obs_normalizer.")
+        }
+        if norm and "mean" in norm:
+            self.scaler.running_mean.copy_(torch.as_tensor(norm["mean"]).flatten())
+            self.scaler.running_variance.copy_(torch.as_tensor(norm["var"]).flatten())
+            print(
+                "[PolicyRunner] Loaded rsl_rl empirical normalizer "
+                f"(mean[0]: {self.scaler.running_mean[0]:.3f})."
+            )
+        else:
+            print(
+                "[PolicyRunner] No normalizer in the rsl_rl checkpoint -- feeding raw "
+                "observations, which is what empirical_normalization: false means. The "
+                "identity scaler is correct here."
+            )
+
     def _load_checkpoint(self, path):
         print(f"[PolicyRunner] Loading checkpoint weights from {path}")
         data = torch.load(path, map_location=self.device)
         print(f"[PolicyRunner] Checkpoint keys: {list(data.keys())}")
+
+        if getattr(self, "_ckpt_format", "skrl") == "rsl_rl":
+            self._load_rsl_rl_checkpoint(data)
+            return
 
         # Load policy
         policy_state = data.get("policy", {})
@@ -295,6 +446,16 @@ class PolicyRunner:
             print(
                 f"[PolicyRunner] Loaded obs scaler (mean[0]: {self.scaler.running_mean[0]:.3f})"
             )
+        elif self._scaler_is_configured_off(path):
+            # The benign half of "no scaler": the run was configured to train on raw
+            # observations, so the identity scaler is not a fallback, it is the truth. This
+            # used to raise the same alarm as a genuinely lost scaler, which taught everyone
+            # to scroll past the loudest warning in the file.
+            print(
+                "[PolicyRunner] No obs scaler in the checkpoint, and the run's params/agent.yaml "
+                "sets\n[PolicyRunner]   the preprocessor to null -- this policy was trained on raw "
+                "observations,\n[PolicyRunner]   so the identity scaler is correct."
+            )
         else:
             # Do not let this pass quietly: an unscaled policy does not walk badly, it falls over,
             # and the symptom looks like a bad policy rather than a bad load.
@@ -306,10 +467,11 @@ class PolicyRunner:
                 "[PolicyRunner]   state_preprocessor (skrl < 2.1.0), running_standard_scaler.\n"
                 "[PolicyRunner]   The robot will almost certainly not stand. Fix the key, do not\n"
                 "[PolicyRunner]   retrain.\n"
-                "[PolicyRunner]   EXCEPTION: the stock Isaac Lab velocity tasks set\n"
-                "[PolicyRunner]   state_preprocessor: null, so their checkpoints legitimately carry no\n"
-                "[PolicyRunner]   scaler and are trained on raw observations. For those this warning is\n"
-                "[PolicyRunner]   expected and the identity scaler above is correct.\n"
+                "[PolicyRunner]   The one benign case -- a policy trained on raw observations -- is\n"
+                "[PolicyRunner]   checked for above and would have printed instead of this: the run's\n"
+                "[PolicyRunner]   params/agent.yaml would say state_preprocessor: null. It does not,\n"
+                "[PolicyRunner]   or it is not there. Confirm by hand for a checkpoint copied away\n"
+                "[PolicyRunner]   from its run directory.\n"
                 "[PolicyRunner] " + "!" * 60
             )
 
