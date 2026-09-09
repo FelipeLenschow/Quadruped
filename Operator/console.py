@@ -12,6 +12,17 @@ runtime parameters.
 
 This node acts as a dead-man's switch: if it stops publishing, the robot's
 internal watchdog will detect the loss and disable torque.
+
+Losing the heartbeat is the backstop, not the primary stop. Both deliberate
+kills - a gamepad face button and Ctrl-C - publish /safety/estop, which latches
+on the robot within a policy step (~20 ms) instead of after watchdog_timeout.
+The watchdog then covers the case that cannot: a console that dies without
+getting a message out.
+
+The two are kept orthogonal. A gamepad e-stop leaves this console running and
+its heartbeat flowing, so exactly one latch is set and one message
+releases it - pressing ENTER on the driver, at the robot. Only a console that
+actually dies trips the watchdog.
 """
 
 import os
@@ -23,6 +34,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, Float32MultiArray, String
 from geometry_msgs.msg import Vector3
+from sensor_msgs.msg import Joy
 
 # Ensure absolute path of the repository is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -93,6 +105,14 @@ class ConsoleNode(Node):
         self.watchdog_timeout = float(
             self.safety_cfg.get("watchdog_timeout", 1.0))
 
+        # Gamepad e-stop: /joy button indices that kill the robot.
+        self.estop_joy_buttons = [
+            int(b) for b in self.safety_cfg.get("estop_joy_buttons", [0, 1, 2, 3])]
+        self.estop_latched = False
+        # Set once the robot has echoed the latch back on /safety/estop_state.
+        self._estop_confirmed = False
+        self._joy_prev_buttons = []
+
         # Pipeline / Pose state (tracked locally since we send the commands)
         self.current_mode = "pose"
         self.pose_status_name = "none"
@@ -123,6 +143,10 @@ class ConsoleNode(Node):
         # interface.
         self.safety_reset_pub = self.create_publisher(
             Bool, "/safety/reset", 10)
+        # Explicit kill. Latches on the robot within a policy step; the
+        # withheld heartbeat behind it is the backstop, not the mechanism.
+        self.estop_pub = self.create_publisher(
+            Bool, "/safety/estop", 10)
         self.kp_pub = self.create_publisher(
             Float32, "/control/kp", 10)
         self.kd_pub = self.create_publisher(
@@ -171,6 +195,18 @@ class ConsoleNode(Node):
             Float32MultiArray, "/estimator/feet_contact", self._est_contact_cb, 10)
         self.create_subscription(
             Float32, "/estimator/base_height", self._est_height_cb, 10)
+
+        # Gamepad e-stop. joy_node runs on this machine alongside the console,
+        # so this needs no extra process - it rides on the teleop pad already
+        # in the operator's hands.
+        if self.estop_joy_buttons:
+            self.create_subscription(Joy, "/joy", self._joy_cb, 10)
+
+        # The robot owns the latch: this console sets it but cannot release it,
+        # so the display follows /safety/estop_state rather than what was last
+        # asked for.
+        self.create_subscription(
+            Bool, "/safety/estop_state", self._estop_state_cb, 10)
 
         # ------------------------------------------------------------------
         # 5. Timer
@@ -254,6 +290,136 @@ class ConsoleNode(Node):
         except (ValueError, IndexError):
             pass
 
+    # ------------------------------------------------------------------
+    # Gamepad E-Stop
+    # ------------------------------------------------------------------
+    # F710 in X (XInput) mode. Only used for the log line, so an unknown
+    # index just prints its number.
+    _JOY_BUTTON_NAMES = {0: "A", 1: "B", 2: "X", 3: "Y"}
+
+    def _joy_cb(self, msg: Joy):
+        """Fire the e-stop on a press of any configured face button.
+
+        Edge-triggered, because joy_node republishes at autorepeat_rate (20 Hz)
+        whether or not anything changed - level-triggering would re-fire and
+        re-print the banner forty times a second while the button is held.
+
+        The first message arrives with no previous state, so a button already
+        held when the console starts counts as a press. That is the safe
+        direction: a stuck or held button stops the robot rather than being
+        silently adopted as the baseline.
+        """
+        buttons = list(msg.buttons)
+        prev = self._joy_prev_buttons
+        self._joy_prev_buttons = buttons
+
+        if self.estop_latched:
+            return
+
+        for b in self.estop_joy_buttons:
+            pressed_now = b < len(buttons) and buttons[b]
+            pressed_before = b < len(prev) and prev[b]
+            if pressed_now and not pressed_before:
+                name = self._JOY_BUTTON_NAMES.get(b, str(b))
+                self._trigger_estop(f"gamepad button {name}")
+                return
+
+    def emit_estop(self, source: str):
+        """Put the kill on the wire and give DDS time to flush it.
+
+        Separated from _trigger_estop so the SIGINT handler can call it on a
+        console that is about to exit, where there is no next heartbeat and no
+        console left to update.
+
+        Published three times: the writer is RELIABLE, but its retransmissions
+        stop when the process dies, so on a lossy link the extra copies are
+        worth more than the microseconds they cost. The sleep is the flush
+        window - without it the interpreter can exit before the transport has
+        put anything on the wire. 0.1 s is well inside watchdog_timeout, so
+        even in the worst case this is strictly faster than the old fallback.
+        """
+        try:
+            for _ in range(3):
+                self.estop_pub.publish(Bool(data=True))
+            self.max_torque_percent_pub.publish(Float32(data=0.0))
+            time.sleep(0.1)
+        except Exception:
+            # Never let a failed publish stop the shutdown. If this did not get
+            # out, the heartbeat stops anyway and the watchdog still fires.
+            pass
+
+    def _trigger_estop(self, source: str):
+        """Cut the robot exactly as Ctrl-C on this console would, but stay alive.
+
+        Two mechanisms, deliberately layered:
+
+          1. max_torque_percent -> 0, published immediately. The robot acts on
+             it at its next policy step (~20 ms at 50 Hz) instead of waiting out
+             watchdog_timeout, and it lands in both pose and policy mode -
+             global_max_torque feeds active_max_torque either way, and the
+             driver goes kp=0 / kd=emergency_kd below 0.1 Nm.
+          2. The heartbeat stops (see heartbeat_loop). ~watchdog_timeout later
+             the robot's own CommandSafetyProcessor latches the stop, so it
+             stays down even if a stale torque message turns up afterwards, and
+             it stays down if this console then dies for real.
+
+        Mechanism 2 alone is what Ctrl-C does; 1 just removes the delay. If the
+        link to the robot is what failed, the button never arrives - but then
+        the heartbeat is not arriving either, so the watchdog cuts it anyway.
+        """
+        if self.estop_latched:
+            return
+        self.estop_latched = True
+        self._estop_confirmed = False
+
+        # 1. Explicit kill: latches on the robot, outranks the safety policy,
+        #    and cannot be undone except by /safety/reset.
+        self.estop_pub.publish(Bool(data=True))
+        # 2. Torque ceiling to zero, for anything that predates /safety/estop.
+        self.max_torque_percent_pub.publish(Float32(data=0.0))
+
+        # Drop back to pose mode so clearing the stop cannot resume the NN
+        # policy on a robot that is now lying collapsed on the floor. This does
+        # not weaken the stop - the latch holds torque at zero in either mode -
+        # it only decides what the robot wakes up as.
+        self.current_mode = "pose"
+        self.mode_pub.publish(String(data="pose"))
+
+        print("\r" + " " * 120 + "\r", end="", flush=True)
+        print(f"\n{_BOLD}{_RED}╔══════════════════════════════════════════════════════╗")
+        print(f"║  ⛔  E-STOP  —  {source:<37} ║")
+        print(f"╠══════════════════════════════════════════════════════╣")
+        print(f"║  ➜  Torque cut to 0 Nm and latched on the robot.     ║")
+        print(f"║  ➜  Robot goes kp=0 / kd=emergency_kd (damped sink). ║")
+        print(f"║  ➜  Mode dropped to POSE.                            ║")
+        print(f"║                                                      ║")
+        print(f"║  ➜  Release: [ENTER] on the robot's driver terminal. ║")
+        print(f"╚══════════════════════════════════════════════════════╝{_RESET}\n")
+        self._preserve_output = True
+
+        self.get_logger().error(f"[Console] E-STOP triggered by {source}")
+
+    def _estop_state_cb(self, msg: Bool):
+        """Follow the robot's latch.
+
+        Releasing happens at the robot (ENTER on the driver's terminal), so
+        this is how the console finds out. It also re-arms the gamepad: _joy_cb
+        ignores presses while estop_latched is set, so without this the pad
+        would go dead after the first stop of the session.
+        """
+        latched = bool(msg.data)
+        self._estop_confirmed = latched
+        if latched == self.estop_latched:
+            return
+        self.estop_latched = latched
+        if not latched:
+            print(f"\n{_YELLOW}{_BOLD}>>> E-STOP released at the robot.{_RESET}")
+            print(f"{_DIM}    Torque ceiling back to {self.max_torque_percent}%. "
+                  f"Robot is in POSE mode - it holds wherever it landed until "
+                  f"you command a pose.{_RESET}\n")
+            self._preserve_output = True
+            self.get_logger().warn("[Console] E-STOP released at the robot.")
+
     def _command_listener(self):
         """Listens for user commands from stdin to dynamically configure parameters."""
         import re
@@ -273,6 +439,7 @@ class ConsoleNode(Node):
             "Mode = policy!",
             "Mode = ",
             "Safety = reset",
+            "Estop = now",
             "Pose = stand",
             "Pose = lie_flat",
             "Pose = sit",
@@ -333,6 +500,18 @@ class ConsoleNode(Node):
                 elif param in ("kd", "d gain"):
                     self.kd = float(val_str)
                     self.kd_pub.publish(Float32(data=float(self.kd)))
+
+                elif param in ("estop", "kill"):
+                    action = val_str.lower().strip()
+                    if action in ("now", "on", "1", "stop", "kill"):
+                        self._trigger_estop("console command")
+                    elif action in ("clear", "reset", "off", "0"):
+                        print(f"\n{_RED}{_BOLD}>>> The console cannot clear an "
+                              f"e-stop.{_RESET}")
+                        print(f"{_DIM}    Press [ENTER] on the robot's driver "
+                              f"terminal to release it.{_RESET}\n")
+                        self._preserve_output = True
+                    continue
 
                 elif param in ("safety", "reset"):
                     if val_str.lower().strip() in ("reset", "clear", "1", "on"):
@@ -412,12 +591,28 @@ class ConsoleNode(Node):
         """Publish all safety parameters on their respective topics."""
         now = time.time()
 
-        # Core heartbeat (alive signal)
+        # Keep asserting the kill until the robot echoes it back, then stop.
+        # Un-acked means either the message was lost or no driver was listening
+        # yet - a driver that starts after the button was pressed would
+        # otherwise come up with torque enabled. Stopping once acked is what
+        # keeps this from re-latching the robot a moment after someone
+        # releases it at the machine.
+        if self.estop_latched and not self._estop_confirmed:
+            self.estop_pub.publish(Bool(data=True))
+
+        # Core heartbeat (alive signal). Kept running while e-stopped. The
+        # /safety/estop latch already holds torque at zero, and letting the
+        # watchdog trip on top of it would latch _policy_blocked as well -
+        # a second stop, needing a second acknowledgement, for one button
+        # press. Killing the console still trips the watchdog, which is the
+        # case the watchdog is actually for.
         self.heartbeat_pub.publish(Float32(data=float(now)))
 
-        # Safety parameters
+        # Safety parameters. Torque is forced to 0 while e-stopped so the cut
+        # keeps being asserted rather than resting on the watchdog alone.
         self.max_torque_percent_pub.publish(
-            Float32(data=float(self.max_torque_percent)))
+            Float32(data=0.0 if self.estop_latched
+                    else float(self.max_torque_percent)))
         self.base_tilt_pub.publish(
             Float32(data=float(self.base_tilt_limit_deg)))
         self.forward_tilt_pub.publish(
@@ -445,6 +640,14 @@ class ConsoleNode(Node):
         # Total display lines (including blanks): 14
         DISPLAY_LINES = 14
         
+        # Only restore the cursor if this cycle actually saved it. The restore
+        # below used to run whenever heartbeat_count > 1, including on cycles
+        # that took the _preserve_output or scroll-adjust path and never issued
+        # a \033[s - so it jumped to a position saved several redraws earlier,
+        # stranding the prompt next to a stale block while the live one was
+        # drawn somewhere else. That is the doubled status block.
+        saved_cursor = False
+
         if self.heartbeat_count > 1:
             if self._preserve_output:
                 # Do not move up: redraw below whatever was just printed so the
@@ -458,8 +661,14 @@ class ConsoleNode(Node):
             else:
                 # Save cursor position and move up
                 print(f"\033[s\033[{DISPLAY_LINES}A", end="")
+                saved_cursor = True
 
-        max_nm = (self.max_torque_percent / 100.0) * self.motor_max_torque
+        # While e-stopped the console publishes 0% regardless of the configured
+        # value, so report what the robot is actually being told, not the
+        # setting it will return to.
+        effective_torque_percent = (
+            0.0 if self.estop_latched else self.max_torque_percent)
+        max_nm = (effective_torque_percent / 100.0) * self.motor_max_torque
 
         # --- Build the Mode line with progress bar background fill ---
         mode_label = self.current_mode.upper()
@@ -490,9 +699,12 @@ class ConsoleNode(Node):
         print(f"\r\033[K")
         print(f"\r  {_CYAN}[Last Command]{_RESET}: {self.last_command}\033[K")
         print(f"\r\033[K")
-        print(f"\r{_GREEN}[Console]{_RESET} Heartbeat #{self.heartbeat_count}\033[K")
+        if self.estop_latched:
+            print(f"\r{_RED}{_BOLD}[Console] \u26d4 E-STOP LATCHED{_RESET}\033[K")
+        else:
+            print(f"\r{_GREEN}[Console]{_RESET} Heartbeat #{self.heartbeat_count}\033[K")
         print(mode_line)
-        print(f"\r ├─ Torque Limit : {self.max_torque_percent}% ({max_nm:.1f} Nm)\033[K")
+        print(f"\r ├─ Torque Limit : {effective_torque_percent}% ({max_nm:.1f} Nm)\033[K")
         print(f"\r ├─ Max Roll     : {self.base_tilt_limit_deg} deg\033[K")
         print(f"\r ├─ Max Pitch    : {self.base_forward_tilt_limit_deg} deg\033[K")
         print(f"\r ├─ Joint ROM    : {self.joint_rom_safety_margin*100:.0f}% margin\033[K")
@@ -502,7 +714,7 @@ class ConsoleNode(Node):
         freeze_indicator = f"{_CYAN}\u2744 FROZEN @ 1.0m{_RESET}" if self.freeze_base else "\u25cb off"
         print(f"\r \u2514\u2500 Base Freeze  : {freeze_indicator}\033[K")
 
-        if self.heartbeat_count > 1 and not use_scroll_adjust:
+        if saved_cursor:
             # Restore saved cursor position for standard continuous typing
             print("\033[u", end="", flush=True)
         else:
@@ -528,6 +740,30 @@ def main():
 
     rclpy.init()
     node = ConsoleNode(robot_type=args.robot)
+
+    # Ctrl-C dumps the robot immediately instead of leaving it to the watchdog.
+    #
+    # This cannot be done in the finally block below: rclpy installs its own
+    # SIGINT handler in init(), and that tears the context down before spin()
+    # returns - which is why spin raises ExternalShutdownException rather than
+    # KeyboardInterrupt (see the handler below). By the time finally runs there
+    # is no live context to publish on. Taking the signal ourselves keeps the
+    # context up long enough to send /safety/estop, and has the side benefit
+    # that rclpy.shutdown() in finally now actually runs instead of throwing on
+    # an already-dead context.
+    #
+    # A second Ctrl-C restores the default handler and hard-kills, so a console
+    # wedged somewhere that never checks signals is still escapable.
+    import signal
+
+    def _sigint_handler(signum, frame):
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        print(f"\n{_YELLOW}[Console] Ctrl-C — sending E-STOP...{_RESET}")
+        node.emit_estop("console Ctrl-C")
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, _sigint_handler)
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

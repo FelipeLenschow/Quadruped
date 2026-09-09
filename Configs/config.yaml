@@ -107,6 +107,11 @@ network:
 # --- Safety ---
 safety:
   watchdog_timeout: 0.35     # Seconds before the policy is cut if no heartbeat
+  # Gamepad e-stop. Any of these /joy button indices cuts the robot exactly as
+  # Ctrl-C on the console does. Defaults are the F710 face buttons in X mode
+  # (0=A 1=B 2=X 3=Y), which teleop_twist_joy leaves unused - the deadman is LB
+  # and turbo is RB - so there is nothing to collide with. Empty list disables.
+  estop_joy_buttons: [0, 1, 2, 3]
   emergency_kd: 5.0          # Damping applied on emergency stop (kp=0). Zero would
                              # leave the joints free and the robot would collapse;
                              # this makes it sink under control instead.

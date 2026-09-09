@@ -78,6 +78,7 @@ class LocomotionPipeline:
         self.latest_targets = self.desired_qpos.copy()
         self.step_counter = 0
         self._pose_heartbeat_was_ok = False  # Track heartbeat lost→alive transitions
+        self._was_estopped = False           # Track e-stop latched→released
 
         # Mode Transition State
         self.mode_transition_active = False
@@ -105,6 +106,16 @@ class LocomotionPipeline:
     def _mode_cb(self, msg: String):
         """Handle pipeline mode switch commands from the Console."""
         new_mode = msg.data.strip().lower()
+
+        # An e-stop is not a pause. Arming the policy while latched would let
+        # it start the instant someone pressed ENTER at the robot, on a robot
+        # still lying on the floor.
+        if new_mode == "policy" and self.safety_processor.is_estopped:
+            self.node.get_logger().warn(
+                "[Pipeline] Refusing policy mode: E-STOP is latched. "
+                "Release it at the robot first.")
+            return
+
         if new_mode in ("pose", "policy"):
             if new_mode != self.mode:
                 self.node.get_logger().info(
@@ -165,6 +176,30 @@ class LocomotionPipeline:
 
         # 2. Policy Inference & Command Processing
         if is_policy_step:
+
+            # ── E-STOP RELEASE ───────────────────────────────────────
+            # The operator pressed ENTER on the driver. Torque is about to
+            # come back on a robot that has been lying limp on the floor,
+            # and the pose generator is still holding whatever it was told
+            # before the collapse — usually a stand. Handing that back would
+            # snap every joint from the floor to standing at full torque.
+            #
+            # Re-seed from the measured joints instead (sync_to_current with
+            # no argument), which is the honest reading precisely because the
+            # robot was limp: with kp=0 there was no PD error to account for.
+            # The robot then holds exactly where it landed and waits for a
+            # pose command.
+            # ─────────────────────────────────────────────────────────
+            if self._was_estopped and not self.safety_processor.is_estopped:
+                self._was_estopped = False
+                self.mode = "pose"
+                self.mode_transition_active = False
+                pose_gen = self.policy_manager.policies.get("pose")
+                if pose_gen:
+                    pose_gen.sync_to_current()
+                self.node.get_logger().warn(
+                    "[Pipeline] E-STOP released — holding at measured joint "
+                    "positions in POSE mode.")
 
             if self.mode == "pose":
                 # ── POSE MODE ────────────────────────────────────────
@@ -236,6 +271,19 @@ class LocomotionPipeline:
                     proposed_targets=proposed_targets,
                     state=state
                 )
+
+            # ── HARD E-STOP OVERRIDE ─────────────────────────────
+            # active_max_torque already reads zero through its property, but
+            # the pose branch computes its own local max_torque and hands that
+            # to the distributor (and on to /commands/joint_commands), so it
+            # has to be cut here too. Targets hold at the last commanded value
+            # rather than snapping to the nominal stance: with kp=0 they do
+            # nothing now, and they avoid a jump if torque is restored.
+            if self.safety_processor.is_estopped:
+                self._was_estopped = True
+                final_targets = self.latest_targets
+                max_torque = 0.0
+                self.mode_transition_active = False
 
             # ── MODE TRANSITION INTERPOLATION ────────────────────
             if self.mode_transition_active:

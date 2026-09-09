@@ -122,6 +122,12 @@ class CommandSafetyProcessor:
         self._robot_safe = True
         self._shutdown_logged = False
         self._policy_blocked = False
+        # Hard e-stop latch, owned end-to-end by /safety/estop. Separate from
+        # _policy_blocked on purpose: that one is the tilt/ROM/watchdog state
+        # machine, this one is the operator's kill button, and each clears
+        # through its own channel.
+        self._estop_latched = False
+        self._estop_reset_running = False
         self.active_max_torque = 0.0   # Fail-safe start: zero torque
         self.last_heartbeat_time = 0.0
         self.has_received_heartbeat = False
@@ -149,10 +155,87 @@ class CommandSafetyProcessor:
             self._watchdog_timeout_cb, 10)
         self.node.create_subscription(
             Bool, "/safety/reset", self._safety_reset_cb, 10)
+        # Explicit e-stop. The watchdog is the backstop for a console that
+        # died without warning; this is the path for one that meant it, and it
+        # lands within a policy step instead of after watchdog_timeout.
+        self.node.create_subscription(
+            Bool, "/safety/estop", self._estop_cb, 10)
+        # Robot-side truth about the latch, so the console can report it
+        # honestly instead of assuming its own request took effect.
+        self._estop_state_pub = self.node.create_publisher(
+            Bool, "/safety/estop_state", 10)
 
         self.node.get_logger().info(
             f"[CommandSafetyProcessor] Gated safety arbitrator ready. "
             f"Waiting for Supervisor heartbeat...")
+
+    # ======================================================================
+    # E-Stop
+    # ======================================================================
+    @property
+    def active_max_torque(self) -> float:
+        """Torque ceiling every driver reads (real, MuJoCo, Gazebo, Isaac).
+
+        A property rather than a plain attribute so the e-stop cannot be
+        undone by a later write. Both the pose and policy paths assign to this
+        on every step; while the latch is set those writes are recorded but
+        reads stay at zero, so no code path can raise torque without first
+        going through /safety/reset.
+        """
+        return 0.0 if self._estop_latched else self._active_max_torque
+
+    @active_max_torque.setter
+    def active_max_torque(self, value: float):
+        self._active_max_torque = float(value)
+
+    @property
+    def is_estopped(self) -> bool:
+        return self._estop_latched
+
+    def _estop_cb(self, msg: Bool):
+        """Latch a hard stop. True latches; False is ignored.
+
+        Releasing is deliberately not possible over this topic, or any other.
+        It happens at the robot, by pressing ENTER on the driver's terminal -
+        so re-enabling torque takes someone standing next to the machine who
+        has looked at it, which is the point of an emergency stop. The console
+        can stop the robot from anywhere; it cannot start it again.
+
+        Independent of _policy_blocked and the tilt/ROM state machine. That one
+        describes a robot that broke a limit; this one describes an operator
+        who pressed a button. Each clears through its own channel.
+        """
+        if not msg.data or self._estop_latched:
+            return
+
+        self._estop_latched = True
+        self.active_max_torque = 0.0
+        self._estop_state_pub.publish(Bool(data=True))
+        self._print_estop_banner()
+        self.node.get_logger().error("[SAFETY] E-STOP latched via /safety/estop.")
+
+        if not self._estop_reset_running:
+            self._estop_reset_running = True
+            threading.Thread(target=self._estop_reset_worker, daemon=True).start()
+
+    def _estop_reset_worker(self):
+        """Wait for ENTER on the driver's stdin, then release the latch."""
+        try:
+            input()
+        except (EOFError, OSError):
+            self._estop_reset_running = False
+            self.node.get_logger().error(
+                "[SAFETY] E-STOP latched, but this driver has no interactive "
+                "stdin - nothing can release it. Restart the driver on the "
+                "robot, or run it in a terminal.")
+            return
+
+        self._estop_reset_running = False
+        self._estop_latched = False
+        self._estop_state_pub.publish(Bool(data=False))
+        print(f"{_YELLOW}{_BOLD}>>> E-STOP released. Torque ceiling back to "
+              f"{self.global_max_torque:.1f} Nm.{_RESET}")
+        self.node.get_logger().warn("[SAFETY] E-STOP released at the robot.")
 
     # ======================================================================
     # Heartbeat Callbacks
@@ -266,6 +349,14 @@ class CommandSafetyProcessor:
         Returns:
             (final_targets: np.ndarray, max_torque: float)
         """
+        # ── Hard E-Stop: outranks everything, including the safety policy ──
+        # Checked before _policy_blocked because that branch hands control to
+        # the recovery policy at full torque, which is not what an operator
+        # hitting the kill button is asking for.
+        if self._estop_latched:
+            self.active_max_torque = 0.0
+            return self.desired_qpos.copy(), 0.0
+
         # ── Latched Shutdown: stay blocked until operator presses Enter ──
         if self._policy_blocked:
             if "safety" in proposed_targets:
@@ -311,6 +402,19 @@ class CommandSafetyProcessor:
     # ======================================================================
     # UI / Reset
     # ======================================================================
+    def _print_estop_banner(self):
+        """Separate from _print_shutdown_banner, which offers an [ENTER] reset
+        serviced by _reset_worker. No such thread runs for the e-stop, so
+        reusing that banner would promise a key that does nothing."""
+        print("\r" + " " * 120 + "\r", end="", flush=True)
+        print(f"\n{_BOLD}{_RED}╔══════════════════════════════════════════════════════╗")
+        print(f"║  ⛔  E-STOP  —  torque cut to 0 Nm                   ║")
+        print(f"╠══════════════════════════════════════════════════════╣")
+        print(f"║  ➜  Latched. No policy, no pose, no recovery run.    ║")
+        print(f"║  ➜  Press [ENTER] HERE, on the robot, to release.    ║")
+        print(f"║     The console cannot clear this.                   ║")
+        print(f"╚══════════════════════════════════════════════════════╝{_RESET}\n")
+
     def _print_shutdown_banner(self, reason: str):
         print("\r" + " " * 120 + "\r", end="", flush=True)
         print(f"\n{_BOLD}{_RED}╔══════════════════════════════════════════════════════╗")
