@@ -212,7 +212,7 @@ class RewardEstimatorNode(Node):
             "foot_height_reward",
             "feet_air_penalty",
             "feet_air_penalty_static",
-            "joint_vel_l2_static",
+            "joint_vel_l2",
             "gait_phase_sym",
         ] + list(UNAVAILABLE_TERMS) + ["total_reward"]
 
@@ -385,7 +385,7 @@ class RewardEstimatorNode(Node):
             "foot_height_reward": self._rew('rew_scale_foot_height_reward') * foot_height_reward_val,
             "feet_air_penalty": self._rew('rew_scale_feet_air_penalty') * air_penalty_val,
             "feet_air_penalty_static": self._rew('rew_scale_feet_air_penalty_static') * air_penalty_val * static_mask,
-            "joint_vel_l2_static": self._rew('rew_scale_joint_vel_l2_static') * float(np.sum(self.dq ** 2)) * static_mask,
+            "joint_vel_l2": self._rew('rew_scale_joint_vel_l2') * float(np.sum(self.dq ** 2)),
             "gait_phase_sym": self._rew('rew_scale_gait_phase_sym') * gait_sym_val,
         }
         self.last_actions = self.actions.copy()

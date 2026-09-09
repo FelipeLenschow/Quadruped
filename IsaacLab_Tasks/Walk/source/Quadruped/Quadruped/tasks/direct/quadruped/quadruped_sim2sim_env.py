@@ -369,7 +369,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 self.cfg.rew_scale_foot_height,
                 self.cfg.rew_scale_feet_air_penalty,
                 self.cfg.rew_scale_feet_air_penalty_static,
-                self.cfg.rew_scale_joint_vel_l2_static,
+                self.cfg.rew_scale_joint_vel_l2,
                 self.cfg.rew_scale_base_height_l2,
                 self.cfg.rew_scale_trot_symmetry,
                 self.cfg.hip_sym_multiplier,
@@ -402,7 +402,7 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
                 zero_val, # foot_height_val
                 self.feet_air_penalty_val[sl],
                 zero_val, # feet_air_penalty_static_val
-                zero_val, # joint_vel_l2_static_val
+                zero_val, # joint_vel_l2_val
                 zero_val, # grf_balance_stance_val
                 zero_val, # joint_limit_val
                 zero_val, # first_step_val

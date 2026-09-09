@@ -52,10 +52,10 @@ default: &default
     rew_scale_dof_torques_l2: 0.0
     rew_scale_dof_acc_l2: 0.0
     rew_scale_action_rate_l2: 0.0
+    rew_scale_joint_vel_l2: 0.0
 
     rew_scale_feet_air_penalty: 0.0
     rew_scale_feet_air_penalty_static: 0.0
-    rew_scale_joint_vel_l2_static: 0.0
 
     rew_scale_pos_deviation_l1: 0.0
     rew_scale_yaw_deviation_l1: 0.0
@@ -160,6 +160,7 @@ phases:
       rew_scale_dof_torques_l2: -0.0002
       rew_scale_dof_acc_l2: -3.0e-7
       rew_scale_action_rate_l2: -0.01
+      rew_scale_joint_vel_l2: -5.0e-4
 
       rew_scale_foot_height: 0.4
       foot_height_bias: 0.0
@@ -225,6 +226,7 @@ phases:
       rew_scale_grf_balance_stance: -2.5
       # rew_scale_joint_limits: -0.5
       rew_scale_first_step: 25.0
+      rew_scale_joint_vel_l2: -5.0e-3
 
       rew_scale_gait_phase_sym: -0.15
 

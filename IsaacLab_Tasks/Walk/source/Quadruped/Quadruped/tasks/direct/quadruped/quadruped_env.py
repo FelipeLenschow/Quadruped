@@ -174,7 +174,7 @@ class QuadrupedEnv(DirectRLEnv):
         self.foot_landing_vel_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_penalty_static_val = torch.zeros(self.num_envs, device=self.device)
-        self.joint_vel_l2_static_val = torch.zeros(self.num_envs, device=self.device)
+        self.joint_vel_l2_val = torch.zeros(self.num_envs, device=self.device)
         self.dof_pos_l2_walk_val = torch.zeros(self.num_envs, device=self.device)
         self.dof_pos_l2_stance_val = torch.zeros(self.num_envs, device=self.device)
         self.hip_dev_l1_val = torch.zeros(self.num_envs, device=self.device)
@@ -1072,12 +1072,19 @@ class QuadrupedEnv(DirectRLEnv):
         self.feet_air_penalty_val = torch.sum(self.feet_air_time * (~contact).float(), dim=1)
         # Extra penalty when standing still (ramped static_mask computed above).
         self.feet_air_penalty_static_val = self.feet_air_penalty_val * static_mask
-        # Marching in place is exactly "zero base velocity, large joint velocity", so this is the
-        # term that targets it directly -- the velocity-tracking and pos_deviation rewards are both
-        # fully satisfied by a robot that steps without translating and give no pressure at all.
-        self.joint_vel_l2_static_val = (
-            torch.sum(torch.square(self.joint_vel), dim=1) * static_mask
-        )
+        # Joint-speed penalty, charged at every command. It used to be multiplied by static_mask
+        # to target marching in place ("zero base velocity, large joint velocity", which the
+        # velocity-tracking and pos_deviation rewards are both fully happy with). That gating made
+        # it inert: a stance that is actually still has sum(joint_vel^2) ~ 0, so the masked term
+        # was scoring nothing at rest, and nothing at all while walking. Ungated it still prices
+        # the marching case -- joint velocity is exactly what it reads -- and additionally taxes
+        # flailing at speed.
+        #
+        # Measured on the Final7pt2 policy in MuJoCo, sum(joint_vel^2) is ~0 standing, ~45 at
+        # 0.25 m/s, ~83 at 0.5, ~151 at 0.75 and ~195 at 1.0. It therefore rises with commanded
+        # speed and pushes against track_lin_vel_xy_exp at the top of the range, which is what
+        # bounds the scale -- see the rew_scale_joint_vel_l2 comment in training_phases.yaml.
+        self.joint_vel_l2_val = torch.sum(torch.square(self.joint_vel), dim=1)
 
         # DOF position deviation, split by static/moving (same ramp as everything else above) so
         # standing posture and walking posture can be regularized independently -- a joint
@@ -1516,7 +1523,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_foot_landing_vel,
             self.cfg.rew_scale_feet_air_penalty,
             self.cfg.rew_scale_feet_air_penalty_static,
-            self.cfg.rew_scale_joint_vel_l2_static,
+            self.cfg.rew_scale_joint_vel_l2,
             self.cfg.rew_scale_base_height_l2,
             self.cfg.rew_scale_grf_balance_stance,
             self.cfg.rew_scale_joint_limits,
@@ -1547,7 +1554,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.foot_landing_vel_val,
             self.feet_air_penalty_val,
             self.feet_air_penalty_static_val,
-            self.joint_vel_l2_static_val,
+            self.joint_vel_l2_val,
             self.dof_pos_l2_walk_val,
             self.dof_pos_l2_stance_val,
             self.hip_dev_l1_val,
@@ -1902,7 +1909,7 @@ def compute_rewards(
     rew_scale_foot_landing_vel: float,
     rew_scale_feet_air_penalty: float,
     rew_scale_feet_air_penalty_static: float,
-    rew_scale_joint_vel_l2_static: float,
+    rew_scale_joint_vel_l2: float,
     rew_scale_base_height_l2: float,
     rew_scale_grf_balance_stance: float,
     rew_scale_joint_limits: float,
@@ -1933,7 +1940,7 @@ def compute_rewards(
     foot_landing_vel_val: torch.Tensor,
     feet_air_penalty_val: torch.Tensor,
     feet_air_penalty_static_val: torch.Tensor,
-    joint_vel_l2_static_val: torch.Tensor,
+    joint_vel_l2_val: torch.Tensor,
     dof_pos_l2_walk_val: torch.Tensor,
     dof_pos_l2_stance_val: torch.Tensor,
     hip_dev_l1_val: torch.Tensor,
@@ -2049,7 +2056,7 @@ def compute_rewards(
 
     rew_feet_air_penalty = rew_scale_feet_air_penalty * feet_air_penalty_val
     rew_feet_air_penalty_static = rew_scale_feet_air_penalty_static * feet_air_penalty_static_val
-    rew_joint_vel_l2_static = rew_scale_joint_vel_l2_static * joint_vel_l2_static_val
+    rew_joint_vel_l2 = rew_scale_joint_vel_l2 * joint_vel_l2_val
     rew_grf_balance_stance = rew_scale_grf_balance_stance * grf_balance_stance_val
     # Joint-limit proximity (scale must be NEGATIVE); zero inside the allowed band.
     rew_joint_limits = rew_scale_joint_limits * joint_limit_val
@@ -2081,7 +2088,7 @@ def compute_rewards(
     log["reward/base_height_l2"] = rew_base_height_l2.mean()
     log["reward/feet_air_penalty"] = rew_feet_air_penalty.mean()
     log["reward/feet_air_penalty_static"] = rew_feet_air_penalty_static.mean()
-    log["reward/joint_vel_l2_static"] = rew_joint_vel_l2_static.mean()
+    log["reward/joint_vel_l2"] = rew_joint_vel_l2.mean()
     log["reward/grf_balance_stance"] = rew_grf_balance_stance.mean()
     log["reward/joint_limits"] = rew_joint_limits.mean()
     log["reward/first_step"] = rew_first_step.mean()
@@ -2093,6 +2100,7 @@ def compute_rewards(
     # Raw (unscaled) diagnostics -- useful to sanity-check a term is actually receiving live,
     # nonzero physical data before worrying about whether its reward *scale* is well tuned.
     log["diag/joint_acc_sum_sq_mean"] = torch.sum(torch.square(joint_acc), dim=1).mean()
+    log["diag/joint_vel_sum_sq_mean"] = joint_vel_l2_val.mean()
     log["diag/base_acc_sum_sq_mean"] = torch.sum(torch.square(base_acc), dim=1).mean()
 
     total_reward = (
@@ -2116,7 +2124,7 @@ def compute_rewards(
         + rew_base_height_l2
         + rew_feet_air_penalty
         + rew_feet_air_penalty_static
-        + rew_joint_vel_l2_static
+        + rew_joint_vel_l2
         + rew_grf_balance_stance
         + rew_joint_limits
         + rew_first_step
