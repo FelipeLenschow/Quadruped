@@ -1,5 +1,6 @@
 import os
 import time
+import zipfile
 import torch
 import torch.nn as nn
 import numpy as np
@@ -9,6 +10,14 @@ try:
     from Controller.robot_defaults import DEFAULT_STANCE_QPOS
 except ImportError:  # pragma: no cover - depends on caller's sys.path
     from robot_defaults import DEFAULT_STANCE_QPOS
+
+
+# Per-term observation scales from unitree_rl_lab's Go2 ObservationsCfg
+# (base_ang_vel scale=0.2, joint_vel_rel scale=0.05). Isaac Lab's observation manager
+# applies these before the policy's normalizer, so build_obs has to reproduce them for
+# the exported TorchScript to see the inputs it was trained on.
+UNITREE_ANG_VEL_SCALE = 0.2
+UNITREE_JOINT_VEL_SCALE = 0.05
 
 
 # Rotation helper
@@ -115,7 +124,34 @@ class PolicyRunner:
         # Detect single-step dim based on environment variable (default 49)
         self._obs_dim_single = int(os.environ.get("QUADRUPED_OBS_DIM_SINGLE", 49))
         if self.obs_dim % self._obs_dim_single != 0:
-            print(f"[PolicyRunner] WARNING: Total obs_dim {self.obs_dim} is not a multiple of single-step dim {self._obs_dim_single}.")
+            # A checkpoint whose obs_dim is not a multiple of the assumed single-step width
+            # but is itself small enough to BE one step is a policy with no observation
+            # history and a different command width -- the stock Isaac Lab velocity task
+            # (48: 3-wide commands) against our default of 49. Adopt it instead of limping
+            # on with a mismatched history buffer, which used to surface as a tensor-size
+            # error deep inside the observation scaler rather than here.
+            if 45 <= self.obs_dim <= 60:
+                print(
+                    f"[PolicyRunner] obs_dim {self.obs_dim} is not a multiple of "
+                    f"{self._obs_dim_single}; treating it as a single-step, no-history "
+                    f"policy and using {self.obs_dim} as the step width."
+                )
+                self._obs_dim_single = self.obs_dim
+            else:
+                print(f"[PolicyRunner] WARNING: Total obs_dim {self.obs_dim} is not a multiple of single-step dim {self._obs_dim_single}.")
+
+        # Which observation layout build_obs should emit. 45 is unambiguous: our own
+        # layout's fixed blocks already total 45 BEFORE the command block, which is never
+        # narrower than 3, so nothing of ours can land there. Override with
+        # QUADRUPED_OBS_LAYOUT=unitree|isaac if a future policy breaks that assumption.
+        self._obs_layout = os.environ.get(
+            "QUADRUPED_OBS_LAYOUT", "unitree" if self._obs_dim_single == 45 else "isaac"
+        )
+        if self._obs_layout == "unitree":
+            print(
+                "[PolicyRunner] Using the unitree_rl_lab observation layout: no base_lin_vel, "
+                f"ang_vel x{UNITREE_ANG_VEL_SCALE}, joint_vel x{UNITREE_JOINT_VEL_SCALE}."
+            )
 
         self._obs_history_len = max(1, self.obs_dim // self._obs_dim_single)
         self._obs_history = np.zeros(
@@ -131,16 +167,48 @@ class PolicyRunner:
         self.decimation = 4  # Default for 200Hz -> 50Hz
 
     def _check_is_jit(self, path):
-        # SKRL usually uses .pt for state dicts. JIT models are different.
-        # We only treat as JIT if explicitly told or if .jit extension
+        """True if `path` is a TorchScript archive rather than a state dict.
+
+        Extension alone is not enough: rsl_rl's export_policy_as_jit writes TorchScript to
+        `exported/policy.pt`, so the unitree_rl_lab baselines arrive as .pt files that the
+        state-dict loader cannot read. Both formats are zip archives since torch 1.6, but
+        only TorchScript carries a `code/` directory (the serialized graph) -- a state dict
+        holds just data.pkl and its tensor storages. Checking for that entry separates them
+        without paying to load the model twice.
+        """
         if path.endswith(".jit"):
             return True
-        return False
+        if not path.endswith(".pt"):
+            return False
+        try:
+            with zipfile.ZipFile(path) as z:
+                return any("/code/" in name for name in z.namelist())
+        except (zipfile.BadZipFile, OSError):
+            return False
 
     def _detect_jit_obs_dim(self, model):
-        # Infer obs_dim from the model's forward signature or weight shape if possible
-        # For now, we rely on the environment variable or common defaults
-        return int(os.environ.get("QUADRUPED_OBS_DIM", 49))
+        """Infer the input width of a TorchScript policy from its own parameters.
+
+        The old fallback of 49 was our own layout, so any foreign JIT (the 45-wide Unitree
+        baseline) silently got the wrong width and failed downstream on a shape mismatch.
+        Two signals, cheapest first: an exported normalizer's running_mean is exactly one
+        observation wide, and failing that the first 2-D weight of the MLP is
+        [hidden, obs_dim]. QUADRUPED_OBS_DIM still overrides both.
+        """
+        env_override = os.environ.get("QUADRUPED_OBS_DIM")
+        if env_override:
+            return int(env_override)
+        try:
+            sd = model.state_dict()
+            for name, tensor in sd.items():
+                if "running_mean" in name and tensor.dim() == 1:
+                    return int(tensor.shape[0])
+            for name, tensor in sd.items():
+                if tensor.dim() == 2:
+                    return int(tensor.shape[1])
+        except Exception as e:
+            print(f"[PolicyRunner] Could not infer JIT obs_dim ({e}); falling back to 49.")
+        return 49
 
     def _inspect_checkpoint(self, path):
         """Detect obs_dim and layer sizes from checkpoint keys and shapes."""
@@ -148,6 +216,20 @@ class PolicyRunner:
         layers = [512, 256, 128]  # Default fallback
         try:
             data = torch.load(path, map_location="cpu")
+
+            # rsl_rl (unitree_rl_lab, and Isaac Lab's rsl_rl workflow) writes a different
+            # archive than skrl: model_state_dict / optimizer_state_dict / iter / infos.
+            # None of the lookups below match it, so obs_dim silently kept the 236 fallback
+            # and the mismatch only surfaced much later as a tensor-size error inside the
+            # observation scaler. Refuse it here, and say what to load instead: rsl_rl's
+            # play.py writes a TorchScript policy next to the run, which this loader reads.
+            if "model_state_dict" in data and "policy" not in data:
+                raise ValueError(
+                    f"{os.path.basename(path)} is an rsl_rl checkpoint, which this loader "
+                    "cannot read. Run rsl_rl's play.py once and load the TorchScript it "
+                    "exports to <run_dir>/exported/policy.pt instead."
+                )
+
             policy_state = data.get("policy", {})
 
             # Detect OBS_DIM from first layer
@@ -169,6 +251,8 @@ class PolicyRunner:
             if layer_sizes:
                 layers = layer_sizes
 
+        except ValueError:
+            raise
         except Exception as e:
             print(f"[PolicyRunner] Warning: Inspection failed: {e}")
         return obs_dim, layers
@@ -222,6 +306,10 @@ class PolicyRunner:
                 "[PolicyRunner]   state_preprocessor (skrl < 2.1.0), running_standard_scaler.\n"
                 "[PolicyRunner]   The robot will almost certainly not stand. Fix the key, do not\n"
                 "[PolicyRunner]   retrain.\n"
+                "[PolicyRunner]   EXCEPTION: the stock Isaac Lab velocity tasks set\n"
+                "[PolicyRunner]   state_preprocessor: null, so their checkpoints legitimately carry no\n"
+                "[PolicyRunner]   scaler and are trained on raw observations. For those this warning is\n"
+                "[PolicyRunner]   expected and the identity scaler above is correct.\n"
                 "[PolicyRunner] " + "!" * 60
             )
 
@@ -249,15 +337,55 @@ class PolicyRunner:
         jpos_isaac = mj_qpos[mj_to_isaac]
         jvel_isaac = mj_qvel[mj_to_isaac]
 
-        obs_parts = [
-            lin_vel_b,
-            ang_vel_b,
-            proj_grav,
-            commands,
-            jpos_isaac - desired_qpos,
-            jvel_isaac,
-            last_actions,
-        ]
+        # Command width is whatever is left over once the fixed-size blocks are accounted
+        # for: 3 lin_vel + 3 ang_vel + 3 proj_grav + 12 joint_pos + 12 joint_vel + 12
+        # actions = 45. Our own policies carry a 4th command element, so they read 49; the
+        # stock Isaac Lab velocity task (Isaac-Velocity-Flat-Unitree-Go2-v0) emits only
+        # [vx, vy, wz] and reads 48. Slicing here rather than at the caller keeps every
+        # command producer in the codebase unchanged -- the extra element is simply not
+        # shown to a policy that was never trained on it. The block order is otherwise
+        # identical between the two, which is what makes this a one-line difference.
+        cmd = np.asarray(commands).ravel()
+        if self._obs_layout == "unitree":
+            # unitree_rl_lab's Go2 velocity task. Two structural differences from every
+            # other policy here, both from its ObservationsCfg:
+            #   * base_lin_vel is in the CRITIC group only -- the actor never sees it. It
+            #     is an asymmetric actor-critic, so the block is absent, not zeroed.
+            #   * base_ang_vel and joint_vel carry per-term `scale=` factors. Those are
+            #     applied by Isaac Lab's observation manager BEFORE the policy's own
+            #     normalizer, so the exported TorchScript (which bakes in the normalizer)
+            #     still expects them pre-scaled here.
+            # Getting either wrong produces a plausible-looking but meaningless rollout,
+            # which is why the width check below is a hard failure rather than a warning.
+            # asarray, not a bare multiply: the real and MuJoCo drivers hand gyroscope in
+            # as a plain list, and list * float is a TypeError rather than a scale.
+            obs_parts = [
+                np.asarray(ang_vel_b, dtype=np.float32) * UNITREE_ANG_VEL_SCALE,
+                proj_grav,
+                cmd[:3],
+                jpos_isaac - desired_qpos,
+                np.asarray(jvel_isaac, dtype=np.float32) * UNITREE_JOINT_VEL_SCALE,
+                last_actions,
+            ]
+        else:
+            # Command width is whatever is left over once the fixed-size blocks are accounted
+            # for: 3 lin_vel + 3 ang_vel + 3 proj_grav + 12 joint_pos + 12 joint_vel + 12
+            # actions = 45. Our own policies carry a 4th command element, so they read 49; the
+            # stock Isaac Lab velocity task (Isaac-Velocity-Flat-Unitree-Go2-v0) emits only
+            # [vx, vy, wz] and reads 48. Slicing here rather than at the caller keeps every
+            # command producer in the codebase unchanged -- the extra element is simply not
+            # shown to a policy that was never trained on it. The block order is otherwise
+            # identical between the two, which is what makes this a one-line difference.
+            n_cmd = max(0, self._obs_dim_single - 45)
+            obs_parts = [
+                lin_vel_b,
+                ang_vel_b,
+                proj_grav,
+                cmd[:n_cmd],
+                jpos_isaac - desired_qpos,
+                jvel_isaac,
+                last_actions,
+            ]
 
 
 
@@ -269,6 +397,16 @@ class PolicyRunner:
             self._obs_debug_done = True
 
         obs_single = np.concatenate(obs_parts).astype(np.float32)
+        # Fail loudly on a layout/width mismatch. Silently handing a policy the wrong number
+        # of inputs used to surface as a torch shape error several frames deeper, or -- worse,
+        # when the widths happened to agree but the blocks did not -- as a rollout that looks
+        # like a merely bad policy. Either way the sweep numbers would be meaningless.
+        if obs_single.shape[0] != self._obs_dim_single:
+            raise ValueError(
+                f"[PolicyRunner] Built a {obs_single.shape[0]}-wide observation but the policy "
+                f"expects {self._obs_dim_single} (layout '{self._obs_layout}'). Block sizes were "
+                f"{[len(p) for p in obs_parts]}."
+            )
 
         # Roll history: shift oldest out, insert current at front
         self._obs_history = np.roll(self._obs_history, shift=1, axis=0)
