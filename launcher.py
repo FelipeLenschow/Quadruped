@@ -626,8 +626,11 @@ def run_cli_menu():
         # unitree_rl_lab lives here so its logs sit alongside the others (the eval viewer and the
         # checkpoint list both read it in place), but it is a separate upstream repo with its own
         # train/play scripts and no Quadruped task package -- train and play here would fail on
-        # the missing source/Quadruped tree. Offer it only for the actions that just read logs.
-        if "unitree_rl_lab" in modules and action not in ("eval_policy", "mujoco", "mujoco_twin"):
+        # the missing source/Quadruped tree. Offer it only for the actions that load the
+        # checkpoint through Controller/policy_runner.py, which reads rsl_rl archives directly.
+        # Deploy is one of them: its run's params/deploy.yaml (kp 25, kd 0.5, 50 Hz, action
+        # scale 0.25, default pose) matches what real_driver.py and robot_defaults.py apply.
+        if "unitree_rl_lab" in modules and action not in ("eval_policy", "mujoco", "mujoco_twin", "real_deploy"):
             modules.remove("unitree_rl_lab")
         
         if not modules:
