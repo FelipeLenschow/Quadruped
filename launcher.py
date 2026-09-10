@@ -627,7 +627,7 @@ def run_cli_menu():
         # checkpoint list both read it in place), but it is a separate upstream repo with its own
         # train/play scripts and no Quadruped task package -- train and play here would fail on
         # the missing source/Quadruped tree. Offer it only for the actions that just read logs.
-        if "unitree_rl_lab" in modules and action not in ("eval", "mujoco", "mujoco_twin"):
+        if "unitree_rl_lab" in modules and action not in ("eval_policy", "mujoco", "mujoco_twin"):
             modules.remove("unitree_rl_lab")
         
         if not modules:
