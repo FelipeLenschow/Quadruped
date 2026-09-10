@@ -1,8 +1,9 @@
 import os
 import json
+import math
 import glob
 import re
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import urllib.parse
 from pathlib import Path
 
@@ -78,13 +79,25 @@ def _flatten_cfg(env_cfg, agent_cfg):
 
 
 def _find_event_files():
-    pat = os.path.join(MODULE_DIR, "**", "events.out.tfevents*")
-    return sorted(set(glob.glob(pat, recursive=True)))
+    out = []
+    for root in MODULE_DIRS:
+        out += glob.glob(os.path.join(root, "**", "events.out.tfevents*"), recursive=True)
+    return sorted(set(out))
 
 
 def _find_report_files():
-    pat = os.path.join(MODULE_DIR, "**", "*mujoco_eval_report*.json")
-    return sorted(set(glob.glob(pat, recursive=True)))
+    """Every sweep report under the module, from either simulator.
+
+    Two writers produce these now: Mujoco/eval_mujoco.py -> mujoco_eval_report_<ckpt>.json and
+    unitree_rl_lab/scripts/rsl_rl/sweep.py -> isaac_eval_report_<ckpt>.json. The Isaac ones are
+    the primary measurement for any policy whose actor has no base_lin_vel input -- it runs open
+    loop on velocity, so its MuJoCo numbers understate it badly (a 1.0 m/s command reads 0.74 in
+    MuJoCo and 0.96 in Isaac for the same checkpoint). Match both and let the sidebar say which.
+    """
+    out = []
+    for root in MODULE_DIRS:
+        out += glob.glob(os.path.join(root, "**", "*eval_report*.json"), recursive=True)
+    return sorted(set(out))
 
 
 def _reports_by_run_dir():
@@ -192,9 +205,23 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "Tools", "viewer_frontend")
 # Index only this task module. Each IsaacLab_Tasks/<module> is an independent copy of the task with
 # its own rewards and its own logs, so indexing all of them charts unrelated reward functions on
 # shared axes -- and every extra run costs a tfevents parse on each /api/runs call. Override with
-# VIEWER_MODULE=Stairs (etc.) to point the dashboard at another one.
-VIEWER_MODULE = os.environ.get("VIEWER_MODULE", "Walk")
-MODULE_DIR = os.path.join(BASE_DIR, "IsaacLab_Tasks", VIEWER_MODULE)
+# VIEWER_MODULES=Stairs (etc.) to point the dashboard at another one.
+# Comma-separated, because the paper needs the unitree baselines charted against Walk's runs on
+# the same axes -- and the alternative was copying reports into Walk/logs by hand, which meant
+# two copies of every file and a stale one the moment a sweep was re-run.
+#
+# The warning above still stands for the general case: two modules with different reward
+# functions on one axis is a comparison that has to be intended. VIEWER_MODULES=Walk restores
+# the old single-module behaviour.
+VIEWER_MODULES = [
+    m.strip()
+    for m in os.environ.get("VIEWER_MODULES", os.environ.get("VIEWER_MODULE", "Walk,unitree_rl_lab")).split(",")
+    if m.strip()
+]
+MODULE_DIRS = [os.path.join(BASE_DIR, "IsaacLab_Tasks", m) for m in VIEWER_MODULES]
+MODULE_DIRS = [d for d in MODULE_DIRS if os.path.isdir(d)]
+# Kept for the code paths that still want a single root (run naming, relpath bases).
+MODULE_DIR = MODULE_DIRS[0] if MODULE_DIRS else os.path.join(BASE_DIR, "IsaacLab_Tasks", "Walk")
 
 def _report_identity(file_path, meta):
     """Split an eval report into the run it belongs to and the checkpoint inside that run, so the
@@ -212,7 +239,7 @@ def _report_identity(file_path, meta):
 
     label = (meta or {}).get("checkpoint_name") or ""
     if not label or label in ("None", "Unknown"):
-        label = re.sub(r"^.*mujoco_eval_report_?", "", os.path.basename(file_path))
+        label = re.sub(r"^.*?(mujoco|isaac)_eval_report_?", "", os.path.basename(file_path))
     label = re.sub(r"\.(pt|json)$", "", label)
     label = re.sub(r"^agent_", "", label)
     steps = int(label) if label.isdigit() else None
@@ -223,11 +250,44 @@ def _report_identity(file_path, meta):
     elif not label:
         label = "latest"
 
-    return {"run_name": run_name, "run_id": run_id,
+    # Which simulator produced it. metadata wins; otherwise read it off the filename, so the
+    # older MuJoCo reports (written before the field existed) still identify correctly.
+    simulator = (meta or {}).get("simulator")
+    if not simulator:
+        simulator = "isaac" if "isaac_eval_report" in os.path.basename(file_path) else "mujoco"
+    # Same checkpoint swept in both simulators must not collapse into one sidebar entry.
+    if simulator == "isaac":
+        label = f"{label} [isaac]"
+
+    return {"run_name": run_name, "run_id": run_id, "simulator": simulator,
             "checkpoint_label": label, "checkpoint_steps": steps}
 
 
+def _json_safe(obj):
+    """Replace NaN/Infinity with null, recursively.
+
+    json.dumps emits bare NaN / Infinity tokens for non-finite floats. That is valid Python and
+    invalid JSON, and the browser's JSON.parse rejects the ENTIRE response -- so one report with
+    a single NaN in it blanks the whole dashboard with a parse error pointing at a byte offset
+    that says nothing about which file is at fault. Sanitising here means a bad report costs its
+    own cell, not everyone else's.
+    """
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
 class EvalReportHandler(SimpleHTTPRequestHandler):
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=FRONTEND_DIR, **kwargs)
 
@@ -237,13 +297,19 @@ class EvalReportHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def _json(self, obj):
-        body = json.dumps(obj).encode('utf-8')
+        body = json.dumps(_json_safe(obj), allow_nan=False).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The client went away before the response finished -- a reload, a closed tab, or a
+            # request the page superseded. Nothing is wrong on this side and there is nobody
+            # left to tell, so do not let socketserver print a traceback for it.
+            pass
 
     def do_GET(self):
         parsed_path = urllib.parse.urlparse(self.path)
@@ -333,8 +399,11 @@ class EvalReportHandler(SimpleHTTPRequestHandler):
                 
             reports.sort(key=get_timestamp, reverse=True)
             
-            response = json.dumps({"reports": reports})
-            self.wfile.write(response.encode('utf-8'))
+            response = json.dumps(_json_safe({"reports": reports}), allow_nan=False)
+            try:
+                self.wfile.write(response.encode('utf-8'))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
             
         # Serve frontend files
@@ -344,11 +413,19 @@ def main():
     os.makedirs(FRONTEND_DIR, exist_ok=True)
     
     server_address = ('', PORT)
-    httpd = HTTPServer(server_address, EvalReportHandler)
+    # Threading, not the plain HTTPServer. /api/runs parses every tfevents file under every
+    # indexed module -- 27 of them once unitree_rl_lab is included -- and on a single-threaded
+    # server that blocks the page's own static assets behind it, so the browser gives up
+    # mid-response and the log fills with BrokenPipeError tracebacks.
+    httpd = ThreadingHTTPServer(server_address, EvalReportHandler)
     
     print("="*60)
     print(f"🚀 Quadruped training / evaluation dashboard running!")
-    print(f"📦 Module     {VIEWER_MODULE}  (set VIEWER_MODULE to change)")
+    missing = [m for m in VIEWER_MODULES if not os.path.isdir(os.path.join(BASE_DIR, "IsaacLab_Tasks", m))]
+    print(f"📦 Modules    {', '.join(VIEWER_MODULES)}  (set VIEWER_MODULES to change)")
+    if missing:
+        print(f"⚠️  not found under IsaacLab_Tasks/: {', '.join(missing)} — skipped.")
+    print(f"📊 Indexing   {len(_find_report_files())} eval reports, {len(_find_event_files())} runs")
     print(f"🔗 Dashboard  http://localhost:{PORT}/")
     if not HAS_TB:
         print("⚠️  tensorboard not importable — training curves will be empty.")

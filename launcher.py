@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import time
 import glob
@@ -622,6 +623,12 @@ def run_cli_menu():
     
     if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
+        # unitree_rl_lab lives here so its logs sit alongside the others (the eval viewer and the
+        # checkpoint list both read it in place), but it is a separate upstream repo with its own
+        # train/play scripts and no Quadruped task package -- train and play here would fail on
+        # the missing source/Quadruped tree. Offer it only for the actions that just read logs.
+        if "unitree_rl_lab" in modules and action not in ("eval", "mujoco", "mujoco_twin"):
+            modules.remove("unitree_rl_lab")
         
         if not modules:
             print(f"[ERROR] No modules found in {TASKS_DIR}!")
@@ -648,8 +655,30 @@ def run_cli_menu():
     # Also check a 'checkpoints' folder at the module root just in case
     checkpoint_paths += glob.glob(os.path.join(selected_module_path, "checkpoints", "*.pt"))
     
-    # Filter to only show 'best_agent.pt'
+    # skrl writes one best_agent.pt per run, which is what this list is built from. rsl_rl
+    # (IsaacLab_Tasks/unitree_rl_lab) writes model_<iter>.pt instead and has no "best", so those
+    # runs used to be invisible here and had to be hand-copied into Walk/logs under the right
+    # name. Take the highest-ITERATION checkpoint of each rsl_rl run instead.
+    #
+    # By iteration, not by name: sorted alphabetically "model_900" beats "model_5999", which is
+    # the same trap rsl_rl's own get_checkpoint_path falls into and silently hands back a
+    # 15%-trained policy.
     all_ckpts = [p for p in checkpoint_paths if os.path.basename(p) == "best_agent.pt"]
+
+    rsl_runs = {}
+    for path in checkpoint_paths:
+        m = re.fullmatch(r"model_(\d+)\.pt", os.path.basename(path))
+        if not m:
+            continue
+        run_dir = os.path.dirname(path)
+        step = int(m.group(1))
+        if step >= rsl_runs.get(run_dir, (-1, None))[0]:
+            rsl_runs[run_dir] = (step, path)
+    # rsl_rl's save_interval is 100, so a run whose highest checkpoint is below that never
+    # reached its first scheduled save -- it is an abort or a smoke test (the 49-iteration
+    # height-scanner A/B, the runs killed at startup), and offering it for evaluation is noise.
+    all_ckpts += [path for step, path in rsl_runs.values() if step >= 100]
+
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
