@@ -144,12 +144,15 @@ class PolicyRunner:
         # layout's fixed blocks already total 45 BEFORE the command block, which is never
         # narrower than 3, so nothing of ours can land there. Override with
         # QUADRUPED_OBS_LAYOUT=unitree|isaac if a future policy breaks that assumption.
-        self._obs_layout = os.environ.get(
-            "QUADRUPED_OBS_LAYOUT", "unitree" if self._obs_dim_single == 45 else "isaac"
-        )
+        self._obs_layout = os.environ.get("QUADRUPED_OBS_LAYOUT") or self._detect_obs_layout(checkpoint_path)
         if self._obs_layout == "unitree":
             print(
                 "[PolicyRunner] Using the unitree_rl_lab observation layout: no base_lin_vel, "
+                f"ang_vel x{UNITREE_ANG_VEL_SCALE}, joint_vel x{UNITREE_JOINT_VEL_SCALE}."
+            )
+        elif self._obs_layout == "unitree_vel":
+            print(
+                "[PolicyRunner] Using the unitree_rl_lab observation layout WITH base_lin_vel: "
                 f"ang_vel x{UNITREE_ANG_VEL_SCALE}, joint_vel x{UNITREE_JOINT_VEL_SCALE}."
             )
 
@@ -213,6 +216,7 @@ class PolicyRunner:
     def _inspect_checkpoint(self, path):
         """Detect obs_dim and layer sizes from checkpoint keys and shapes."""
         self._ckpt_format = "skrl"
+        self._skrl_head_in_container = False
         obs_dim = 236
         layers = [512, 256, 128]  # Default fallback
         try:
@@ -249,6 +253,29 @@ class PolicyRunner:
                     i += 2  # Skip activation
                 else:
                     break
+            # Where the output layer lives depends on skrl's `models.separate`, and the archive
+            # is the only record of which was used:
+            #   separate: False -- policy and value share a trunk and each get a head, so the
+            #     state dict is net_container.<hidden...> plus `policy_layer` (and `value_layer`).
+            #   separate: True  -- the policy is a standalone Sequential and its OUTPUT layer is
+            #     simply the last net_container entry. There is no `policy_layer` key at all.
+            # rsl_rl's ActorCritic has the same shape as the second case, which is why
+            # _load_rsl_rl_checkpoint already renames its final Linear to policy_layer.
+            #
+            # Treating every net_container entry as hidden in the second case builds one layer
+            # too many (and an ELU after the action head), and PolicyMLP's real policy_layer then
+            # keeps its RANDOM init while the trained head is dropped by strict=False. The result
+            # is not a crash and not a bad gait: a near-constant small action at every command,
+            # i.e. a robot that stands perfectly still and never falls, at 0.05 m/s and at
+            # 1.0 m/s alike. That reads as a dead policy and is a dead loader.
+            if layer_sizes and "policy_layer.weight" not in policy_state:
+                self._skrl_head_in_container = True
+                action_dim = layer_sizes[-1]
+                layer_sizes = layer_sizes[:-1]
+                print(
+                    "[PolicyRunner] skrl separate-model layout: output layer is the last "
+                    f"net_container entry ({layer_sizes[-1] if layer_sizes else '?'} -> {action_dim})."
+                )
             if layer_sizes:
                 layers = layer_sizes
 
@@ -290,6 +317,40 @@ class PolicyRunner:
         self._check_rsl_rl_activation(path)
         return obs_dim, layers
 
+    def _detect_obs_layout(self, path):
+        """Which observation layout to build, read from the run's config where possible.
+
+        Width alone no longer decides. 48 is AMBIGUOUS: the stock Isaac Lab velocity task emits
+        [lin_vel, ang_vel, grav, cmd(3), jpos, jvel, act] with no per-term scales, while
+        unitree_rl_lab's velocity-feedback arms emit the same blocks WITH ang_vel x0.2 and
+        joint_vel x0.05 baked in by the observation manager. Same width, different numbers --
+        and feeding one to a policy trained on the other produces a plausible rollout that means
+        nothing, which is the failure this file exists to catch.
+
+        params/env.yaml records the observation terms and their scales, so read it rather than
+        guess. Fall back to the width heuristic only when there is no params/ to consult (a
+        checkpoint copied away from its run directory), and say which was used either way.
+        """
+        env_cfg = self._run_params(path, "env.yaml") or {}
+        policy = ((env_cfg.get("observations") or {}).get("policy")) or {}
+        terms = {k: v for k, v in policy.items() if isinstance(v, dict) and "func" in v}
+        if terms:
+            scaled = any(v.get("scale") for v in terms.values())
+            if scaled:
+                layout = "unitree_vel" if "base_lin_vel" in terms else "unitree"
+            else:
+                layout = "isaac"
+            print(f"[PolicyRunner] Observation layout '{layout}' read from the run's params/env.yaml.")
+            return layout
+
+        layout = "unitree" if self._obs_dim_single == 45 else "isaac"
+        print(
+            f"[PolicyRunner] No params/env.yaml beside this checkpoint; guessing layout "
+            f"'{layout}' from its width ({self._obs_dim_single}). Pass QUADRUPED_OBS_LAYOUT to "
+            "override if this policy carries per-term observation scales."
+        )
+        return layout
+
     @staticmethod
     def _run_params(path, name="agent.yaml"):
         """Parse `<run>/params/<name>` for a checkpoint at `<run>/checkpoints/<x>.pt`.
@@ -300,16 +361,44 @@ class PolicyRunner:
         Returns None when there is nothing to read -- a checkpoint copied out of its run
         directory has no params/, so every caller has to stay correct without it.
         """
-        cfg_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(path))), "params", name
-        )
-        if not os.path.exists(cfg_path):
+        # Two layouts in play: skrl writes <run>/checkpoints/<ckpt>.pt with params one level up,
+        # while rsl_rl writes <run>/model_<iter>.pt with params beside it. Try both rather than
+        # assuming, or an rsl_rl checkpoint silently loses its config and every decision that
+        # depends on it (observation layout, scaler, activation) falls back to a guess.
+        here = os.path.dirname(os.path.abspath(path))
+        for base in (os.path.dirname(here), here):
+            cfg_path = os.path.join(base, "params", name)
+            if os.path.exists(cfg_path):
+                break
+        else:
             return None
         try:
             import yaml
 
+            # Isaac Lab dumps these configs with python-specific tags (!!python/tuple, and
+            # !!python/object for the cfg classes), which SafeLoader refuses outright -- so a
+            # plain safe_load returns nothing for every run in this repo. unsafe_load would
+            # parse it by importing whatever the tags name, which is not something to do to a
+            # file just because it sits next to a checkpoint. Resolve the tags we understand and
+            # drop the rest: everything read from here is plain data (scales, term names, flags).
+            class _TolerantLoader(yaml.SafeLoader):
+                pass
+
+            _TolerantLoader.add_constructor(
+                "tag:yaml.org,2002:python/tuple",
+                lambda loader, node: loader.construct_sequence(node),
+            )
+            _TolerantLoader.add_multi_constructor(
+                "tag:yaml.org,2002:python/",
+                lambda loader, suffix, node: (
+                    loader.construct_mapping(node, deep=True)
+                    if isinstance(node, yaml.MappingNode)
+                    else None
+                ),
+            )
+
             with open(cfg_path) as f:
-                return yaml.safe_load(f) or {}
+                return yaml.load(f, Loader=_TolerantLoader) or {}
         except Exception as e:  # a missing or odd yaml must not block a valid checkpoint
             print(f"[PolicyRunner] Could not read {cfg_path} ({e}).")
             return None
@@ -423,7 +512,35 @@ class PolicyRunner:
                 clean_key = k.split("_model.")[-1]
                 net_keys[clean_key] = v
 
-        self.policy.load_state_dict(net_keys, strict=False)
+        # separate: True -- the trained output layer is the last net_container entry; move it to
+        # where PolicyMLP keeps the head. Same rename _load_rsl_rl_checkpoint does. See
+        # _inspect_checkpoint for what going without this looks like.
+        if getattr(self, "_skrl_head_in_container", False):
+            idx = max(
+                int(k.split(".")[1])
+                for k in net_keys
+                if k.startswith("net_container.") and k.endswith(".weight")
+            )
+            net_keys["policy_layer.weight"] = net_keys.pop(f"net_container.{idx}.weight")
+            net_keys["policy_layer.bias"] = net_keys.pop(f"net_container.{idx}.bias")
+
+        incompatible = self.policy.load_state_dict(net_keys, strict=False)
+        # strict=False is needed for the training-only tensors skrl stores next to the weights
+        # (log_std_parameter, and the value head under separate: False), but it will just as
+        # happily accept a state dict that fills NONE of the network. Anything the policy still
+        # needs after the load is a silent, plausible-looking, meaningless rollout -- so name it
+        # and stop, rather than driving a robot with a randomly initialised layer.
+        if incompatible.missing_keys:
+            raise ValueError(
+                "checkpoint did not supply every policy weight; these were left at their random "
+                f"initialisation: {sorted(incompatible.missing_keys)}.\n"
+                f"  Keys offered by the checkpoint: {sorted(net_keys)}\n"
+                "  A partial load does not crash and does not walk -- it holds a pose at every "
+                "command. Fix the key mapping, do not retrain."
+            )
+        ignored = [k for k in incompatible.unexpected_keys if k != "log_std_parameter"]
+        if ignored:
+            print(f"[PolicyRunner] Ignored non-actor tensors from the checkpoint: {sorted(ignored)}")
 
         # Load scaler. skrl renamed this key from "state_preprocessor" to
         # "observation_preprocessor" in 2.1.0, so checkpoints trained before and after the
@@ -508,7 +625,21 @@ class PolicyRunner:
         # shown to a policy that was never trained on it. The block order is otherwise
         # identical between the two, which is what makes this a one-line difference.
         cmd = np.asarray(commands).ravel()
-        if self._obs_layout == "unitree":
+        if self._obs_layout == "unitree_vel":
+            # unitree_rl_lab with base_lin_vel added to the actor. Same per-term scales as
+            # "unitree" below -- those are a property of their ObservationsCfg, not of whether
+            # the velocity block is present -- with lin_vel prepended, matching the order the
+            # training config declares (PolicyWithLinVelCfg in velocity_env_cfg.py).
+            obs_parts = [
+                lin_vel_b,
+                np.asarray(ang_vel_b, dtype=np.float32) * UNITREE_ANG_VEL_SCALE,
+                proj_grav,
+                cmd[:3],
+                jpos_isaac - desired_qpos,
+                np.asarray(jvel_isaac, dtype=np.float32) * UNITREE_JOINT_VEL_SCALE,
+                last_actions,
+            ]
+        elif self._obs_layout == "unitree":
             # unitree_rl_lab's Go2 velocity task. Two structural differences from every
             # other policy here, both from its ObservationsCfg:
             #   * base_lin_vel is in the CRITIC group only -- the actor never sees it. It
