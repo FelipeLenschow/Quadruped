@@ -276,7 +276,7 @@ phases:
       rew_scale_grf_balance_stance: -2.5
       # rew_scale_joint_limits: -0.5
       rew_scale_first_step: 25.0
-      rew_scale_joint_vel_l2: -5.0e-3
+      rew_scale_joint_vel_l2: -2.0e-3
 
       rew_scale_gait_phase_sym: -0.15
 
