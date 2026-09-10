@@ -114,7 +114,9 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
         self.max_contact_force_val = torch.zeros(3 * N, device=D)
 
         if self.cfg.obs_history_len > 0:
-            self.obs_history_buf = torch.zeros(3 * N, self.cfg.obs_history_len * 49, device=D)
+            self.obs_history_buf = torch.zeros(
+                3 * N, self.cfg.obs_history_len * self.cfg.obs_dim_single, device=D
+            )
 
         # net contact forces — kept per-robot (different body counts possible)
         self._net_cf = [
@@ -322,18 +324,35 @@ class QuadrupedSim2SimEnv(DirectRLEnv):
             cmds = self.commands[slice_]
             acts = self.actions[slice_]
 
-            obs = torch.cat(
-                (lin_vel, ang_vel, proj_grav, cmds,
-                 jpos - desired_jp, jvel, acts),
-                dim=-1,
-            )
-            obs += torch.randn_like(obs) * self.cfg.observation_noise_scale
+            # Same three layouts as QuadrupedEnv._get_observations -- see OBS_LAYOUT_TERMS
+            # there. Kept in step so the sim2sim viewer can be pointed at a unitree-layout
+            # policy instead of failing on a width mismatch.
+            layout = self.cfg.obs_layout
+            if layout == "unitree":
+                parts = (ang_vel, proj_grav, cmds[:, :3], jpos - desired_jp, jvel, acts)
+            elif layout == "unitree_vel":
+                parts = (lin_vel, ang_vel, proj_grav, cmds[:, :3], jpos - desired_jp, jvel, acts)
+            else:
+                parts = (lin_vel, ang_vel, proj_grav, cmds, jpos - desired_jp, jvel, acts)
+            obs = torch.cat(parts, dim=-1)
+            obs = obs + torch.randn_like(obs) * self.cfg.observation_noise_scale
+            if layout != "full":
+                # unitree's per-term observation scales, applied after noise (see the note in
+                # QuadrupedEnv._get_observations about that ordering).
+                #   unitree      ang_vel 0:3   ... joint_vel 21:33
+                #   unitree_vel  ang_vel 3:6   ... joint_vel 24:36
+                ang_lo = 0 if layout == "unitree" else 3
+                jvel_lo = 21 if layout == "unitree" else 24
+                obs[:, ang_lo : ang_lo + 3] *= self.cfg.obs_ang_vel_scale
+                obs[:, jvel_lo : jvel_lo + 12] *= self.cfg.obs_joint_vel_scale
             obs_chunks.append(obs)
 
         policy_obs = torch.cat(obs_chunks, dim=0)
 
         if self.cfg.obs_history_len > 0:
-            self.obs_history_buf = torch.cat([policy_obs, self.obs_history_buf[:, :-49]], dim=-1)
+            self.obs_history_buf = torch.cat(
+                [policy_obs, self.obs_history_buf[:, : -self.cfg.obs_dim_single]], dim=-1
+            )
             policy_obs = torch.cat([policy_obs, self.obs_history_buf], dim=-1)
 
         return {"policy": policy_obs}

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import torch
 import copy
 import random
@@ -156,6 +157,15 @@ class QuadrupedEnv(DirectRLEnv):
         self.pos_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.yaw_deviation_val = torch.zeros(self.num_envs, device=self.device)
         self.feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
+        # Mirror of what ContactSensor would give with track_air_time=True. The sensor here runs
+        # with it OFF (it exists for forces), so the durations are tracked by hand:
+        #   feet_contact_time      -- how long each foot has been continuously grounded
+        #   last_feet_air_time     -- duration of the most recently COMPLETED swing, latched at touchdown
+        #   last_feet_contact_time -- duration of the most recently COMPLETED stance, latched at lift-off
+        # air_time_variance and the ported feet_air_time both read the latched pair.
+        self.feet_contact_time = torch.zeros(self.num_envs, 4, device=self.device)
+        self.last_feet_air_time = torch.zeros(self.num_envs, 4, device=self.device)
+        self.last_feet_contact_time = torch.zeros(self.num_envs, 4, device=self.device)
         # Peak height reached so far in the current swing, per foot. Monotonic within a swing and
         # reset on landing -- so on the step a foot lands it still holds that swing's apex, which is
         # what the foot-height penalty is charged on (see _compute_reward_terms).
@@ -220,15 +230,35 @@ class QuadrupedEnv(DirectRLEnv):
         self.last_strike_time = torch.zeros(self.num_envs, 4, device=self.device)
         self.stride_duration  = torch.ones(self.num_envs, 4, device=self.device)  # init to 1.0 to avoid div-by-zero
         self.gait_phase_sym_val = torch.zeros(self.num_envs, device=self.device)
+        # Ported unitree_rl_lab / Isaac Lab terms (arm U1) -- see _compute_reward_terms.
+        self.energy_val = torch.zeros(self.num_envs, device=self.device)
+        self.feet_slide_val = torch.zeros(self.num_envs, device=self.device)
+        self.air_time_variance_val = torch.zeros(self.num_envs, device=self.device)
+        self.joint_pos_limits_val = torch.zeros(self.num_envs, device=self.device)
+        self.joint_deviation_val = torch.zeros(self.num_envs, device=self.device)
+        self.feet_air_time_thresh_val = torch.zeros(self.num_envs, device=self.device)
+        # Live command ranges. Separate from cfg.command_x_range/command_y_range because the level
+        # curriculum mutates them during training; the cfg values are the STARTING ranges. Every
+        # other command axis (yaw) is read from the cfg directly, matching unitree, whose
+        # curriculum widens x and y only.
+        self.cmd_x_range = list(self.cfg.command_x_range)
+        self.cmd_y_range = list(self.cfg.command_y_range)
+        self._apply_command_overrides()
+        # Per-env episodic sum of the linear-velocity tracking reward, which is what the level
+        # curriculum thresholds on. Zeroed per env in _reset_idx, after the curriculum reads it.
+        self.track_lin_vel_episode_sum = torch.zeros(self.num_envs, device=self.device)
         self.command_timer = torch.full(
             (self.num_envs,), 100.0, device=self.device
         )  # Force immediate resample
 
         if self.cfg.obs_history_len > 0:
             self.obs_history_buf = torch.zeros(
-                self.num_envs, self.cfg.obs_history_len * 49, device=self.device
+                self.num_envs,
+                self.cfg.obs_history_len * self.cfg.obs_dim_single,
+                device=self.device,
             )
 
+        self._randomize_body_materials()
         self._build_obs_sensor_model()
 
         # Internal Curriculum Sequence
@@ -377,28 +407,110 @@ class QuadrupedEnv(DirectRLEnv):
             self.scene.clone_environments(copy_from_source=False)
 
     # Observation vector layout, 49 dims. Any change here must match _get_observations.
-    OBS_GROUPS = {
-        "base_lin_vel":       (0, 3),
-        "base_ang_vel":       (3, 6),
-        "projected_gravity":  (6, 9),
-        "commands":           (9, 13),
-        "joint_pos":          (13, 25),
-        "joint_vel":          (25, 37),
-        "actions":            (37, 49),
+    # Observation term order, per layout. Widths and offsets are derived from this, so the
+    # noise/bias groups in the yaml keep working unchanged across all three -- a group simply
+    # moves, or (base_lin_vel under the "unitree" layout) stops existing. See _OBS_LAYOUTS in
+    # quadruped_env_cfg.py for what each layout is for.
+    OBS_LAYOUT_TERMS = {
+        "full": [
+            ("base_lin_vel", 3), ("base_ang_vel", 3), ("projected_gravity", 3),
+            ("commands", 4), ("joint_pos", 12), ("joint_vel", 12), ("actions", 12),
+        ],
+        "unitree_vel": [
+            ("base_lin_vel", 3), ("base_ang_vel", 3), ("projected_gravity", 3),
+            ("commands", 3), ("joint_pos", 12), ("joint_vel", 12), ("actions", 12),
+        ],
+        "unitree": [
+            ("base_ang_vel", 3), ("projected_gravity", 3),
+            ("commands", 3), ("joint_pos", 12), ("joint_vel", 12), ("actions", 12),
+        ],
     }
 
-    def _build_obs_sensor_model(self) -> None:
-        """Expand the per-group noise/bias dicts into 49-wide vectors, once.
+    def _randomize_body_materials(self) -> None:
+        """Sample the robot's contact materials once, at construction.
 
-        Leaves self.obs_noise_std as None when the yaml configures no sensor model,
-        which is the signal for _get_observations to fall back to the original flat
-        observation_noise_scale over every dimension.
+        Reproduces isaaclab mdp.randomize_rigid_body_material, which unitree_rl_lab runs as a
+        startup event: draw `material_buckets` (static friction, dynamic friction, restitution)
+        triples once, then assign one at random to every collision shape of every robot. Sampling
+        once rather than per reset is upstream's design, not a shortcut -- PhysX caps a scene at
+        64000 distinct materials.
 
-        Groups omitted from a dict get zero. `commands` and `actions` are therefore
-        clean unless explicitly listed: the command comes from the operator and the
-        action is what this policy just emitted, so neither carries sensor error on
-        hardware, and adding some only degrades the input.
+        This randomises the ROBOT's material. The terrain is fixed at static/dynamic 1.0 with
+        friction_combine_mode "multiply" (see _TERRAIN_PHYSICS_MATERIAL), exactly as in unitree's
+        scene, so the effective coefficient under each foot is what is sampled here.
+
+        No-op when all three ranges are [0.0, 0.0], the same "disabled" convention the other
+        domain_randomization ranges use. get_material_properties()/set_material_properties() work
+        on CPU tensors and are slow, which is the other reason this runs once.
         """
+        ranges = [
+            tuple(self.cfg.body_static_friction_range),
+            tuple(self.cfg.body_dynamic_friction_range),
+            tuple(self.cfg.body_restitution_range),
+        ]
+        if all(lo == 0.0 and hi == 0.0 for lo, hi in ranges):
+            return
+
+        n_buckets = max(1, int(self.cfg.material_buckets))
+        bounds = torch.tensor(ranges, device="cpu")  # (3, 2)
+        buckets = sample_uniform(bounds[:, 0], bounds[:, 1], (n_buckets, 3), device="cpu")
+
+        views = self.robot_views if getattr(self, "is_heterogeneous", False) else [self.robot]
+        for view in views:
+            physx = view.root_physx_view
+            materials = physx.get_material_properties()  # (num_envs, num_shapes, 3), CPU
+            n_env, n_shapes = materials.shape[0], materials.shape[1]
+            bucket_ids = torch.randint(0, n_buckets, (n_env, n_shapes), device="cpu")
+            materials[:] = buckets[bucket_ids]
+            physx.set_material_properties(materials, torch.arange(n_env, device="cpu"))
+
+        print(
+            f"[DR] body materials: static {ranges[0]}, dynamic {ranges[1]}, "
+            f"restitution {ranges[2]}, {n_buckets} buckets"
+        )
+
+    def _build_obs_sensor_model(self) -> None:
+        """Resolve the observation layout, then expand the noise/bias dicts over it, once.
+
+        Sets three things:
+          self.OBS_GROUPS  -- {group name: (lo, hi)} slice into the observation vector
+          self.obs_scale   -- per-dimension multiplier, applied AFTER noise (see _get_observations)
+          self.obs_noise_std / self.obs_bias_bound / self.obs_bias
+
+        obs_noise_std is left as None when the yaml configures no sensor model, which is the
+        signal for _get_observations to fall back to the flat observation_noise_scale over every
+        dimension. obs_scale is always built.
+
+        Groups omitted from a dict get zero. `commands` and `actions` are therefore clean unless
+        explicitly listed: the command comes from the operator and the action is what this policy
+        just emitted, so neither carries sensor error on hardware, and adding some only degrades
+        the input.
+        """
+        layout = self.cfg.obs_layout
+        terms = self.OBS_LAYOUT_TERMS[layout]
+        width = self.cfg.obs_dim_single
+
+        self.OBS_GROUPS = {}
+        offset = 0
+        for name, n in terms:
+            self.OBS_GROUPS[name] = (offset, offset + n)
+            offset += n
+        assert offset == width, f"layout '{layout}' sums to {offset}, cfg says {width}"
+
+        # Per-term scales. Unitree's policy observation multiplies base_ang_vel by 0.2 and
+        # joint_vel by 0.05; the "full" layout leaves both at 1.0. Scaling here rather than in
+        # the yaml's noise numbers keeps every sigma stated in raw physical units.
+        self.obs_scale = torch.ones(width, device=self.device)
+        for name, scale in (
+            ("base_ang_vel", float(self.cfg.obs_ang_vel_scale)),
+            ("joint_vel", float(self.cfg.obs_joint_vel_scale)),
+        ):
+            if name in self.OBS_GROUPS and scale != 1.0:
+                lo, hi = self.OBS_GROUPS[name]
+                self.obs_scale[lo:hi] = scale
+        if bool((self.obs_scale == 1.0).all()):
+            self.obs_scale = None
+
         noise_cfg = getattr(self.cfg, "observation_noise", None)
         bias_cfg = getattr(self.cfg, "observation_bias", None)
 
@@ -412,39 +524,92 @@ class QuadrupedEnv(DirectRLEnv):
         # so one number per phase still dials the whole thing up or down.
         gain = float(self.cfg.observation_noise_scale)
 
+        known_groups = {g for terms_ in self.OBS_LAYOUT_TERMS.values() for g, _ in terms_}
+
         def _expand(cfg_dict):
-            vec = torch.zeros(49, device=self.device)
+            vec = torch.zeros(width, device=self.device)
             for name, value in (cfg_dict or {}).items():
                 if name not in self.OBS_GROUPS:
+                    # A layout can legitimately DROP a group -- "unitree" has no base_lin_vel --
+                    # so one sensor model can be shared across the whole ladder without being
+                    # rewritten per rung. Only a name that is not a group at all is an error.
+                    if name in known_groups:
+                        continue
                     raise ValueError(
                         f"unknown observation group '{name}' -- expected one of "
-                        f"{sorted(self.OBS_GROUPS)}"
+                        f"{sorted(known_groups)}"
                     )
                 lo, hi = self.OBS_GROUPS[name]
                 vec[lo:hi] = float(value) * gain
             return vec
 
-        self.obs_noise_std = _expand(noise_cfg) if noise_cfg else torch.zeros(49, device=self.device)
+        self.obs_noise_std = _expand(noise_cfg) if noise_cfg else torch.zeros(width, device=self.device)
         if bias_cfg:
             self.obs_bias_bound = _expand(bias_cfg)
-            self.obs_bias = torch.zeros(self.num_envs, 49, device=self.device)
+            self.obs_bias = torch.zeros(self.num_envs, width, device=self.device)
         else:
             self.obs_bias_bound = None
-            self.obs_bias = torch.zeros(self.num_envs, 49, device=self.device)
+            self.obs_bias = torch.zeros(self.num_envs, width, device=self.device)
+
+    def _apply_command_overrides(self) -> None:
+        """Environment-variable overrides on the sampled command box, for play and evaluation.
+
+        These exist because command_x_range / command_y_range are the STARTING box whenever the
+        level curriculum is on. The `unitree` phase starts at +-0.1 and the curriculum widens it
+        to +-1.0 over training -- but that widening is training state and is NOT saved with the
+        checkpoint. A play session therefore rebuilds the env at +-0.1, which is entirely inside
+        the dead zone, and the policy stands still at every command it is handed. That looks
+        exactly like a broken policy and is not one. Same trap as unitree's own play config,
+        which is why RobotPlayEnvCfg there overwrites ranges with limit_ranges.
+
+          QUADRUPED_CMD_FULL=1  start at the curriculum LIMITS rather than the starting box,
+                                i.e. the distribution the policy actually finished training on.
+                                Use this whenever playing or evaluating a curriculum-trained arm.
+          PLAY_CMD_X=<v>        pin every env to v m/s forward: no lateral, no yaw, no standing
+                                envs. Same name and meaning as the PLAY_CMD_X patch applied to
+                                unitree_rl_lab, so one habit covers both baselines. This is how
+                                you look at the dead zone on screen -- the full +-1.0 box puts
+                                only ~1.4% of draws below 0.3 m/s, so it is nearly invisible.
+
+        Neither is read during training runs, which set neither variable.
+        """
+        if os.environ.get("QUADRUPED_CMD_FULL", "0") == "1":
+            if self.cfg.command_level_curriculum:
+                self.cmd_x_range = [float(v) for v in self.cfg.command_level_limit_x]
+                self.cmd_y_range = [float(v) for v in self.cfg.command_level_limit_y]
+                print("[Commands] QUADRUPED_CMD_FULL: starting at the curriculum limits.")
+            else:
+                print("[Commands] QUADRUPED_CMD_FULL ignored: no level curriculum in this phase.")
+
+        pinned = os.environ.get("PLAY_CMD_X")
+        self._pin_command_x = float(pinned) if pinned else None
+        if self._pin_command_x is not None:
+            self.cmd_x_range = [self._pin_command_x, self._pin_command_x]
+            self.cmd_y_range = [0.0, 0.0]
+            print(f"[Commands] PLAY_CMD_X: every env pinned to lin_vel_x = {self._pin_command_x} m/s.")
+
+        extra = ""
+        if self.cfg.command_level_curriculum:
+            extra = (f"  | level curriculum ON, limits x {tuple(self.cfg.command_level_limit_x)}"
+                     f" y {tuple(self.cfg.command_level_limit_y)}")
+        print(
+            f"[Commands] sampling box: x {tuple(self.cmd_x_range)}  y {tuple(self.cmd_y_range)}"
+            f"  yaw {tuple(self.cfg.command_yaw_range)}{extra}"
+        )
 
     def _resample_commands(self, env_ids: Sequence[int]):
         """Resamples the velocity commands for the specified environments."""
         # Sample x velocity
         self.target_commands[env_ids, 0] = sample_uniform(
-            self.cfg.command_x_range[0],
-            self.cfg.command_x_range[1],
+            self.cmd_x_range[0],
+            self.cmd_x_range[1],
             (len(env_ids),),
             device=self.device,
         )
         # Sample y velocity
         self.target_commands[env_ids, 1] = sample_uniform(
-            self.cfg.command_y_range[0],
-            self.cfg.command_y_range[1],
+            self.cmd_y_range[0],
+            self.cmd_y_range[1],
             (len(env_ids),),
             device=self.device,
         )
@@ -513,6 +678,12 @@ class QuadrupedEnv(DirectRLEnv):
             magnitude = sample_uniform(lo, hi, (len(slow_ids), 1), device=self.device)
             self.target_commands[slow_ids, :3] = direction / norm * magnitude
 
+        # PLAY_CMD_X pins the whole batch, overriding the zero / slow / axis-only modes above so
+        # what is on screen is exactly the speed asked for. See _apply_command_overrides.
+        if getattr(self, "_pin_command_x", None) is not None:
+            self.target_commands[env_ids, 0] = self._pin_command_x
+            self.target_commands[env_ids, 1:] = 0.0
+
         # Reset timer
         self.command_timer[env_ids] = 0.0
 
@@ -544,6 +715,14 @@ class QuadrupedEnv(DirectRLEnv):
         _apply("rewards")
         _apply("domain_randomization", as_tuple=True)
         _apply("commands")
+        # Re-seed the LIVE command ranges from the phase that just loaded. Without this a phase
+        # that narrows or widens command_x_range would be ignored whenever the level curriculum
+        # is in play, because _resample_commands reads cmd_x_range, not the cfg. Re-seeding also
+        # restarts the level curriculum from the new phase's starting box, which is what a phase
+        # boundary should mean.
+        self.cmd_x_range = list(self.cfg.command_x_range)
+        self.cmd_y_range = list(self.cfg.command_y_range)
+        self._apply_command_overrides()
 
         # Env block. Only a subset can meaningfully change mid-process: these are re-read from
         # self.cfg every step. The rest are consumed once at construction (buffer sizes, scene,
@@ -554,6 +733,10 @@ class QuadrupedEnv(DirectRLEnv):
         # phases 4-6 ask for), i.e. a sim2real hardening step that never happened.
         _RUNTIME_SETTABLE_ENV = {
             "observation_noise_scale",
+            "observation_noise_uniform",
+            "spawn_height",
+            "action_clip",
+            "obs_clip",
             "base_angle_termination_thresh",
             "action_scale",
         }
@@ -570,6 +753,11 @@ class QuadrupedEnv(DirectRLEnv):
             "num_envs": lambda c: getattr(getattr(c, "scene", None), "num_envs", None),
             "episode_length_s": lambda c: getattr(c, "episode_length_s", None),
             "obs_history_len": lambda c: getattr(c, "obs_history_len", None),
+            # Observation layout and its per-term scales are baked into the observation space
+            # and into obs_scale/OBS_GROUPS at construction, so a phase cannot change them.
+            "obs_layout": lambda c: getattr(c, "obs_layout", None),
+            "obs_ang_vel_scale": lambda c: getattr(c, "obs_ang_vel_scale", None),
+            "obs_joint_vel_scale": lambda c: getattr(c, "obs_joint_vel_scale", None),
         }
         for k, v in p_cfg.get("env", {}).items():
             if k in _RUNTIME_SETTABLE_ENV:
@@ -604,6 +792,7 @@ class QuadrupedEnv(DirectRLEnv):
         if e_cfg and getattr(self, "event_manager", None) is not None:
             enabled = e_cfg.get("enable_pushes", True)
             rng = e_cfg.get("push_velocity_range", [0.0, 0.0]) if enabled else [0.0, 0.0]
+            interval = e_cfg.get("push_interval_range_s")
             for term_name in ("push_a1", "push_quadruped", "push_go2"):
                 try:
                     term_cfg = self.event_manager.get_term_cfg(term_name)
@@ -613,8 +802,13 @@ class QuadrupedEnv(DirectRLEnv):
                     "x": (rng[0], rng[1]),
                     "y": (rng[0], rng[1]),
                 }
+                if interval is not None:
+                    term_cfg.interval_range_s = (float(interval[0]), float(interval[1]))
                 self.event_manager.set_term_cfg(term_name, term_cfg)
-            print(f"[Curriculum] push velocity range -> {tuple(rng)} (enabled={enabled})")
+            print(
+                f"[Curriculum] push velocity range -> {tuple(rng)} (enabled={enabled}"
+                + (f", every {tuple(interval)} s)" if interval is not None else ")")
+            )
 
         self.curriculum_phase_idx += 1
 
@@ -630,6 +824,12 @@ class QuadrupedEnv(DirectRLEnv):
         self.last_joint_vel = self.joint_vel.clone()
         self.last_base_lin_vel = self.base_lin_vel.clone()
         self.actions = actions.clone()
+        # unitree's action clip. Applied to the STORED action, so the clipped value is what
+        # reaches both the joint targets and the `last_action` observation channel -- the same
+        # thing Isaac Lab's ActionManager does (raw -> clip -> scale + offset). See action_clip
+        # in quadruped_env_cfg.py for why this matters more than it looks.
+        if self.cfg.action_clip is not None:
+            self.actions = self.actions.clamp(-float(self.cfg.action_clip), float(self.cfg.action_clip))
 
         # Update action history for latency simulation
         self.action_history = torch.roll(self.action_history, shifts=1, dims=1)
@@ -889,6 +1089,18 @@ class QuadrupedEnv(DirectRLEnv):
         landed = first_contact & (self.episode_length_buf > 1).unsqueeze(1)
         # Increment air time
         self.feet_air_time += self.step_dt
+        # Stance-duration counterpart, plus the two latched COMPLETED durations. Both counters are
+        # cleared at the end of this method for the feet in their other state, the way
+        # feet_air_time already was, so a value latched here still includes the step that finished
+        # the interval -- which is what ContactSensor.last_air_time reports as well.
+        self.feet_contact_time += self.step_dt
+        lifted_this_step = (~contact) & self.last_feet_contact
+        self.last_feet_air_time = torch.where(
+            first_contact, self.feet_air_time, self.last_feet_air_time
+        )
+        self.last_feet_contact_time = torch.where(
+            lifted_this_step, self.feet_contact_time, self.last_feet_contact_time
+        )
 
         # Smooth static/moving gate. This used to be a hard switch at static_velocity_threshold
         # (0.001): at ||cmd||=0 the stepping rewards were off and the static penalties on, and one
@@ -1039,15 +1251,17 @@ class QuadrupedEnv(DirectRLEnv):
         # only wanted when a command is given; "land softly" holds unconditionally, and gating it
         # would make hard landings free at zero command -- exactly the push-recovery case where the
         # feet come down hardest. This follows max_contact_force, which is likewise ungated.
+        # All three components in one read: z feeds the landing-impact penalty below, xy feeds
+        # the ported feet_slide term further down.
         if getattr(self, "is_heterogeneous", False):
-            all_feet_vel_z = torch.zeros((self.num_envs, 4), device=self.device)
+            feet_vel_w = torch.zeros((self.num_envs, 4, 3), device=self.device)
             for i, view in enumerate(self.robot_views):
                 indices = self.robot_view_indices[i]
                 feet_ids = self.robot_feet_ids[i]  # relative to Articulation (FL, FR, RL, RR)
-                all_feet_vel_z[indices] = view.data.body_lin_vel_w[:, feet_ids, 2]
-            feet_vel_z = all_feet_vel_z
+                feet_vel_w[indices] = view.data.body_lin_vel_w[:, feet_ids, :]
         else:
-            feet_vel_z = self.robot.data.body_lin_vel_w[:, self._feet_ids_articulation, 2]
+            feet_vel_w = self.robot.data.body_lin_vel_w[:, self._feet_ids_articulation, :]
+        feet_vel_z = feet_vel_w[:, :, 2]
 
         # Squared, so an upward-moving foot at touchdown (a scuff into a bump, or a skimming
         # re-contact) is charged the same as one dropping. No env-origin correction is needed the
@@ -1311,9 +1525,79 @@ class QuadrupedEnv(DirectRLEnv):
         # compared directly against the MuJoCo eval's grf_peak_stance_N before tuning the scale.
         self.grf_peak_bw_val = feet_forces_z_peak.amax(dim=1) / self.robot_total_weight.clamp(min=1.0)
 
+        # ╔══════════════════════════════════════════════════════════════════════════════╗
+        # ║  PORTED unitree_rl_lab / ISAAC LAB TERMS  (arm U1, Write/Article/plan.md)     ║
+        # ╚══════════════════════════════════════════════════════════════════════════════╝
+        # Each of these reproduces an upstream reward function so unitree's config can be run
+        # inside this env and checked against unitree's own env. They are cheap elementwise ops
+        # on (N, 12) / (N, 4), so they are computed unconditionally rather than gated on their
+        # scales being non-zero. Every scale defaults to 0.0, so phases predating the port are
+        # numerically unaffected.
+
+        # energy -- unitree_rl_lab mdp.energy
+        self.energy_val = torch.sum(self.joint_vel.abs() * self.applied_torque.abs(), dim=1)
+
+        # feet_slide -- isaaclab mdp.feet_slide. xy speed of each foot while that foot is loaded.
+        # DIFFERENCE FROM UPSTREAM: upstream takes the max contact force over the sensor's history
+        # window to decide "loaded"; `contact` here is the instantaneous sample the rest of this
+        # method already uses. They differ only for a foot whose force crosses 1 N and falls back
+        # inside a single 20 ms control step, which is not a stance.
+        self.feet_slide_val = torch.sum(
+            feet_vel_w[:, :, :2].norm(dim=-1) * contact.float(), dim=1
+        )
+
+        # air_time_variance -- unitree_rl_lab mdp.air_time_variance_penalty. Spread of the four
+        # feet's completed swing and stance durations, each clipped at 0.5 s.
+        self.air_time_variance_val = torch.var(
+            self.last_feet_air_time.clamp(max=0.5), dim=1
+        ) + torch.var(self.last_feet_contact_time.clamp(max=0.5), dim=1)
+
+        # joint_pos_limits -- isaaclab mdp.joint_pos_limits. L1 distance outside the SOFT limits;
+        # zero everywhere inside them. joint_limit_lower/upper already hold soft_joint_pos_limits.
+        # Not the same term as joint_limit_val above, which is quadratic outside a margin fraction
+        # of the range -- both exist so U1 can run upstream's version verbatim.
+        out_of_limits = -(self.joint_pos - self.joint_limit_lower).clamp(max=0.0)
+        out_of_limits = out_of_limits + (self.joint_pos - self.joint_limit_upper).clamp(min=0.0)
+        self.joint_pos_limits_val = torch.sum(out_of_limits, dim=1)
+
+        # joint_position_penalty -- unitree_rl_lab mdp.joint_position_penalty. L2 NORM (not the
+        # squared sum dof_pos_l2_* uses) of the deviation from the default pose, multiplied by
+        # joint_deviation_stand_still_scale when the robot is neither commanded to move nor
+        # already moving.
+        #
+        # Note the upstream gate is cmd_norm STRICTLY > 0, not a threshold: the multiplier only
+        # ever bites on the exactly-zero commands (unitree's rel_standing_envs, here
+        # zero_command_fraction). A 0.05 m/s command is "moving" as far as this term is
+        # concerned, so it does nothing to make a slow walk preferable to standing.
+        body_speed_xy = torch.norm(self.base_lin_vel[:, :2], dim=1)
+        joint_dev_norm = torch.linalg.norm(self.joint_pos - self.desired_joint_pos, dim=1)
+        self.joint_deviation_val = torch.where(
+            (cmd_norm > 0.0)
+            | (body_speed_xy > self.cfg.joint_deviation_velocity_threshold),
+            joint_dev_norm,
+            self.cfg.joint_deviation_stand_still_scale * joint_dev_norm,
+        )
+
+        # feet_air_time -- isaaclab mdp.feet_air_time. Sum over feet touching down this step of
+        # (completed swing duration - threshold), off below a 0.1 m/s xy command.
+        #
+        # This is the term the paper is about. Unitree's threshold is 0.5 s, longer than any real
+        # Go2 swing, so (air_time - threshold) is NEGATIVE at every landing: the one term meant to
+        # pay the robot for stepping charges it instead, and standing still avoids the charge
+        # entirely. Ported verbatim -- the threshold is the finding, not a bug to fix here.
+        #
+        # DIFFERENCE FROM UPSTREAM: gated on `landed` rather than raw first contact, so the feet
+        # that are already on the ground at episode step 1 are not billed for a swing that never
+        # happened. Costs upstream one spurious charge per env per episode; this env spawns from a
+        # drop, so it would fire here too.
+        self.feet_air_time_thresh_val = torch.sum(
+            (self.last_feet_air_time - self.cfg.feet_air_time_threshold) * landed.float(), dim=1
+        ) * (command_speed_xy > 0.1).float()
+
         # Reset air time and swing peak height for feet in contact. Must stay AFTER the reward
         # computations above, so the final increment of the swing is credited before clearing.
         self.feet_air_time[contact] = 0.0
+        self.feet_contact_time[~contact] = 0.0
         self.feet_height_max[contact] = 0.0
         self.last_feet_contact = contact
 
@@ -1460,31 +1744,73 @@ class QuadrupedEnv(DirectRLEnv):
         # teleported to their spawn state since _compute_reward_terms() last looked.
         self._refresh_state()
 
-        # Observations (unscaled)
-        obs = torch.cat(
-            (
+        # Observations, raw (unscaled) -- see OBS_LAYOUT_TERMS for the three layouts. The
+        # commands slice is what differs between "full" (4 wide, the 4th being the unused
+        # heading slot) and the two unitree layouts (3 wide).
+        jpos_rel = self.joint_pos - self.desired_joint_pos
+        layout = self.cfg.obs_layout
+        if layout == "unitree":
+            parts = (
+                self.base_ang_vel,
+                self.projected_gravity,
+                self.commands[:, :3],
+                jpos_rel,
+                self.joint_vel,
+                self.actions,
+            )
+        elif layout == "unitree_vel":
+            parts = (
+                self.base_lin_vel,
+                self.base_ang_vel,
+                self.projected_gravity,
+                self.commands[:, :3],
+                jpos_rel,
+                self.joint_vel,
+                self.actions,
+            )
+        else:
+            parts = (
                 self.base_lin_vel,
                 self.base_ang_vel,
                 self.projected_gravity,
                 self.commands,
-                self.joint_pos - self.desired_joint_pos,
+                jpos_rel,
                 self.joint_vel,
                 self.actions,
-            ),
-            dim=-1,
-        )
+            )
+        obs = torch.cat(parts, dim=-1)
 
         # Add observation noise (Sim2Real)
         # Per-channel white noise + per-episode constant bias when a sensor model is
-        # configured; otherwise the original flat sigma over all 49 dims.
+        # configured; otherwise the original flat sigma over every dim.
+        #
+        # NOISE FIRST, SCALE SECOND. That is the order Isaac Lab's ObservationManager applies
+        # (func -> noise -> clip -> scale), so a sigma in the yaml always means the error on the
+        # raw physical quantity: +-1.5 rad/s of joint-velocity noise stays +-1.5 rad/s whether or
+        # not the layout then multiplies the channel by 0.05.
         if self.obs_noise_std is not None:
-            obs = obs + torch.randn_like(obs) * self.obs_noise_std + self.obs_bias
+            if self.cfg.observation_noise_uniform:
+                # Uniform in [-w, +w], matching isaaclab AdditiveUniformNoiseCfg -- the yaml
+                # numbers are half-widths, not standard deviations.
+                draw = torch.rand_like(obs) * 2.0 - 1.0
+            else:
+                draw = torch.randn_like(obs)
+            obs = obs + draw * self.obs_noise_std + self.obs_bias
         else:
             obs = obs + torch.randn_like(obs) * self.cfg.observation_noise_scale
 
+        # Clip BEFORE scale, the order Isaac Lab's ObservationManager uses
+        # (func -> noise -> clip -> scale), so the bound is stated in raw physical units.
+        if self.cfg.obs_clip is not None:
+            obs = obs.clamp(-float(self.cfg.obs_clip), float(self.cfg.obs_clip))
+
+        if self.obs_scale is not None:
+            obs = obs * self.obs_scale
+
         if self.cfg.obs_history_len > 0:
+            width = self.cfg.obs_dim_single
             full_obs = torch.cat([obs, self.obs_history_buf], dim=-1)
-            self.obs_history_buf = torch.cat([obs, self.obs_history_buf[:, :-49]], dim=-1)
+            self.obs_history_buf = torch.cat([obs, self.obs_history_buf[:, :-width]], dim=-1)
             obs = full_obs
 
         return {"policy": obs}
@@ -1502,9 +1828,21 @@ class QuadrupedEnv(DirectRLEnv):
 
         # Calculate undesired contacts penalty
         # If any thigh/calf/trunk sensor registers > 1.0 N force, it's a contact
-        undesired_contacts = (torch.norm(self.net_undesired_contact_forces, dim=-1).max(dim=1)[0] > 1.0).float()
-        
-        total_reward, reward_log = compute_rewards(
+        if self.cfg.undesired_contacts_count:
+            # isaaclab mdp.undesired_contacts: the NUMBER of monitored bodies over the threshold,
+            # measured on the peak force across the control step, not a single 0/1 flag. Ranges
+            # 0..len(monitored bodies), so a weight tuned against the flag form is ~N times too
+            # strong here.
+            hist = self._contact_sensor.data.net_forces_w_history
+            if hist is not None and hist.dim() == 4 and len(self._undesired_contact_body_ids) > 0:
+                peak = hist[:, :, self._undesired_contact_body_ids, :].norm(dim=-1).amax(dim=1)
+            else:
+                peak = torch.norm(self.net_undesired_contact_forces, dim=-1)
+            undesired_contacts = (peak > 1.0).float().sum(dim=1)
+        else:
+            undesired_contacts = (torch.norm(self.net_undesired_contact_forces, dim=-1).max(dim=1)[0] > 1.0).float()
+
+        total_reward, reward_log, track_lin_vel_per_env = compute_rewards(
             self.cfg.rew_scale_alive,
             self.cfg.rew_scale_undesired_contacts,
             self.cfg.rew_scale_track_lin_vel_xy_exp,
@@ -1534,6 +1872,12 @@ class QuadrupedEnv(DirectRLEnv):
             self.cfg.rew_scale_pos_deviation_l1,
             self.cfg.rew_scale_yaw_deviation_l1,
             self.cfg.rew_scale_gait_phase_sym,
+            self.cfg.rew_scale_energy,
+            self.cfg.rew_scale_feet_slide,
+            self.cfg.rew_scale_air_time_variance,
+            self.cfg.rew_scale_joint_pos_limits,
+            self.cfg.rew_scale_joint_deviation,
+            self.cfg.rew_scale_feet_air_time_thresh,
             self.cfg.target_base_height,
             self.cfg.static_velocity_threshold,
             self.cfg.command_lin_vel_std,
@@ -1566,13 +1910,31 @@ class QuadrupedEnv(DirectRLEnv):
             self.pos_deviation_val,
             self.yaw_deviation_val,
             self.gait_phase_sym_val,
+            self.energy_val,
+            self.feet_slide_val,
+            self.air_time_variance_val,
+            self.joint_pos_limits_val,
+            self.joint_deviation_val,
+            self.feet_air_time_thresh_val,
             self.root_pos_w[:, 2] - self.scene.env_origins[:, 2],
             undesired_contacts,
             self.reset_terminated,
             self.step_dt,
         )
+        # Episodic sum feeding the command level curriculum (see _reset_idx).
+        self.track_lin_vel_episode_sum += track_lin_vel_per_env
         self.extras.setdefault("log", {})
         self.extras["log"].update(reward_log)
+        if self.cfg.command_level_curriculum:
+            # The curriculum's own state, so a run can be read back off TensorBoard: how wide the
+            # sampled command box currently is. Flat at the limit means the curriculum has
+            # finished widening and the slow band is no longer being covered.
+            self.extras["log"]["curriculum/command_x_max"] = torch.tensor(
+                self.cmd_x_range[1], device=self.device
+            )
+            self.extras["log"]["curriculum/command_y_max"] = torch.tensor(
+                self.cmd_y_range[1], device=self.device
+            )
         # Peak per-foot contact force in body weights, for comparing the substep-peak measurement
         # against the MuJoCo eval's grf_peak_stance_N before retuning rew_scale_max_contact_force.
         self.extras["log"]["diag/grf_peak_bw_mean"] = self.grf_peak_bw_val.mean()
@@ -1665,7 +2027,43 @@ class QuadrupedEnv(DirectRLEnv):
         # episode (spurious action_rate_l2), feet_air_time still accumulating for a foot that was
         # airborne at termination, and obs_history_buf feeding the policy 10 frames of the
         # previous, falling episode. Phase 1 is exactly where the base gait is learned.
+        # ── Command-range level curriculum (unitree_rl_lab mdp.lin_vel_cmd_levels) ──────
+        # Widen both ends of command_x_range / command_y_range by command_level_delta toward
+        # command_level_limit_* whenever the mean PER-SECOND episodic track_lin_vel_xy reward of
+        # the envs resetting on this step clears command_level_reward_frac of that term's weight.
+        # The common_step_counter gate is upstream's: it fires at most once per episode length,
+        # i.e. on the step the timed-out cohort comes back.
+        #
+        # It only ever WIDENS, which is the point for the paper. Unitree starts at +-0.1, where
+        # essentially every command is slow, and finishes at +-1.0 -- the uniform cube, where
+        # ~1.4% of draws fall below 0.3 m/s. The slow band is covered only while the policy is
+        # too poor to walk, and abandoned as soon as it can.
+        if self.cfg.command_level_curriculum:
+            if self.common_step_counter % self.max_episode_length == 0:
+                mean_track = (
+                    self.track_lin_vel_episode_sum[env_ids].mean() / self.max_episode_length_s
+                )
+                threshold = (
+                    self.cfg.rew_scale_track_lin_vel_xy_exp * self.cfg.command_level_reward_frac
+                )
+                if float(mean_track) > threshold:
+                    d = float(self.cfg.command_level_delta)
+                    lo_x, hi_x = self.cfg.command_level_limit_x
+                    lo_y, hi_y = self.cfg.command_level_limit_y
+                    self.cmd_x_range = [
+                        max(self.cmd_x_range[0] - d, float(lo_x)),
+                        min(self.cmd_x_range[1] + d, float(hi_x)),
+                    ]
+                    self.cmd_y_range = [
+                        max(self.cmd_y_range[0] - d, float(lo_y)),
+                        min(self.cmd_y_range[1] + d, float(hi_y)),
+                    ]
+            self.track_lin_vel_episode_sum[env_ids] = 0.0
+
         self.feet_air_time[env_ids] = 0.0
+        self.feet_contact_time[env_ids] = 0.0
+        self.last_feet_air_time[env_ids] = 0.0
+        self.last_feet_contact_time[env_ids] = 0.0
         self.feet_height_max[env_ids] = 0.0
         self.last_feet_contact[env_ids] = False
         self.last_feet_vel_z[env_ids] = 0.0
@@ -1694,7 +2092,7 @@ class QuadrupedEnv(DirectRLEnv):
         # (that is the whole point -- see _build_obs_sensor_model) and independent across them.
         if self.obs_bias_bound is not None:
             self.obs_bias[env_ids] = (
-                (torch.rand((len(env_ids), 49), device=self.device) * 2.0 - 1.0)
+                (torch.rand((len(env_ids), self.cfg.obs_dim_single), device=self.device) * 2.0 - 1.0)
                 * self.obs_bias_bound
             )
         self.gait_phase_sym_val[env_ids] = 0.0
@@ -1920,6 +2318,12 @@ def compute_rewards(
     rew_scale_pos_deviation_l1: float,
     rew_scale_yaw_deviation_l1: float,
     rew_scale_gait_phase_sym: float,
+    rew_scale_energy: float,
+    rew_scale_feet_slide: float,
+    rew_scale_air_time_variance: float,
+    rew_scale_joint_pos_limits: float,
+    rew_scale_joint_deviation: float,
+    rew_scale_feet_air_time_thresh: float,
     target_base_height: float,
     static_velocity_threshold: float,
     command_lin_vel_std: float,
@@ -1952,11 +2356,17 @@ def compute_rewards(
     pos_deviation_val: torch.Tensor,
     yaw_deviation_val: torch.Tensor,
     gait_phase_sym_val: torch.Tensor,
+    energy_val: torch.Tensor,
+    feet_slide_val: torch.Tensor,
+    air_time_variance_val: torch.Tensor,
+    joint_pos_limits_val: torch.Tensor,
+    joint_deviation_val: torch.Tensor,
+    feet_air_time_thresh_val: torch.Tensor,
     base_height_val: torch.Tensor,
     undesired_contacts: torch.Tensor,
     reset_terminated: torch.Tensor,
     step_dt: float,
-) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
     log: Dict[str, torch.Tensor] = {}
 
     # 1. Alive (Optional, usually 0)
@@ -2066,6 +2476,15 @@ def compute_rewards(
     rew_grf_target = rew_scale_grf_target * grf_target_val
     rew_max_contact_force = rew_scale_max_contact_force * max_contact_force_val
 
+    # Ported unitree_rl_lab / Isaac Lab terms (arm U1). All the maths is in
+    # _compute_reward_terms; here they are only weighted. Every scale defaults to 0.0.
+    rew_energy = rew_scale_energy * energy_val
+    rew_feet_slide = rew_scale_feet_slide * feet_slide_val
+    rew_air_time_variance = rew_scale_air_time_variance * air_time_variance_val
+    rew_joint_pos_limits = rew_scale_joint_pos_limits * joint_pos_limits_val
+    rew_joint_deviation = rew_scale_joint_deviation * joint_deviation_val
+    rew_feet_air_time_thresh = rew_scale_feet_air_time_thresh * feet_air_time_thresh_val
+
     # Per-term breakdown, mean across all parallel envs -- shows up in TensorBoard under
     # "Info / <key>" (skrl's agent config has environment_info: log wired up already).
     log["reward/alive"] = rew_alive.mean()
@@ -2097,6 +2516,17 @@ def compute_rewards(
     log["reward/pos_deviation"] = rew_pos_deviation.mean()
     log["reward/yaw_deviation"] = rew_yaw_deviation.mean()
     log["reward/gait_phase_sym"] = rew_gait_phase_sym.mean()
+    log["reward/energy"] = rew_energy.mean()
+    log["reward/feet_slide"] = rew_feet_slide.mean()
+    log["reward/air_time_variance"] = rew_air_time_variance.mean()
+    log["reward/joint_pos_limits"] = rew_joint_pos_limits.mean()
+    log["reward/joint_deviation"] = rew_joint_deviation.mean()
+    log["reward/feet_air_time_thresh"] = rew_feet_air_time_thresh.mean()
+    # Raw swing duration actually achieved, over the landings in this batch. The whole
+    # feet_air_time argument turns on this number sitting below the threshold, so log it
+    # unweighted and unscaled: mean over feet that landed, 0.0 on a step where none did.
+    n_landed = (feet_air_time_thresh_val != 0.0).float().sum()
+    log["diag/air_time_charge_mean"] = feet_air_time_thresh_val.sum() / n_landed.clamp(min=1.0)
     # Raw (unscaled) diagnostics -- useful to sanity-check a term is actually receiving live,
     # nonzero physical data before worrying about whether its reward *scale* is well tuned.
     log["diag/joint_acc_sum_sq_mean"] = torch.sum(torch.square(joint_acc), dim=1).mean()
@@ -2133,5 +2563,13 @@ def compute_rewards(
         + rew_pos_deviation
         + rew_yaw_deviation
         + rew_gait_phase_sym
+        + rew_energy
+        + rew_feet_slide
+        + rew_air_time_variance
+        + rew_joint_pos_limits
+        + rew_joint_deviation
+        + rew_feet_air_time_thresh
     )
-    return total_reward, log
+    # Third return is the PER-ENV linear-velocity tracking reward, which the command level
+    # curriculum accumulates over an episode and thresholds on. The log only carries its mean.
+    return total_reward, log, rew_track_lin_vel_xy_exp

@@ -108,6 +108,9 @@ if _is_sequence:
 # Phase 2's entire purpose is push hardening, and it was running with zero pushes.
 # _transition_to_next_phase() now rewrites these ranges live at each phase change.
 _vel_range = _phase_cfg["events"]["push_velocity_range"] if _phase_cfg["events"]["enable_pushes"] else [0.0, 0.0]
+# How often a push fires. unitree pushes every 5-10 s; this env's original default was 10-15 s,
+# which is a domain-randomisation difference worth being able to state rather than inherit.
+_push_interval = tuple(_phase_cfg["events"].get("push_interval_range_s", [10.0, 15.0]))
 
 from isaaclab_assets.robots.unitree import (
     UNITREE_A1_CFG,
@@ -220,6 +223,31 @@ for variant in ROBOT_VARIANTS:
 # ║  ENVIRONMENT CONFIGURATION                                                  ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
+# ── Observation layout ────────────────────────────────────────────────────────
+# The ladder in Write/Article/plan.md needs three of these, each differing from the next by
+# exactly one thing, so moving a rung is a yaml edit rather than a code edit:
+#
+#   full         49  [lin_vel(3) ang_vel(3) grav(3) cmd(4) jpos(12) jvel(12) act(12)]
+#                    mine: velocity feedback, plus the 4th (heading) command slot.
+#   unitree_vel  48  [lin_vel(3) ang_vel(3) grav(3) cmd(3) jpos(12) jvel(12) act(12)]
+#                    unitree + base_lin_vel, and NOTHING else -- this is the U1 -> U2 step.
+#   unitree      45  [        ang_vel(3) grav(3) cmd(3) jpos(12) jvel(12) act(12)]
+#                    unitree_rl_lab's policy observation group verbatim: no linear velocity
+#                    anywhere, which is why that policy runs open loop on speed.
+#
+# Both unitree layouts also carry unitree's per-term observation scales (ang_vel x0.2,
+# joint_vel x0.05); those are part of the same observation definition, so keeping them on
+# both is what makes U1 -> U2 a one-variable change instead of a four-variable one.
+_OBS_LAYOUTS = {"full": 49, "unitree_vel": 48, "unitree": 45}
+_obs_layout = _phase_cfg["env"].get("obs_layout", "full")
+if _obs_layout not in _OBS_LAYOUTS:
+    raise ValueError(
+        f"unknown obs_layout '{_obs_layout}' -- expected one of {sorted(_OBS_LAYOUTS)}"
+    )
+_obs_dim_single = _OBS_LAYOUTS[_obs_layout]
+_is_unitree_obs = _obs_layout != "full"
+
+
 @configclass
 class QuadrupedEnvCfg(DirectRLEnvCfg):
 
@@ -248,8 +276,38 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     )
 
     # ── Observation / Action spaces ───────────────────────────────────────────
-    observation_space = int(os.environ.get("QUADRUPED_OBS_DIM", 49 * (1 + obs_history_len)))
-    # obs = [lin_vel(3) + ang_vel(3) + gravity(3) + cmd(4) + jpos(12) + jvel(12) + actions(12)] = 49
+    # See the _OBS_LAYOUTS block above this class for what each layout contains.
+    obs_layout = _obs_layout
+    obs_dim_single = _obs_dim_single
+    observation_space = int(
+        os.environ.get("QUADRUPED_OBS_DIM", _obs_dim_single * (1 + obs_history_len))
+    )
+    # Per-term observation scales, applied AFTER noise -- the order Isaac Lab's
+    # ObservationManager uses (func -> noise -> clip -> scale), so a noise sigma in the yaml
+    # is always stated in the raw physical unit (rad/s), never in scaled units.
+    obs_ang_vel_scale = _phase_cfg["env"].get(
+        "obs_ang_vel_scale", 0.2 if _is_unitree_obs else 1.0
+    )
+    obs_joint_vel_scale = _phase_cfg["env"].get(
+        "obs_joint_vel_scale", 0.05 if _is_unitree_obs else 1.0
+    )
+    # Draw the per-channel sensor noise uniformly instead of normally, matching Isaac Lab's
+    # AdditiveUniformNoiseCfg. The yaml numbers are then half-widths, not standard deviations.
+    observation_noise_uniform = _phase_cfg["env"].get("observation_noise_uniform", False)
+    # Hard bounds on the raw action and on every observation channel, matching unitree's
+    # JointPositionActionCfg(clip={".*": (-100, 100)}) and the clip=(-100, 100) on every one of
+    # its ObsTerms. They look like dead code -- a healthy policy never approaches 100 -- and they
+    # are not. `last_action` is fed back into the observation, so an action that starts to
+    # diverge re-enters the network next step and drives the next action further out. Nothing
+    # else in this env bounds that loop: the joint targets are clamped to the joint limits, so
+    # the robot keeps walking and the divergence is invisible in the gait while
+    # action_rate_l2 (which reads the RAW action) grows without limit. Measured on the first
+    # U1 run: action_rate_l2 went -0.19 -> -79 -> -418916 over ~500 iterations while episode
+    # length stayed at 985 and velocity tracking stayed at 1.33.
+    #
+    # None disables, which is the default so phases predating the port are untouched.
+    action_clip = _phase_cfg["env"].get("action_clip", None)
+    obs_clip = _phase_cfg["env"].get("obs_clip", None)
     action_space = 12
     state_space = 0
     action_scale = _phase_cfg["env"]["action_scale"]
@@ -268,7 +326,14 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     robot: ArticulationCfg = UNITREE_A1_CFG.copy()
     robot.prim_path = "/World/envs/env_.*/Robot"
     robot.actuators = UNITREE_QUADRUPED_CFG.actuators.copy()
-    spawn_height = 0.50
+    # Height the base is teleported to on every reset. The robots stand at 0.42 (A1) / 0.40
+    # (Go2), so the 0.50 default is a deliberate ~8 cm drop -- it forces the policy to absorb a
+    # landing at the start of every episode. That is NOT what unitree does: its reset_base event
+    # leaves z at the asset's own init_state, and it has no height-based termination at all, only
+    # base contact. Combined with standby_duration_s: 0.0 and this env's base_height < 0.15 fall
+    # test, the drop is armed from step 1, which makes early episodes harsher here than in U0.
+    # Per-phase so an arm reproducing unitree can spawn the way unitree does.
+    spawn_height = _phase_cfg["env"].get("spawn_height", 0.50)
 
     # ── Scene ─────────────────────────────────────────────────────────────────
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
@@ -333,6 +398,29 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     # Joint friction — viscous drag
     joint_friction_range = tuple(_phase_cfg["domain_randomization"]["joint_friction_range"])
 
+    # Body contact material — what actually sets foot grip.
+    # Sampled once at construction and assigned per collision shape, matching isaaclab
+    # mdp.randomize_rigid_body_material (which unitree_rl_lab runs as a startup event). PhysX
+    # caps the scene at 64000 distinct materials, which is why upstream samples num_buckets
+    # triples once and reuses them rather than redrawing per reset.
+    #
+    # This is the ROBOT's material, not the ground's. The terrain sits at static/dynamic 1.0 with
+    # friction_combine_mode "multiply" (see _TERRAIN_PHYSICS_MATERIAL, same as unitree's), so the
+    # effective coefficient at each foot is just what is sampled here.
+    #
+    # All three ranges at [0.0, 0.0] means "leave the spawned material alone", the same
+    # convention the ranges above use.
+    body_static_friction_range = tuple(
+        _phase_cfg["domain_randomization"].get("body_static_friction_range", (0.0, 0.0))
+    )
+    body_dynamic_friction_range = tuple(
+        _phase_cfg["domain_randomization"].get("body_dynamic_friction_range", (0.0, 0.0))
+    )
+    body_restitution_range = tuple(
+        _phase_cfg["domain_randomization"].get("body_restitution_range", (0.0, 0.0))
+    )
+    material_buckets = _phase_cfg["domain_randomization"].get("material_buckets", 64)
+
     # PD gains
     joint_stiffness_range = tuple(_phase_cfg["domain_randomization"]["joint_stiffness_range"])
     joint_pd_damping_range = tuple(_phase_cfg["domain_randomization"]["joint_pd_damping_range"])
@@ -350,7 +438,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
         push_a1 = EventTerm(
             func=push_robot_heterogeneous,
             mode="interval",
-            interval_range_s=(10.0, 15.0),
+            interval_range_s=_push_interval,
             params={
                 "asset_cfg": SceneEntityCfg("robot_a1"),
                 "velocity_range": {"x": (_vel_range[0], _vel_range[1]), "y": (_vel_range[0], _vel_range[1])},
@@ -360,7 +448,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
         push_quadruped = EventTerm(
             func=push_robot_heterogeneous,
             mode="interval",
-            interval_range_s=(10.0, 15.0),
+            interval_range_s=_push_interval,
             params={
                 "asset_cfg": SceneEntityCfg("robot_quadruped"),
                 "velocity_range": {"x": (_vel_range[0], _vel_range[1]), "y": (_vel_range[0], _vel_range[1])},
@@ -370,7 +458,7 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
         push_go2 = EventTerm(
             func=push_robot_heterogeneous,
             mode="interval",
-            interval_range_s=(10.0, 15.0),
+            interval_range_s=_push_interval,
             params={
                 "asset_cfg": SceneEntityCfg("robot_go2"),
                 "velocity_range": {"x": (_vel_range[0], _vel_range[1]), "y": (_vel_range[0], _vel_range[1])},
@@ -514,6 +602,49 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     gait_phase_offset_diag2   = _phase_cfg["rewards"]["gait_phase_offset_diag2"]
 
     # ╔════════════════════════════════════════════════════════════════════════╗
+    # ║  PORTED unitree_rl_lab / ISAAC LAB TERMS  (arm U1, Write/Article/plan.md) ║
+    # ╚════════════════════════════════════════════════════════════════════════╝
+    #
+    # Every one of these is the upstream function verbatim -- see the matching block in
+    # _compute_reward_terms for the source it was copied from. They all default to 0.0, so
+    # phases written before the port load and behave exactly as they did.
+    #
+    # Note two of them deliberately DUPLICATE a term this env already has, because the maths
+    # differs and the point of U1 is fidelity, not tidiness:
+    #   rew_scale_joint_pos_limits vs rew_scale_joint_limits   (L1 outside the soft limits
+    #       vs quadratic outside a margin fraction of the range)
+    #   rew_scale_feet_air_time_thresh vs rew_scale_feet_air_time  (upstream's
+    #       (air_time - threshold) charged at touchdown vs my potential-based dphi/dt form)
+
+    # sum |joint_vel| * |applied_torque|   (unitree_rl_lab mdp.energy)
+    rew_scale_energy = _phase_cfg["rewards"].get("rew_scale_energy", 0.0)
+    # xy speed of each loaded foot   (isaaclab mdp.feet_slide)
+    rew_scale_feet_slide = _phase_cfg["rewards"].get("rew_scale_feet_slide", 0.0)
+    # spread of swing / stance durations across the four feet
+    # (unitree_rl_lab mdp.air_time_variance_penalty)
+    rew_scale_air_time_variance = _phase_cfg["rewards"].get("rew_scale_air_time_variance", 0.0)
+    # L1 distance outside the SOFT joint limits   (isaaclab mdp.joint_pos_limits)
+    rew_scale_joint_pos_limits = _phase_cfg["rewards"].get("rew_scale_joint_pos_limits", 0.0)
+    # L2 NORM (not squared sum) of deviation from the default pose, multiplied by
+    # joint_deviation_stand_still_scale when the robot is neither commanded to move nor already
+    # moving   (unitree_rl_lab mdp.joint_position_penalty)
+    rew_scale_joint_deviation = _phase_cfg["rewards"].get("rew_scale_joint_deviation", 0.0)
+    joint_deviation_stand_still_scale = _phase_cfg["rewards"].get(
+        "joint_deviation_stand_still_scale", 5.0
+    )
+    joint_deviation_velocity_threshold = _phase_cfg["rewards"].get(
+        "joint_deviation_velocity_threshold", 0.3
+    )
+    # (air_time - feet_air_time_threshold) summed over the feet that touched down this step,
+    # off below a 0.1 m/s xy command   (isaaclab mdp.feet_air_time)
+    rew_scale_feet_air_time_thresh = _phase_cfg["rewards"].get("rew_scale_feet_air_time_thresh", 0.0)
+    feet_air_time_threshold = _phase_cfg["rewards"].get("feet_air_time_threshold", 0.5)
+    # Count the monitored bodies in contact rather than flagging "any of them", which is what
+    # isaaclab mdp.undesired_contacts returns. Changes the SCALE of rew_scale_undesired_contacts,
+    # so the two forms are not interchangeable at a fixed weight.
+    undesired_contacts_count = _phase_cfg["rewards"].get("undesired_contacts_count", False)
+
+    # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  COMMANDS                                                             ║
     # ╚════════════════════════════════════════════════════════════════════════╝
 
@@ -553,6 +684,22 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     slow_command_range = tuple(
         _phase_cfg["commands"].get("slow_command_range", [0.05, 0.3])
     )
+
+    # ── Command-range level curriculum (unitree_rl_lab mdp.lin_vel_cmd_levels) ────────────
+    # Start command_x_range / command_y_range narrow and widen both ends by
+    # command_level_delta toward command_level_limit_* every time the mean per-second episodic
+    # track_lin_vel_xy reward clears command_level_reward_frac of that term's weight, checked
+    # at most once per episode length.
+    #
+    # It only ever WIDENS. That is the whole point for the paper: unitree's curriculum starts
+    # at +-0.1 (where nearly every command is slow) and finishes at +-1.0, i.e. back at the
+    # uniform-cube distribution where ~1.4% of draws fall below 0.3 m/s. The slow band is
+    # covered early, when the policy cannot walk yet, and abandoned once it can.
+    command_level_curriculum = _phase_cfg["commands"].get("command_level_curriculum", False)
+    command_level_delta = _phase_cfg["commands"].get("command_level_delta", 0.1)
+    command_level_limit_x = tuple(_phase_cfg["commands"].get("command_level_limit_x", [-1.0, 1.0]))
+    command_level_limit_y = tuple(_phase_cfg["commands"].get("command_level_limit_y", [-1.0, 1.0]))
+    command_level_reward_frac = _phase_cfg["commands"].get("command_level_reward_frac", 0.8)
 
     # ╔════════════════════════════════════════════════════════════════════════╗
     # ║  TERMINATION                                                          ║

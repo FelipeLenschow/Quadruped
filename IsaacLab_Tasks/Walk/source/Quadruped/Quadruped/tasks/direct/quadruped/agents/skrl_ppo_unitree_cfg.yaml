@@ -1,0 +1,106 @@
+# PPO configuration for arm U1 (and the rungs above it) -- see Write/Article/plan.md.
+#
+# This is skrl's PPO set as close to rsl_rl's as the two libraries allow, because U0 was
+# trained with rsl_rl and U1 exists to reproduce U0. Every difference here is a confound: if
+# U1's dead zone does not match U0's, the first thing to rule out is the optimiser, not the
+# reward set.
+#
+# Source: IsaacLab_Tasks/unitree_rl_lab/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/agents/
+#         rsl_rl_ppo_cfg.py  (BasePPORunnerCfg)
+#
+# Differences from skrl_ppo_cfg.yaml, i.e. from my own runs -- all of them are rsl_rl's values:
+#   separate           False -> True     rsl_rl builds two independent MLPs; skrl's default
+#                                        shares one trunk between policy and value.
+#   rollouts           32 -> 24          rsl_rl num_steps_per_env
+#   learning_epochs    8  -> 5
+#   mini_batches       8  -> 4
+#   learning_rate      5e-4 -> 1e-3
+#   kl_threshold       0.008 -> 0.01     rsl_rl desired_kl
+#   entropy_loss_scale 0.0 -> 0.01       rsl_rl entropy_coef. Not a small change: it is the
+#                                        only thing holding the action std up during training.
+#   value_loss_scale   2.0 -> 1.0        rsl_rl value_loss_coef
+#   state_preprocessor RunningStandardScaler -> null   rsl_rl empirical_normalization: False.
+#                                        Also matters for deployment: with no scaler the
+#                                        exported policy takes raw observations, which is what
+#                                        Controller/policy_runner.py feeds a unitree policy.
+#   value_preprocessor RunningStandardScaler -> null   rsl_rl normalises no returns either.
+#   rewards_shaper     0.1 -> 1.0        rsl_rl does not scale rewards.
+#   time_limit_bootstrap False -> True   rsl_rl adds gamma * V(s_T) to the reward on a timeout
+#                                        and treats the step as done for GAE. skrl reproduces
+#                                        that only with this flag set.
+
+seed: 42
+
+models:
+  # True: policy and value are separate networks, as in rsl_rl's ActorCritic.
+  separate: True
+  policy:
+    class: GaussianMixin
+    clip_actions: False
+    clip_log_std: True
+    min_log_std: -20.0
+    max_log_std: 2.0
+    # exp(0.0) = 1.0 = rsl_rl init_noise_std.
+    initial_log_std: 0.0
+    network:
+      - name: net
+        input: OBSERVATIONS
+        layers: [512, 256, 128]
+        activations: elu
+    output: ACTIONS
+  value:
+    class: DeterministicMixin
+    clip_actions: False
+    network:
+      - name: net
+        input: OBSERVATIONS
+        layers: [512, 256, 128]
+        activations: elu
+    output: ONE
+
+memory:
+  class: RandomMemory
+  memory_size: -1
+
+agent:
+  class: PPO
+  rollouts: 24
+  learning_epochs: 5
+  mini_batches: 4
+  discount_factor: 0.99
+  lambda: 0.95
+  learning_rate: 1.0e-03
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.01
+  state_preprocessor: null
+  state_preprocessor_kwargs: null
+  value_preprocessor: null
+  value_preprocessor_kwargs: null
+  random_timesteps: 0
+  learning_starts: 0
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+  entropy_loss_scale: 0.01
+  value_loss_scale: 1.0
+  kl_threshold: 0.0
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: True
+  experiment:
+    directory: "quadruped_direct"
+    experiment_name: ""
+    write_interval: 1000
+    # A crash costs one interval, not the run. U0 was lost once at ~90% because the interval
+    # was auto (timesteps/10) -- see Write/Article/plan.md section 8.
+    checkpoint_interval: 5000
+
+trainer:
+  class: SequentialTrainer
+  # Budget matched to U0 in ENVIRONMENT SAMPLES: U0 = 4096 envs x 24 steps x 6000 rsl_rl
+  # iterations = 589M. skrl counts `timesteps` as per-env steps, so 144000 x 24-step rollouts
+  # is the same 6000 updates over the same 589M samples -- provided the run uses 4096 envs.
+  # Halving num_envs means doubling this.
+  timesteps: 144000
+  environment_info: log

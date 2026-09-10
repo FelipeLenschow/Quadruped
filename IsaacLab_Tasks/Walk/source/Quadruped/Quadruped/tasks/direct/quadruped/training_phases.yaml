@@ -3,14 +3,36 @@ default: &default
     obs_history_len: 0
     robot_cfg: GO2
     terrain: flat
+    # full | unitree_vel | unitree -- see _OBS_LAYOUTS in quadruped_env_cfg.py. Fixed at
+    # process start (it sets the observation space), so it cannot change across a curriculum.
+    obs_layout: full
+    # Draw the per-channel sensor noise uniformly (isaaclab AdditiveUniformNoiseCfg) instead of
+    # normally. When true the observation_noise values below are half-widths, not sigmas.
+    observation_noise_uniform: false
+    # Hard bounds on the raw action and on each observation channel (null = off). unitree sets
+    # both to 100. They only ever fire on a diverging policy -- see quadruped_env_cfg.py.
+    action_clip: null
+    obs_clip: null
     num_envs: 2000
     action_scale: 0.25
     observation_noise_scale: 0.0
     max_timesteps: 50000
     episode_length_s: 20.0
     base_angle_termination_thresh: 0.7
+    # Base height on reset. 0.50 is ~8 cm above the A1 (0.42) / Go2 (0.40) standing pose, i.e. a
+    # drop at the start of every episode. unitree resets to the asset's own standing height and
+    # has no height termination at all. See quadruped_env_cfg.py.
+    spawn_height: 0.50
   domain_randomization:
     joint_friction_range: [0.0, 0.0]
+    # Robot contact material, sampled once at construction and assigned per collision shape
+    # (isaaclab mdp.randomize_rigid_body_material). All three at [0.0, 0.0] = leave it alone.
+    # The terrain is fixed at 1.0/1.0 with multiply combining, so these ARE the effective
+    # coefficients under the feet.
+    body_static_friction_range: [0.0, 0.0]
+    body_dynamic_friction_range: [0.0, 0.0]
+    body_restitution_range: [0.0, 0.0]
+    material_buckets: 64
     joint_stiffness_range: [0.0, 0.0]
     joint_pd_damping_range: [0.0, 0.0]
     action_latency_range_steps: [0, 0]
@@ -21,6 +43,7 @@ default: &default
   events:
     enable_pushes: false
     push_velocity_range: [0.0, 0.0]
+    push_interval_range_s: [10.0, 15.0]
   rewards:
     # ── Everything off ──
     rew_scale_alive: 0.0
@@ -75,6 +98,27 @@ default: &default
 
     rew_scale_gait_phase_sym: 0.0
 
+    # ── Ported unitree_rl_lab / Isaac Lab terms (arm U1, see Write/Article/plan.md) ──
+    # Upstream functions reproduced verbatim so unitree's reward set can be run inside this
+    # env and validated against unitree's own. All off here; only the `unitree` phase uses them.
+    # Two of them deliberately duplicate a term this env already has, because the maths differs:
+    #   rew_scale_joint_pos_limits      L1 outside the SOFT limits    (vs rew_scale_joint_limits,
+    #                                   quadratic outside a margin fraction of the range)
+    #   rew_scale_feet_air_time_thresh  (air_time - threshold) at touchdown  (vs
+    #                                   rew_scale_feet_air_time, my potential-based dphi/dt form)
+    rew_scale_energy: 0.0
+    rew_scale_feet_slide: 0.0
+    rew_scale_air_time_variance: 0.0
+    rew_scale_joint_pos_limits: 0.0
+    rew_scale_joint_deviation: 0.0
+    joint_deviation_stand_still_scale: 5.0
+    joint_deviation_velocity_threshold: 0.3
+    rew_scale_feet_air_time_thresh: 0.0
+    feet_air_time_threshold: 0.5
+    # false: undesired_contacts is 0/1 "any monitored body touching". true: the COUNT of bodies
+    # touching, which is what isaaclab mdp.undesired_contacts returns. Changes the term's scale.
+    undesired_contacts_count: false
+
     target_feet_air_time: 0.15
     feet_air_time_sigma: 0.01
     target_feet_air_time_slow: 0.20
@@ -115,6 +159,12 @@ default: &default
     x_only_command_fraction: 0.0
     y_only_command_fraction: 0.0
     yaw_only_command_fraction: 0.0
+    # Level curriculum on the command box (unitree_rl_lab mdp.lin_vel_cmd_levels). Off here.
+    command_level_curriculum: false
+    command_level_delta: 0.1
+    command_level_limit_x: [-1.0, 1.0]
+    command_level_limit_y: [-1.0, 1.0]
+    command_level_reward_frac: 0.8
 
 phases:
   phase1:
@@ -243,3 +293,129 @@ phases:
       slow_command_range: [0.05, 0.3]
 
       command_resampling_time: 12.0
+
+  # ── U1: unitree_rl_lab's Go2 velocity config, ported into this Direct env ────────────────
+  # Arm U1 of the ladder in Write/Article/plan.md. Its ONLY job is to reproduce U0 (unitree's
+  # own manager-based env, trained with rsl_rl) closely enough that every rung above it is
+  # interpretable. If the dead-zone curve and the tracking curve do not match U0, the port is
+  # wrong and nothing above it means anything -- fix it before training U2.
+  #
+  # Source: IsaacLab_Tasks/unitree_rl_lab/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/go2/
+  #         velocity_env_cfg.py  (plus mdp/rewards.py, mdp/curriculums.py)
+  #
+  # KNOWN DIFFERENCES FROM U0 -- none of them are reward, command or domain-randomisation
+  # terms, and all are listed in the paper's reproducibility section:
+  #   - Spawn. This env teleports the base to spawn_height (0.50) on every reset, ~8 cm above
+  #     the A1 standing pose, so each episode opens with a landing; unitree resets to the
+  #     asset's own standing height. Left inherited at 0.50 so the first U1 run matches what
+  #     is on disk. Set spawn_height: 0.42 here to remove the drop -- do that first if U1's
+  #     early collapse turns out to be deeper or longer than U0's.
+  #   - Terminations. Unitree kills on base contact > 1 N and on tilt > 0.8 rad. Here the tilt
+  #     test is base_angle_termination_thresh (cos 0.8 rad = 0.6967, matched below) and base
+  #     contact is approximated by the base_height < 0.15 m fall test.
+  #   - undesired_contacts monitors different bodies. Unitree watches head, hips, thighs and
+  #     calves; the contact sensor here only covers feet, calves and thighs (plus the trunk),
+  #     because its prim path is what the foot indices are resolved against.
+  #   - Commands are resampled on a per-env timer, not on episode reset. Both resample every
+  #     10 s; unitree additionally redraws on reset, so its episodes always open on a fresh
+  #     command while an episode here can inherit one mid-interval.
+  #   - PPO is skrl's, not rsl_rl's. Same algorithm; agents/skrl_ppo_unitree_cfg.yaml matches
+  #     rsl_rl's settings term by term, and is selected automatically for this phase.
+  unitree:
+    inherits: default
+    env:
+      # unitree's policy observation group verbatim: NO linear velocity anywhere, so the actor
+      # runs open loop on speed. This is exactly what U2 changes and nothing else.
+      obs_layout: unitree
+      observation_noise_uniform: true
+      # unitree clips the action and every ObsTerm at +-100. Not cosmetic: last_action feeds
+      # back into the observation, and without these the loop is unbounded.
+      action_clip: 100.0
+      obs_clip: 100.0
+      terrain: flat
+      # Budget matched to U0 in ENVIRONMENT SAMPLES, not iterations: U0 ran 4096 envs x 24
+      # steps x 6000 rsl_rl iterations = 589M samples. 4096 x 144000 is the same number.
+      # If 4096 envs will not fit, halve it and double max_timesteps -- keep the product.
+      num_envs: 4096
+      max_timesteps: 144000
+      action_scale: 0.25
+      episode_length_s: 20.0
+      # cos(0.8 rad) = 0.6967, matching unitree's bad_orientation limit_angle of 0.8.
+      base_angle_termination_thresh: 0.6967
+      # Global gain on the sensor model below; 1.0 = use unitree's numbers as written.
+      observation_noise_scale: 1.0
+    domain_randomization:
+      # unitree's two startup events: add_base_mass and physics_material. Everything else this
+      # env can randomise, unitree does not.
+      payload_mass_range: [-1.0, 3.0]
+      body_static_friction_range: [0.3, 1.2]
+      body_dynamic_friction_range: [0.3, 1.2]
+      body_restitution_range: [0.0, 0.15]
+      material_buckets: 64
+      # Unoise half-widths from unitree's PolicyCfg, in RAW physical units -- the layout's
+      # x0.2 / x0.05 scales are applied after the noise, exactly as Isaac Lab's
+      # ObservationManager does it. No entry for base_lin_vel: this layout has no such channel,
+      # and U2 adds it clean so that rung changes one thing.
+      observation_noise:
+        base_ang_vel: 0.2
+        projected_gravity: 0.05
+        joint_pos: 0.01
+        joint_vel: 1.5
+    events:
+      enable_pushes: true
+      push_velocity_range: [-0.5, 0.5]
+      push_interval_range_s: [5.0, 10.0]
+    rewards:
+      # -- task --
+      rew_scale_track_lin_vel_xy_exp: 1.5
+      rew_scale_track_ang_vel_z_exp: 0.75
+      # -- base --
+      rew_scale_lin_vel_z_l2: -2.0
+      rew_scale_ang_vel_xy_l2: -0.05
+      rew_scale_joint_vel_l2: -0.001
+      rew_scale_dof_acc_l2: -2.5e-7
+      rew_scale_dof_torques_l2: -2.0e-4
+      rew_scale_action_rate_l2: -0.1
+      rew_scale_joint_pos_limits: -10.0
+      rew_scale_energy: -2.0e-5
+      # -- robot --
+      rew_scale_flat_orientation_l2: -2.5
+      rew_scale_joint_deviation: -0.7
+      joint_deviation_stand_still_scale: 5.0
+      joint_deviation_velocity_threshold: 0.3
+      # -- feet --
+      # 0.1 x (air_time - 0.5). No Go2 swing lasts 0.5 s, so this is NEGATIVE at every landing:
+      # the term meant to pay for stepping charges for it, and standing still avoids the charge.
+      # Ported as written -- that is the finding.
+      rew_scale_feet_air_time_thresh: 0.1
+      feet_air_time_threshold: 0.5
+      rew_scale_air_time_variance: -1.0
+      rew_scale_feet_slide: -0.1
+      # -- other --
+      rew_scale_undesired_contacts: -1.0
+      undesired_contacts_count: true
+    commands:
+      # std = sqrt(0.25) in unitree's exp(-err / std^2) means a denominator of exactly 0.25.
+      # vel_tracking_sigma_exp 0 makes this env's denominator sigma * ||c||^0 = sigma, i.e. the
+      # fixed, command-independent width unitree uses. That fixed width is half the argument of
+      # the paper: standing still still collects exp(-0.04/0.25) = 85% of the tracking reward
+      # under a 0.2 m/s command.
+      command_lin_vel_std: 0.25
+      command_ang_vel_std: 0.25
+      vel_tracking_sigma_exp: 0.0
+      # Starting box. The level curriculum widens x and y from here toward the limits below.
+      command_x_range: [-0.1, 0.1]
+      command_y_range: [-0.1, 0.1]
+      # Yaw is NOT curriculum'd by unitree: full range from the first step.
+      command_yaw_range: [-1.0, 1.0]
+      command_level_curriculum: true
+      command_level_delta: 0.1
+      command_level_limit_x: [-1.0, 1.0]
+      command_level_limit_y: [-0.4, 0.4]
+      command_level_reward_frac: 0.8
+      command_resampling_time: 10.0
+      # unitree's rel_standing_envs.
+      zero_command_fraction: 0.1
+      # Off: this is the knob the paper proposes, and U1 must not have it.
+      slow_command_fraction: 0.0
+      standby_duration_s: 0.0
