@@ -43,7 +43,7 @@ share/python-wheels/
 *.swo
 
 # Project specific
-Write/Literature/
+Write/
 
 twin_*.xml
 
