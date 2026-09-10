@@ -32,9 +32,14 @@ share/python-wheels/
 **/logs/**/agent_[0-9]*.pt
 !**/logs/**/best_agent.pt
 !**/logs/**/*mujoco_eval_report*.json
+!**/logs/**/*isaac_eval_report*.json
 !**/logs/**/*.yaml
+!IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity/Original/model_5999.pt
+!IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity_both/Both/model_2999.pt
+!IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity_both_vel/Both_vel/model_5999.pt
 *.jit
 .launcher_last_command.json
+IsaacLab_Tasks/unitree_rl_lab/.git_upstream/
 
 # IDEs
 .vscode/
