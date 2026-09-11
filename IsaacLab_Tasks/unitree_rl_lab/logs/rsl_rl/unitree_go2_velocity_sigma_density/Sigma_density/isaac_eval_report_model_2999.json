@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "checkpoint": "/home/05680435969@corp.udesc.br/Quadruped/IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity_both/Both/model_2999.pt",
+    "checkpoint": "/home/05680435969@corp.udesc.br/Quadruped/IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity_sigma_density/Sigma_density/model_2999.pt",
     "checkpoint_name": "model_2999.pt",
     "task": "Unitree-Go2-Velocity-Both",
     "simulator": "isaac",

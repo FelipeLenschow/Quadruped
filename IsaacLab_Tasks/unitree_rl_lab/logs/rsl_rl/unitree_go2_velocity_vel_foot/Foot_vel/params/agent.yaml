@@ -7,7 +7,7 @@ obs_groups: {}
 clip_actions: null
 check_for_nan: true
 save_interval: 100
-experiment_name: unitree_go2_velocity_both_vel
+experiment_name: unitree_go2_velocity_vel_foot
 run_name: ''
 logger: tensorboard
 neptune_project: isaaclab
