@@ -26,6 +26,7 @@ class MujocoEvaluator(Node):
         self.checkpoint = checkpoint
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
         self.headless = headless
+        self.use_estimator = use_estimator
         self.safety_resets = 0
 
         # 0. Load Central Config
@@ -605,7 +606,11 @@ class MujocoEvaluator(Node):
                     "checkpoint_name": os.path.basename(self.checkpoint) if self.checkpoint else "None",
                     "robot_type": self.robot_type,
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "safety_resets": self.safety_resets
+                    "safety_resets": self.safety_resets,
+                    # Ground truth and estimator sweeps of the same checkpoint write the same
+                    # filename and overwrite each other - same as any other option here (robot,
+                    # headless, ...) - so this is the only record of which one produced the report.
+                    "velocity_source": "estimator" if self.use_estimator else "ground truth"
                 },
                 "results": results
             }

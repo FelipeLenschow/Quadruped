@@ -263,24 +263,25 @@ def main(
         actual_forward_vel = []
 
         # Force command zero during warmup (let it stand and stabilize)
-        unwrapped_env.target_commands[:, :3] = 0.0
-        unwrapped_env.commands[:, :3] = 0.0
+        with torch.inference_mode():
+            unwrapped_env.target_commands[:, :3] = 0.0
+            unwrapped_env.commands[:, :3] = 0.0
         
         for step in range(steps_per_speed):
             # Apply command
             if step == warmup_steps:
                 print("   -> Warmup finished, applying velocity command...")
                 
-            if step >= warmup_steps:
-                unwrapped_env.target_commands[:, 0] = speed
-                unwrapped_env.target_commands[:, 1:3] = 0.0
-                unwrapped_env.commands[:, 0] = speed
-                unwrapped_env.commands[:, 1:3] = 0.0
-                
-                # Prevent resampling
-                unwrapped_env.command_timer[:] = 0.0
-
             with torch.inference_mode():
+                if step >= warmup_steps:
+                    unwrapped_env.target_commands[:, 0] = speed
+                    unwrapped_env.target_commands[:, 1:3] = 0.0
+                    unwrapped_env.commands[:, 0] = speed
+                    unwrapped_env.commands[:, 1:3] = 0.0
+
+                    # Prevent resampling
+                    unwrapped_env.command_timer[:] = 0.0
+
                 outputs = (
                     runner.agent.act(obs, None, timestep=0, timesteps=0)
                     if _act_needs_states

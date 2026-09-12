@@ -464,7 +464,7 @@ def run_cli_menu():
         print("  [T] Test Joints (Real Robot)")
         print("  " + "-" * 45)
         print("  --- ROS 2 Tools ---")
-        print("  [K] Remote Teleop")
+        print("  [K] Remote Teleop / Eval Sweep")
         print("  [V] Visualizers")
         print("  [P] PlotJuggler")
         print("  [M] MCAP Log & Replay")
@@ -536,8 +536,13 @@ def run_cli_menu():
             action = "real_telemetry"
             
     if action == "teleop":
-        tel_choice = input("Select Teleop [1: Keyboard, 2: Gamepad (Joy)] (default 1): ").strip() or "1"
-        if tel_choice == "2":
+        tel_choice = input("Select Teleop [1: Keyboard, 2: Gamepad (Joy), 3: Eval Sweep (Gamepad), "
+                           "4: Eval Sweep Report (from MCAP)] (default 1): ").strip() or "1"
+        if tel_choice == "4":
+            action = "sweep_report"
+        elif tel_choice == "3":
+            action = "teleop_sweep"
+        elif tel_choice == "2":
             action = "teleop_joy"
         else:
             action = "teleop_keyboard"
@@ -563,7 +568,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "rqt_graph", "tf2_tree", "discovery_server"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "discovery_server"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -587,6 +592,7 @@ def run_cli_menu():
             last_cmd.get("record_session", False),
             last_cmd.get("training_phase", ""),
             last_cmd.get("auto_eval", 0),
+            last_cmd.get("sweep_opts", {}),
         )
 
     # 1.2 Validation
@@ -621,7 +627,9 @@ def run_cli_menu():
     selected_module_name = "None"
     selected_module_path = "."
     
-    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
+    # teleop_sweep is not in this list on purpose: it asks for the checkpoint the robot is running,
+    # only to file the report under it later. sweep_report reads that back from the recording.
+    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         # unitree_rl_lab lives here so its logs sit alongside the others (the eval viewer and the
         # checkpoint list both read it in place), but it is a separate upstream repo with its own
@@ -630,7 +638,7 @@ def run_cli_menu():
         # checkpoint through Controller/policy_runner.py, which reads rsl_rl archives directly.
         # Deploy is one of them: its run's params/deploy.yaml (kp 25, kd 0.5, 50 Hz, action
         # scale 0.25, default pose) matches what real_driver.py and robot_defaults.py apply.
-        if "unitree_rl_lab" in modules and action not in ("eval_policy", "mujoco", "mujoco_twin", "real_deploy"):
+        if "unitree_rl_lab" in modules and action not in ("eval_policy", "mujoco", "mujoco_twin", "real_deploy", "teleop_sweep"):
             modules.remove("unitree_rl_lab")
         
         if not modules:
@@ -685,7 +693,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
+    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -751,7 +759,7 @@ def run_cli_menu():
         pass
 
     domain_id = default_domain
-    if action not in ["train", "isaac_lab", "eval_policy", "discovery_server"]:
+    if action not in ["train", "isaac_lab", "eval_policy", "discovery_server", "sweep_report"]:
         domain_id = input(f"Enter ROS_DOMAIN_ID (default {default_domain}): ").strip() or default_domain
     robot_cfg = "UNITREE_GO2_CFG" # Default for now
     terrain_cfg = "flat"
@@ -767,6 +775,7 @@ def run_cli_menu():
     show_ghost = True
     training_phase = ""
     auto_eval = 0
+    sweep_opts = {}  # teleop_sweep: walk_s / ramp_s / axes; sweep_report: recordings
 
     if action in ["train", "isaac_lab", "eval_policy", "isaac_sim", "mujoco", "gazebo"]:
         if action in ["isaac_sim", "mujoco", "gazebo", "eval_policy"]:
@@ -856,7 +865,7 @@ def run_cli_menu():
             if ans == "y":
                 teleop = True
 
-    if action in ["mujoco", "gazebo", "isaac_sim"]:
+    if action in ["mujoco", "gazebo", "isaac_sim", "eval_policy"]:
         ans = input("Use State Estimator? [Y/n] (default Y): ").lower().strip()
         use_estimator = ans != "n"
 
@@ -874,11 +883,40 @@ def run_cli_menu():
         ans = input("Show commanded-position ghost (green robot)? [Y/n] (default Y): ").lower().strip()
         show_ghost = ans != "n"
 
+    if action == "teleop_sweep":
+        def ask_number(prompt, default):
+            raw = input(prompt).strip()
+            try:
+                return str(float(raw)) if raw else default
+            except ValueError:
+                print(f"[Launcher] '{raw}' is not a number, using {default}.")
+                return default
+        sweep_opts = {
+            "axes": (input("Axes to sweep (default x,y,yaw): ").strip() or "x,y,yaw").replace(" ", ""),
+            # The table goes to 1.0 on every axis; the robot is only swept up to 0.5 m/s for now.
+            "max_lin_speed": ask_number("Max linear speed, m/s (default 0.5): ", "0.5"),
+            "max_yaw_rate": ask_number("Max yaw rate, rad/s (default 1.0): ", "1.0"),
+            # x and y walk a set distance, so every speed fits the room - the MuJoCo sweep's 30 s is
+            # 15 m at 0.5 m/s. 0.0 and yaw go nowhere and walk the max time instead.
+            "walk_m": ask_number("Walking distance for x/y speeds, metres (default 4, 0 = fixed time): ", "4"),
+        }
+        if float(sweep_opts["walk_m"]) > 0:
+            # Capped, or the slow end takes minutes: 4 m at 0.05 m/s is 80 s.
+            sweep_opts["walk_s"] = ask_number("Max walk time per speed, also the time for 0 and yaw, seconds (default 30): ", "30")
+        else:
+            sweep_opts["walk_s"] = ask_number("Walk time per speed, seconds (default 10): ", "10")
+        sweep_opts["ramp_s"] = ask_number("Ramp up to each speed, seconds (default 0 = step, like the MuJoCo sweep): ", "0")
+
     # Auto-record prompt if launching driver
     record_session = False
     if action in ["mujoco", "gazebo", "isaac_sim", "real_deploy"]:
         # Recording is opt-in: default N regardless of logging.auto_record in config.yaml.
         record_session = input("Record this session to MCAP? [y/N]: ").lower().strip() == "y"
+    elif action == "teleop_sweep":
+        # Default yes here: the sweep measures nothing itself, the recording is the measurement.
+        record_session = input("Record this sweep to MCAP? [Y/n] (default Y): ").lower().strip() != "n"
+        if not record_session:
+            print("[Launcher] Not recording - Tools/sweep_report.py will have nothing to read.")
 
     if action == "mcap":
         # MCAP Log & Replay sub-menu
@@ -934,7 +972,34 @@ def run_cli_menu():
                 selected_file = files[0]
             run_name = os.path.join(record_dir, selected_file)
 
-    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, no_ground_truth, show_ghost, record_session, training_phase, auto_eval
+    if action == "sweep_report":
+        record_dir = "Mcap/Recordings"
+        try:
+            with open(CONFIG_PATH, 'r') as f:
+                record_dir = (yaml.safe_load(f) or {}).get("logging", {}).get("record_dir", record_dir)
+        except Exception:
+            pass
+        sessions = sorted(
+            (d for d in os.listdir(record_dir) if d.startswith("run_teleop_sweep_")), reverse=True
+        ) if os.path.isdir(record_dir) else []
+        if not sessions:
+            print(f"[Launcher] No Eval Sweep recordings (run_teleop_sweep_*) in '{record_dir}/'.")
+            sys.exit(0)
+        print("\nSelect Eval Sweep Recording(s):")
+        for i, s in enumerate(sessions):
+            print(f"  [{i+1}] {s}")
+        picks = input(f"Enter choice(s), e.g. 1 or 1,3 to merge [1-{len(sessions)}] (default 1): ").strip() or "1"
+        chosen = []
+        for p in picks.replace(" ", "").split(","):
+            try:
+                chosen.append(os.path.abspath(os.path.join(record_dir, sessions[int(p) - 1])))
+            except (ValueError, IndexError):
+                print(f"[Launcher] Ignoring '{p}'.")
+        if not chosen:
+            sys.exit(0)
+        sweep_opts = {"recordings": chosen}
+
+    return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, no_ground_truth, show_ghost, record_session, training_phase, auto_eval, sweep_opts
 
 def main():
     (
@@ -956,6 +1021,7 @@ def main():
         record_session,
         training_phase,
         auto_eval,
+        sweep_opts,
     ) = run_cli_menu()
 
     # Save for next time
@@ -978,6 +1044,7 @@ def main():
         "record_session": record_session,
         "training_phase": training_phase,
         "auto_eval": auto_eval,
+        "sweep_opts": sweep_opts,
     })
 
     print("\n" + "=" * 50)
@@ -1172,7 +1239,7 @@ def main():
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "discovery_server"):
+    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "discovery_server"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable 
@@ -1291,6 +1358,27 @@ def main():
                 cmd.append(f"config_filepath:={joy_cfg}")
                 print(f"[Launcher] Joystick config: {joy_cfg}")
 
+        elif action == "teleop_sweep":
+            # joy_node is started below on its own - teleop_twist_joy would be a second /cmd_vel
+            # source, and the sweep node refuses to run beside one.
+            bridge_script = os.path.abspath(os.path.join("Operator", "sweep_teleop.py"))
+            cmd = [
+                sys_python,
+                bridge_script,
+                f"--robot={robot_key}",
+                f"--checkpoint={abs_ckpt}",
+                f"--walk_s={sweep_opts.get('walk_s', '10')}",
+                f"--ramp_s={sweep_opts.get('ramp_s', '0')}",
+                f"--axes={sweep_opts.get('axes', 'x,y,yaw')}",
+                f"--max_lin_speed={sweep_opts.get('max_lin_speed', '0.5')}",
+                f"--max_yaw_rate={sweep_opts.get('max_yaw_rate', '1.0')}",
+                f"--walk_m={sweep_opts.get('walk_m', '0')}",
+            ]
+
+        elif action == "sweep_report":
+            bridge_script = os.path.abspath(os.path.join("Tools", "sweep_report.py"))
+            cmd = [sys_python, bridge_script] + list(sweep_opts.get("recordings", []))
+
         elif action == "test_joints":
             bridge_script = os.path.abspath(os.path.join("Unitree", "test_joints.py"))
             cmd = [sys_python, bridge_script]
@@ -1346,6 +1434,19 @@ def main():
         # Check if we should auto-record this session
         record_proc = None
         reward_proc = None
+        joy_proc = None
+
+        if action == "teleop_sweep":
+            # joy_node alone, with the Gamepad teleop's params file for its deadzone and autorepeat
+            # rate (the sweep node reads the stick mapping from the same file). Its output is
+            # silenced because it would tear through the sweep's status line; a missing pad shows
+            # there as "[no /joy]".
+            joy_cfg = os.path.abspath(os.path.join("Configs", "joy_f710.config.yaml"))
+            joy_cmd = ["ros2", "run", "joy", "joy_node"]
+            if os.path.exists(joy_cfg):
+                joy_cmd += ["--ros-args", "--params-file", joy_cfg]
+            print("[Launcher] Starting joy_node for the eval sweep...")
+            joy_proc = subprocess.Popen(joy_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
         
         # Start Reward Estimator automatically for deployments
         if action in ["isaac_sim", "mujoco", "mujoco_twin", "real_deploy", "eval_mujoco"]:
@@ -1416,6 +1517,13 @@ def main():
                 except subprocess.TimeoutExpired:
                     reward_proc.kill()
                     
+            if joy_proc is not None:
+                joy_proc.terminate()
+                try:
+                    joy_proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    joy_proc.kill()
+
             if record_proc is not None:
                 print("\n[Launcher] Stopping background MCAP recorder...")
                 record_proc.terminate()

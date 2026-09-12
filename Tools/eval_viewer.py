@@ -252,12 +252,15 @@ def _report_identity(file_path, meta):
 
     # Which simulator produced it. metadata wins; otherwise read it off the filename, so the
     # older MuJoCo reports (written before the field existed) still identify correctly.
+    # Tools/sweep_report.py writes real_eval_report_<ckpt>.json from the robot itself.
     simulator = (meta or {}).get("simulator")
     if not simulator:
-        simulator = "isaac" if "isaac_eval_report" in os.path.basename(file_path) else "mujoco"
-    # Same checkpoint swept in both simulators must not collapse into one sidebar entry.
-    if simulator == "isaac":
-        label = f"{label} [isaac]"
+        base = os.path.basename(file_path)
+        simulator = ("isaac" if "isaac_eval_report" in base
+                     else "real" if "real_eval_report" in base else "mujoco")
+    # Same checkpoint swept in several places must not collapse into one sidebar entry.
+    if simulator in ("isaac", "real"):
+        label = f"{label} [{simulator}]"
 
     return {"run_name": run_name, "run_id": run_id, "simulator": simulator,
             "checkpoint_label": label, "checkpoint_steps": steps}

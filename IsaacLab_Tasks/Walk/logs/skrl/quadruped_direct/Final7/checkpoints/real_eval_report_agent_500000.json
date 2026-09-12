@@ -1,0 +1,1340 @@
+{
+    "metadata": {
+        "checkpoint": "/app/IsaacLab_Tasks/Walk/logs/skrl/quadruped_direct/Final7/checkpoints/agent_500000.pt",
+        "checkpoint_name": "agent_500000.pt",
+        "robot_type": "go2",
+        "timestamp": "2026-09-11 23:00:06",
+        "simulator": "real",
+        "velocity_source": "state estimator",
+        "walk_s": [
+            4.0,
+            5.333333333333333,
+            8.0,
+            11.428571428571429,
+            16.0,
+            20.0,
+            26.666666666666668,
+            30.0
+        ],
+        "walk_m": [
+            4.0
+        ],
+        "ramp_s": [
+            0.0
+        ],
+        "settle_s": 0.0,
+        "source_recordings": [
+            "/app/Mcap/Recordings/run_teleop_sweep_20260911_214800",
+            "/app/Mcap/Recordings/run_teleop_sweep_20260911_222824",
+            "/app/Mcap/Recordings/run_teleop_sweep_20260911_224135"
+        ]
+    },
+    "results": {
+        "x": {
+            "0.0": {
+                "commanded_speed": 0.0,
+                "actual_speed": 0.0,
+                "foot_lift_height_cm": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "foot_swing_time_s": 0.0,
+                "step_frequency_hz": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    30.8,
+                    22.1,
+                    0.0,
+                    0.0
+                ],
+                "fsr_peak_stance_counts": [
+                    31.0,
+                    22.1,
+                    0.0,
+                    0.0
+                ],
+                "phase_diff_front_percent": 0.0,
+                "phase_diff_right_percent": 0.0,
+                "phase_diff_diag_percent": 0.0,
+                "base_oscillation": {
+                    "std_z_vel": 0.0,
+                    "std_roll_vel": 0.01,
+                    "std_pitch_vel": 0.01
+                },
+                "position_error": {
+                    "x_m": 0.0133,
+                    "y_m": 0.031,
+                    "yaw_rad": -0.0129
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 6.55,
+                "telemetry_samples": 199,
+                "telemetry_rate_hz": 30.4,
+                "max_telemetry_gap_ms": 39.0
+            },
+            "0.05": {
+                "commanded_speed": 0.05,
+                "actual_speed": 0.0,
+                "foot_lift_height_cm": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "foot_swing_time_s": 0.0,
+                "step_frequency_hz": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    30.0,
+                    23.7,
+                    0.0,
+                    0.0
+                ],
+                "fsr_peak_stance_counts": [
+                    31.0,
+                    24.1,
+                    0.0,
+                    0.0
+                ],
+                "phase_diff_front_percent": 0.0,
+                "phase_diff_right_percent": 0.0,
+                "phase_diff_diag_percent": 0.0,
+                "base_oscillation": {
+                    "std_z_vel": 0.0,
+                    "std_roll_vel": 0.01,
+                    "std_pitch_vel": 0.01
+                },
+                "position_error": {
+                    "x_m": -0.4267,
+                    "y_m": 0.0522,
+                    "yaw_rad": -0.0341
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 9.48,
+                "telemetry_samples": 286,
+                "telemetry_rate_hz": 30.2,
+                "max_telemetry_gap_ms": 41.2
+            },
+            "0.1": {
+                "commanded_speed": 0.1,
+                "actual_speed": 0.01,
+                "foot_lift_height_cm": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "foot_swing_time_s": 0.0,
+                "step_frequency_hz": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    22.8,
+                    31.3,
+                    0.0,
+                    0.0
+                ],
+                "fsr_peak_stance_counts": [
+                    31.0,
+                    34.1,
+                    0.0,
+                    0.0
+                ],
+                "phase_diff_front_percent": 0.0,
+                "phase_diff_right_percent": 0.0,
+                "phase_diff_diag_percent": 0.0,
+                "base_oscillation": {
+                    "std_z_vel": 0.0,
+                    "std_roll_vel": 0.01,
+                    "std_pitch_vel": 0.01
+                },
+                "position_error": {
+                    "x_m": -0.8016,
+                    "y_m": 0.0362,
+                    "yaw_rad": -0.0459
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 8.72,
+                "telemetry_samples": 263,
+                "telemetry_rate_hz": 30.2,
+                "max_telemetry_gap_ms": 41.1
+            },
+            "0.15": {
+                "commanded_speed": 0.15,
+                "actual_speed": 0.09,
+                "foot_lift_height_cm": [
+                    7.62,
+                    5.65,
+                    7.32,
+                    3.36
+                ],
+                "foot_swing_time_s": 0.69,
+                "step_frequency_hz": [
+                    0.77,
+                    0.65,
+                    0.65,
+                    0.61
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    25.6,
+                    33.1,
+                    19.5,
+                    14.5
+                ],
+                "fsr_peak_stance_counts": [
+                    70.0,
+                    134.1,
+                    58.0,
+                    23.0
+                ],
+                "phase_diff_front_percent": 23.5,
+                "phase_diff_right_percent": 13.35,
+                "phase_diff_diag_percent": 26.91,
+                "base_oscillation": {
+                    "std_z_vel": 0.03,
+                    "std_roll_vel": 0.25,
+                    "std_pitch_vel": 0.14
+                },
+                "position_error": {
+                    "x_m": -1.388,
+                    "y_m": -0.3716,
+                    "yaw_rad": -0.1781
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 24.75,
+                "telemetry_samples": 738,
+                "telemetry_rate_hz": 29.8,
+                "max_telemetry_gap_ms": 41.6
+            },
+            "0.2": {
+                "commanded_speed": 0.2,
+                "actual_speed": 0.16,
+                "foot_lift_height_cm": [
+                    9.18,
+                    6.89,
+                    6.45,
+                    4.94
+                ],
+                "foot_swing_time_s": 0.44,
+                "step_frequency_hz": [
+                    1.04,
+                    0.98,
+                    1.04,
+                    1.16
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    30.4,
+                    32.9,
+                    18.2,
+                    15.5
+                ],
+                "fsr_peak_stance_counts": [
+                    60.0,
+                    109.1,
+                    50.0,
+                    26.0
+                ],
+                "phase_diff_front_percent": 22.22,
+                "phase_diff_right_percent": 15.34,
+                "phase_diff_diag_percent": 29.28,
+                "base_oscillation": {
+                    "std_z_vel": 0.04,
+                    "std_roll_vel": 0.32,
+                    "std_pitch_vel": 0.17
+                },
+                "position_error": {
+                    "x_m": -0.5717,
+                    "y_m": -0.3674,
+                    "yaw_rad": -0.1105
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 16.32,
+                "telemetry_samples": 486,
+                "telemetry_rate_hz": 29.8,
+                "max_telemetry_gap_ms": 41.8
+            },
+            "0.25": {
+                "commanded_speed": 0.25,
+                "actual_speed": 0.2,
+                "foot_lift_height_cm": [
+                    11.67,
+                    7.39,
+                    6.82,
+                    3.99
+                ],
+                "foot_swing_time_s": 0.36,
+                "step_frequency_hz": [
+                    1.06,
+                    1.14,
+                    1.22,
+                    1.55
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    33.2,
+                    34.0,
+                    19.7,
+                    15.9
+                ],
+                "fsr_peak_stance_counts": [
+                    73.0,
+                    130.1,
+                    70.0,
+                    27.0
+                ],
+                "phase_diff_front_percent": 29.88,
+                "phase_diff_right_percent": 24.32,
+                "phase_diff_diag_percent": 32.3,
+                "base_oscillation": {
+                    "std_z_vel": 0.05,
+                    "std_roll_vel": 0.35,
+                    "std_pitch_vel": 0.18
+                },
+                "position_error": {
+                    "x_m": -0.5535,
+                    "y_m": -0.3343,
+                    "yaw_rad": -0.2171
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 12.29,
+                "telemetry_samples": 366,
+                "telemetry_rate_hz": 29.8,
+                "max_telemetry_gap_ms": 41.9
+            },
+            "0.35": {
+                "commanded_speed": 0.35,
+                "actual_speed": 0.29,
+                "foot_lift_height_cm": [
+                    11.62,
+                    8.3,
+                    6.32,
+                    5.06
+                ],
+                "foot_swing_time_s": 0.28,
+                "step_frequency_hz": [
+                    1.36,
+                    1.36,
+                    1.47,
+                    2.04
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    37.9,
+                    33.9,
+                    20.4,
+                    16.7
+                ],
+                "fsr_peak_stance_counts": [
+                    77.0,
+                    156.1,
+                    94.0,
+                    27.0
+                ],
+                "phase_diff_front_percent": 35.89,
+                "phase_diff_right_percent": 30.36,
+                "phase_diff_diag_percent": 22.06,
+                "base_oscillation": {
+                    "std_z_vel": 0.06,
+                    "std_roll_vel": 0.42,
+                    "std_pitch_vel": 0.25
+                },
+                "position_error": {
+                    "x_m": -0.5443,
+                    "y_m": -0.3169,
+                    "yaw_rad": -0.1042
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 8.82,
+                "telemetry_samples": 264,
+                "telemetry_rate_hz": 29.9,
+                "max_telemetry_gap_ms": 41.2
+            },
+            "0.5": {
+                "commanded_speed": 0.5,
+                "actual_speed": 0.41,
+                "foot_lift_height_cm": [
+                    15.12,
+                    10.63,
+                    8.07,
+                    6.97
+                ],
+                "foot_swing_time_s": 0.24,
+                "step_frequency_hz": [
+                    1.67,
+                    1.52,
+                    1.67,
+                    2.27
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    43.1,
+                    33.5,
+                    22.2,
+                    18.6
+                ],
+                "fsr_peak_stance_counts": [
+                    114.0,
+                    130.1,
+                    90.0,
+                    30.0
+                ],
+                "phase_diff_front_percent": 42.06,
+                "phase_diff_right_percent": 36.3,
+                "phase_diff_diag_percent": 16.82,
+                "base_oscillation": {
+                    "std_z_vel": 0.06,
+                    "std_roll_vel": 0.49,
+                    "std_pitch_vel": 0.28
+                },
+                "position_error": {
+                    "x_m": -0.619,
+                    "y_m": -0.2362,
+                    "yaw_rad": -0.0446
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 6.6,
+                "telemetry_samples": 197,
+                "telemetry_rate_hz": 29.8,
+                "max_telemetry_gap_ms": 41.0
+            },
+            "0.75": {
+                "commanded_speed": 0.75,
+                "actual_speed": 0.57,
+                "foot_lift_height_cm": [
+                    14.86,
+                    17.9,
+                    9.07,
+                    9.73
+                ],
+                "foot_swing_time_s": 0.25,
+                "step_frequency_hz": [
+                    1.79,
+                    1.79,
+                    1.79,
+                    1.79
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    46.7,
+                    29.4,
+                    23.3,
+                    17.3
+                ],
+                "fsr_peak_stance_counts": [
+                    162.0,
+                    66.1,
+                    112.0,
+                    28.0
+                ],
+                "phase_diff_front_percent": 41.4,
+                "phase_diff_right_percent": 35.28,
+                "phase_diff_diag_percent": 17.84,
+                "base_oscillation": {
+                    "std_z_vel": 0.09,
+                    "std_roll_vel": 0.77,
+                    "std_pitch_vel": 0.45
+                },
+                "position_error": {
+                    "x_m": -0.8039,
+                    "y_m": -0.2295,
+                    "yaw_rad": -0.0224
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 4.47,
+                "telemetry_samples": 134,
+                "telemetry_rate_hz": 30.0,
+                "max_telemetry_gap_ms": 43.8
+            },
+            "1.0": {
+                "commanded_speed": 1.0,
+                "actual_speed": 0.62,
+                "foot_lift_height_cm": [
+                    18.96,
+                    18.63,
+                    8.32,
+                    10.65
+                ],
+                "foot_swing_time_s": 0.27,
+                "step_frequency_hz": [
+                    1.89,
+                    1.89,
+                    1.62,
+                    1.89
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    51.6,
+                    35.1,
+                    22.9,
+                    22.5
+                ],
+                "fsr_peak_stance_counts": [
+                    194.0,
+                    140.1,
+                    109.0,
+                    54.0
+                ],
+                "phase_diff_front_percent": 35.33,
+                "phase_diff_right_percent": 36.56,
+                "phase_diff_diag_percent": 11.75,
+                "base_oscillation": {
+                    "std_z_vel": 0.11,
+                    "std_roll_vel": 0.8,
+                    "std_pitch_vel": 0.44
+                },
+                "position_error": {
+                    "x_m": -1.4108,
+                    "y_m": -0.2513,
+                    "yaw_rad": -0.1209
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 3.7,
+                "telemetry_samples": 110,
+                "telemetry_rate_hz": 29.7,
+                "max_telemetry_gap_ms": 40.6
+            }
+        },
+        "y": {
+            "0.0": {
+                "commanded_speed": 0.0,
+                "actual_speed": 0.0,
+                "foot_lift_height_cm": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "foot_swing_time_s": 0.0,
+                "step_frequency_hz": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    34.0,
+                    20.1,
+                    0.0,
+                    19.0
+                ],
+                "fsr_peak_stance_counts": [
+                    34.0,
+                    20.1,
+                    0.0,
+                    19.0
+                ],
+                "phase_diff_front_percent": 0.0,
+                "phase_diff_right_percent": 0.0,
+                "phase_diff_diag_percent": 0.0,
+                "base_oscillation": {
+                    "std_z_vel": 0.0,
+                    "std_roll_vel": 0.01,
+                    "std_pitch_vel": 0.01
+                },
+                "position_error": {
+                    "x_m": 0.0253,
+                    "y_m": 0.0084,
+                    "yaw_rad": -0.018
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 7.43,
+                "telemetry_samples": 217,
+                "telemetry_rate_hz": 29.2,
+                "max_telemetry_gap_ms": 41.5
+            },
+            "0.05": {
+                "commanded_speed": 0.05,
+                "actual_speed": 0.0,
+                "foot_lift_height_cm": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "foot_swing_time_s": 0.0,
+                "step_frequency_hz": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    34.0,
+                    20.3,
+                    0.0,
+                    19.0
+                ],
+                "fsr_peak_stance_counts": [
+                    34.0,
+                    21.1,
+                    0.0,
+                    19.0
+                ],
+                "phase_diff_front_percent": 0.0,
+                "phase_diff_right_percent": 0.0,
+                "phase_diff_diag_percent": 0.0,
+                "base_oscillation": {
+                    "std_z_vel": 0.0,
+                    "std_roll_vel": 0.01,
+                    "std_pitch_vel": 0.01
+                },
+                "position_error": {
+                    "x_m": 0.0223,
+                    "y_m": -0.2358,
+                    "yaw_rad": -0.02
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 5.01,
+                "telemetry_samples": 145,
+                "telemetry_rate_hz": 28.9,
+                "max_telemetry_gap_ms": 40.8
+            },
+            "0.1": {
+                "commanded_speed": 0.1,
+                "actual_speed": 0.0,
+                "foot_lift_height_cm": [
+                    0.0,
+                    0.0,
+                    0.82,
+                    0.0
+                ],
+                "foot_swing_time_s": 0.14,
+                "step_frequency_hz": [
+                    0.0,
+                    0.0,
+                    2.08,
+                    0.0
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    33.3,
+                    19.1,
+                    11.0,
+                    14.7
+                ],
+                "fsr_peak_stance_counts": [
+                    34.0,
+                    23.1,
+                    11.0,
+                    19.0
+                ],
+                "phase_diff_front_percent": 0.0,
+                "phase_diff_right_percent": 0.0,
+                "phase_diff_diag_percent": 0.0,
+                "base_oscillation": {
+                    "std_z_vel": 0.0,
+                    "std_roll_vel": 0.01,
+                    "std_pitch_vel": 0.01
+                },
+                "position_error": {
+                    "x_m": 0.0334,
+                    "y_m": -1.0272,
+                    "yaw_rad": -0.0017
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 10.59,
+                "telemetry_samples": 300,
+                "telemetry_rate_hz": 28.3,
+                "max_telemetry_gap_ms": 211.9
+            },
+            "0.15": {
+                "commanded_speed": 0.15,
+                "actual_speed": 0.07,
+                "foot_lift_height_cm": [
+                    7.61,
+                    7.29,
+                    5.3,
+                    3.16
+                ],
+                "foot_swing_time_s": 0.36,
+                "step_frequency_hz": [
+                    0.66,
+                    0.71,
+                    0.71,
+                    1.37
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    29.4,
+                    28.3,
+                    21.2,
+                    16.9
+                ],
+                "fsr_peak_stance_counts": [
+                    54.0,
+                    73.1,
+                    118.0,
+                    37.0
+                ],
+                "phase_diff_front_percent": 26.57,
+                "phase_diff_right_percent": 29.89,
+                "phase_diff_diag_percent": 27.63,
+                "base_oscillation": {
+                    "std_z_vel": 0.03,
+                    "std_roll_vel": 0.26,
+                    "std_pitch_vel": 0.15
+                },
+                "position_error": {
+                    "x_m": -0.0152,
+                    "y_m": -1.3975,
+                    "yaw_rad": -0.2907
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 18.28,
+                "telemetry_samples": 531,
+                "telemetry_rate_hz": 29.0,
+                "max_telemetry_gap_ms": 46.2
+            },
+            "0.2": {
+                "commanded_speed": 0.2,
+                "actual_speed": 0.11,
+                "foot_lift_height_cm": [
+                    9.75,
+                    7.33,
+                    6.48,
+                    4.08
+                ],
+                "foot_swing_time_s": 0.37,
+                "step_frequency_hz": [
+                    0.93,
+                    1.03,
+                    0.98,
+                    0.98
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    31.4,
+                    30.5,
+                    23.0,
+                    19.1
+                ],
+                "fsr_peak_stance_counts": [
+                    54.0,
+                    78.1,
+                    109.0,
+                    38.0
+                ],
+                "phase_diff_front_percent": 35.93,
+                "phase_diff_right_percent": 33.43,
+                "phase_diff_diag_percent": 27.89,
+                "base_oscillation": {
+                    "std_z_vel": 0.03,
+                    "std_roll_vel": 0.34,
+                    "std_pitch_vel": 0.2
+                },
+                "position_error": {
+                    "x_m": 0.0208,
+                    "y_m": -1.7058,
+                    "yaw_rad": -0.1926
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 19.43,
+                "telemetry_samples": 572,
+                "telemetry_rate_hz": 29.4,
+                "max_telemetry_gap_ms": 45.7
+            },
+            "0.25": {
+                "commanded_speed": 0.25,
+                "actual_speed": 0.16,
+                "foot_lift_height_cm": [
+                    14.74,
+                    8.95,
+                    8.11,
+                    5.9
+                ],
+                "foot_swing_time_s": 0.31,
+                "step_frequency_hz": [
+                    1.29,
+                    1.23,
+                    1.23,
+                    1.16
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    33.2,
+                    33.2,
+                    23.6,
+                    22.5
+                ],
+                "fsr_peak_stance_counts": [
+                    60.0,
+                    74.1,
+                    116.0,
+                    42.0
+                ],
+                "phase_diff_front_percent": 31.4,
+                "phase_diff_right_percent": 30.21,
+                "phase_diff_diag_percent": 21.61,
+                "base_oscillation": {
+                    "std_z_vel": 0.04,
+                    "std_roll_vel": 0.49,
+                    "std_pitch_vel": 0.24
+                },
+                "position_error": {
+                    "x_m": 0.1564,
+                    "y_m": -1.459,
+                    "yaw_rad": -0.31
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 15.49,
+                "telemetry_samples": 460,
+                "telemetry_rate_hz": 29.7,
+                "max_telemetry_gap_ms": 41.2
+            },
+            "0.35": {
+                "commanded_speed": 0.35,
+                "actual_speed": 0.22,
+                "foot_lift_height_cm": [
+                    11.54,
+                    9.27,
+                    9.35,
+                    5.07
+                ],
+                "foot_swing_time_s": 0.29,
+                "step_frequency_hz": [
+                    1.4,
+                    1.4,
+                    1.49,
+                    1.4
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    37.8,
+                    34.9,
+                    24.1,
+                    22.8
+                ],
+                "fsr_peak_stance_counts": [
+                    81.0,
+                    99.1,
+                    112.0,
+                    42.0
+                ],
+                "phase_diff_front_percent": 40.87,
+                "phase_diff_right_percent": 34.76,
+                "phase_diff_diag_percent": 23.52,
+                "base_oscillation": {
+                    "std_z_vel": 0.05,
+                    "std_roll_vel": 0.52,
+                    "std_pitch_vel": 0.29
+                },
+                "position_error": {
+                    "x_m": 0.1744,
+                    "y_m": -1.513,
+                    "yaw_rad": -0.2786
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 11.44,
+                "telemetry_samples": 337,
+                "telemetry_rate_hz": 29.5,
+                "max_telemetry_gap_ms": 40.9
+            },
+            "0.5": {
+                "commanded_speed": 0.5,
+                "actual_speed": 0.33,
+                "foot_lift_height_cm": [
+                    14.36,
+                    9.28,
+                    10.79,
+                    7.11
+                ],
+                "foot_swing_time_s": 0.27,
+                "step_frequency_hz": [
+                    1.67,
+                    1.67,
+                    1.54,
+                    1.8
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    41.6,
+                    35.4,
+                    24.2,
+                    23.7
+                ],
+                "fsr_peak_stance_counts": [
+                    100.0,
+                    79.1,
+                    92.0,
+                    43.0
+                ],
+                "phase_diff_front_percent": 36.01,
+                "phase_diff_right_percent": 31.14,
+                "phase_diff_diag_percent": 10.3,
+                "base_oscillation": {
+                    "std_z_vel": 0.06,
+                    "std_roll_vel": 0.64,
+                    "std_pitch_vel": 0.33
+                },
+                "position_error": {
+                    "x_m": 0.2605,
+                    "y_m": -1.3492,
+                    "yaw_rad": -0.1552
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 7.79,
+                "telemetry_samples": 232,
+                "telemetry_rate_hz": 29.8,
+                "max_telemetry_gap_ms": 41.1
+            }
+        },
+        "yaw": {
+            "0.0": {
+                "commanded_speed": 0.0,
+                "actual_speed": -0.0,
+                "foot_lift_height_cm": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "foot_swing_time_s": 0.0,
+                "step_frequency_hz": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    32.0,
+                    24.1,
+                    0.0,
+                    12.0
+                ],
+                "fsr_peak_stance_counts": [
+                    32.0,
+                    24.1,
+                    0.0,
+                    12.0
+                ],
+                "phase_diff_front_percent": 0.0,
+                "phase_diff_right_percent": 0.0,
+                "phase_diff_diag_percent": 0.0,
+                "base_oscillation": {
+                    "std_z_vel": 0.0,
+                    "std_roll_vel": 0.01,
+                    "std_pitch_vel": 0.01
+                },
+                "position_error": {
+                    "x_m": 0.0309,
+                    "y_m": 0.0104,
+                    "yaw_rad": -0.0211
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 9.11,
+                "telemetry_samples": 265,
+                "telemetry_rate_hz": 29.1,
+                "max_telemetry_gap_ms": 41.2
+            },
+            "0.1": {
+                "commanded_speed": 0.1,
+                "actual_speed": -0.0,
+                "foot_lift_height_cm": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "foot_swing_time_s": 0.06,
+                "step_frequency_hz": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.23
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    29.4,
+                    26.8,
+                    0.0,
+                    11.0
+                ],
+                "fsr_peak_stance_counts": [
+                    32.0,
+                    27.1,
+                    0.0,
+                    12.0
+                ],
+                "phase_diff_front_percent": 0.0,
+                "phase_diff_right_percent": 0.0,
+                "phase_diff_diag_percent": 0.0,
+                "base_oscillation": {
+                    "std_z_vel": 0.0,
+                    "std_roll_vel": 0.01,
+                    "std_pitch_vel": 0.01
+                },
+                "position_error": {
+                    "x_m": 0.0308,
+                    "y_m": 0.0112,
+                    "yaw_rad": -0.8826
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 8.65,
+                "telemetry_samples": 255,
+                "telemetry_rate_hz": 29.5,
+                "max_telemetry_gap_ms": 40.8
+            },
+            "0.2": {
+                "commanded_speed": 0.2,
+                "actual_speed": 0.0,
+                "foot_lift_height_cm": [
+                    0.0,
+                    0.0,
+                    0.77,
+                    0.01
+                ],
+                "foot_swing_time_s": 0.0,
+                "step_frequency_hz": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    16.7,
+                    37.3,
+                    21.1,
+                    11.0
+                ],
+                "fsr_peak_stance_counts": [
+                    30.0,
+                    38.1,
+                    22.0,
+                    11.0
+                ],
+                "phase_diff_front_percent": 0.0,
+                "phase_diff_right_percent": 0.0,
+                "phase_diff_diag_percent": 0.0,
+                "base_oscillation": {
+                    "std_z_vel": 0.0,
+                    "std_roll_vel": 0.01,
+                    "std_pitch_vel": 0.01
+                },
+                "position_error": {
+                    "x_m": -0.0064,
+                    "y_m": 0.0112,
+                    "yaw_rad": -1.7004
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 8.64,
+                "telemetry_samples": 248,
+                "telemetry_rate_hz": 28.7,
+                "max_telemetry_gap_ms": 45.4
+            },
+            "0.3": {
+                "commanded_speed": 0.3,
+                "actual_speed": 0.18,
+                "foot_lift_height_cm": [
+                    13.76,
+                    4.62,
+                    2.91,
+                    10.06
+                ],
+                "foot_swing_time_s": 1.08,
+                "step_frequency_hz": [
+                    0.8,
+                    0.23,
+                    0.23,
+                    0.2
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    19.4,
+                    41.2,
+                    23.8,
+                    19.2
+                ],
+                "fsr_peak_stance_counts": [
+                    49.0,
+                    60.1,
+                    68.0,
+                    30.0
+                ],
+                "phase_diff_front_percent": 11.77,
+                "phase_diff_right_percent": 15.32,
+                "phase_diff_diag_percent": 3.47,
+                "base_oscillation": {
+                    "std_z_vel": 0.03,
+                    "std_roll_vel": 0.21,
+                    "std_pitch_vel": 0.1
+                },
+                "position_error": {
+                    "x_m": 0.3452,
+                    "y_m": 0.0935,
+                    "yaw_rad": -3.6869
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 30.02,
+                "telemetry_samples": 881,
+                "telemetry_rate_hz": 29.3,
+                "max_telemetry_gap_ms": 205.3
+            },
+            "0.4": {
+                "commanded_speed": 0.4,
+                "actual_speed": 0.3,
+                "foot_lift_height_cm": [
+                    12.4,
+                    6.05,
+                    4.41,
+                    11.97
+                ],
+                "foot_swing_time_s": 0.87,
+                "step_frequency_hz": [
+                    0.9,
+                    0.37,
+                    0.37,
+                    0.37
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    23.2,
+                    38.8,
+                    25.6,
+                    19.1
+                ],
+                "fsr_peak_stance_counts": [
+                    58.0,
+                    76.1,
+                    65.0,
+                    33.0
+                ],
+                "phase_diff_front_percent": 18.92,
+                "phase_diff_right_percent": 15.83,
+                "phase_diff_diag_percent": 7.48,
+                "base_oscillation": {
+                    "std_z_vel": 0.04,
+                    "std_roll_vel": 0.3,
+                    "std_pitch_vel": 0.15
+                },
+                "position_error": {
+                    "x_m": 0.6292,
+                    "y_m": 0.1807,
+                    "yaw_rad": -3.1049
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 30.02,
+                "telemetry_samples": 889,
+                "telemetry_rate_hz": 29.6,
+                "max_telemetry_gap_ms": 41.7
+            },
+            "0.5": {
+                "commanded_speed": 0.5,
+                "actual_speed": 0.4,
+                "foot_lift_height_cm": [
+                    12.35,
+                    6.65,
+                    5.52,
+                    11.46
+                ],
+                "foot_swing_time_s": 0.62,
+                "step_frequency_hz": [
+                    1.37,
+                    0.47,
+                    0.47,
+                    0.53
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    23.8,
+                    37.2,
+                    25.8,
+                    17.9
+                ],
+                "fsr_peak_stance_counts": [
+                    68.0,
+                    96.1,
+                    77.0,
+                    27.0
+                ],
+                "phase_diff_front_percent": 19.27,
+                "phase_diff_right_percent": 16.53,
+                "phase_diff_diag_percent": 13.69,
+                "base_oscillation": {
+                    "std_z_vel": 0.04,
+                    "std_roll_vel": 0.34,
+                    "std_pitch_vel": 0.16
+                },
+                "position_error": {
+                    "x_m": 0.4167,
+                    "y_m": -0.1959,
+                    "yaw_rad": -3.0316
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 30.0,
+                "telemetry_samples": 891,
+                "telemetry_rate_hz": 29.7,
+                "max_telemetry_gap_ms": 44.3
+            },
+            "0.75": {
+                "commanded_speed": 0.75,
+                "actual_speed": 0.57,
+                "foot_lift_height_cm": [
+                    27.56,
+                    17.96,
+                    19.8,
+                    27.73
+                ],
+                "foot_swing_time_s": 0.32,
+                "step_frequency_hz": [
+                    1.42,
+                    0.95,
+                    0.79,
+                    0.63
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    27.5,
+                    28.0,
+                    24.1,
+                    23.7
+                ],
+                "fsr_peak_stance_counts": [
+                    158.0,
+                    80.1,
+                    97.0,
+                    43.0
+                ],
+                "phase_diff_front_percent": 27.89,
+                "phase_diff_right_percent": 40.08,
+                "phase_diff_diag_percent": 27.19,
+                "base_oscillation": {
+                    "std_z_vel": 0.08,
+                    "std_roll_vel": 0.61,
+                    "std_pitch_vel": 0.35
+                },
+                "position_error": {
+                    "x_m": 0.3164,
+                    "y_m": 0.2527,
+                    "yaw_rad": -1.0881
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 6.33,
+                "telemetry_samples": 208,
+                "telemetry_rate_hz": 32.9,
+                "max_telemetry_gap_ms": 40.9
+            },
+            "1.0": {
+                "commanded_speed": 1.0,
+                "actual_speed": 0.86,
+                "foot_lift_height_cm": [
+                    24.64,
+                    13.29,
+                    11.69,
+                    19.76
+                ],
+                "foot_swing_time_s": 0.25,
+                "step_frequency_hz": [
+                    1.83,
+                    1.93,
+                    1.83,
+                    1.6
+                ],
+                "grf_stance_N": null,
+                "grf_peak_stance_N": null,
+                "foot_landing_vel_ms": null,
+                "fsr_stance_counts": [
+                    35.9,
+                    34.4,
+                    25.9,
+                    22.9
+                ],
+                "fsr_peak_stance_counts": [
+                    141.0,
+                    179.1,
+                    152.0,
+                    75.0
+                ],
+                "phase_diff_front_percent": 31.52,
+                "phase_diff_right_percent": 31.13,
+                "phase_diff_diag_percent": 20.96,
+                "base_oscillation": {
+                    "std_z_vel": 0.07,
+                    "std_roll_vel": 0.83,
+                    "std_pitch_vel": 0.43
+                },
+                "position_error": {
+                    "x_m": 1.0484,
+                    "y_m": 0.7314,
+                    "yaw_rad": -4.2273
+                },
+                "safety_resets": 0,
+                "walk_duration_s": 30.0,
+                "telemetry_samples": 884,
+                "telemetry_rate_hz": 29.5,
+                "max_telemetry_gap_ms": 181.6
+            }
+        }
+    }
+}
