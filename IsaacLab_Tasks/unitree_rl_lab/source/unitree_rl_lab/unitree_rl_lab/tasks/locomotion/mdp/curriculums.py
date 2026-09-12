@@ -16,11 +16,19 @@ def lin_vel_cmd_levels(
     command_term = env.command_manager.get_term("base_velocity")
     ranges = command_term.cfg.ranges
     limit_ranges = command_term.cfg.limit_ranges
-
     reward_term = env.reward_manager.get_term_cfg(reward_term_name)
-    reward = torch.mean(env.reward_manager._episode_sums[reward_term_name][env_ids]) / env.max_episode_length_s
 
-    if env.common_step_counter % env.max_episode_length == 0:
+    # Average every reset since the last check, not only envs resetting on an exact multiple of max_episode_length.
+    state = getattr(env, "_lin_vel_level_state", None)
+    if state is None:
+        state = {"step": env.common_step_counter, "sum": 0.0, "n": 0}
+        env._lin_vel_level_state = state
+    state["sum"] += float(torch.sum(env.reward_manager._episode_sums[reward_term_name][env_ids]))
+    state["n"] += len(env_ids)
+
+    if env.common_step_counter - state["step"] >= env.max_episode_length and state["n"] > 0:
+        reward = (state["sum"] / state["n"]) / env.max_episode_length_s
+        state["step"], state["sum"], state["n"] = env.common_step_counter, 0.0, 0
         if reward > reward_term.weight * 0.8:
             delta_command = torch.tensor([-0.1, 0.1], device=env.device)
             ranges.lin_vel_x = torch.clamp(
@@ -45,11 +53,18 @@ def ang_vel_cmd_levels(
     command_term = env.command_manager.get_term("base_velocity")
     ranges = command_term.cfg.ranges
     limit_ranges = command_term.cfg.limit_ranges
-
     reward_term = env.reward_manager.get_term_cfg(reward_term_name)
-    reward = torch.mean(env.reward_manager._episode_sums[reward_term_name][env_ids]) / env.max_episode_length_s
 
-    if env.common_step_counter % env.max_episode_length == 0:
+    state = getattr(env, "_ang_vel_level_state", None)
+    if state is None:
+        state = {"step": env.common_step_counter, "sum": 0.0, "n": 0}
+        env._ang_vel_level_state = state
+    state["sum"] += float(torch.sum(env.reward_manager._episode_sums[reward_term_name][env_ids]))
+    state["n"] += len(env_ids)
+
+    if env.common_step_counter - state["step"] >= env.max_episode_length and state["n"] > 0:
+        reward = (state["sum"] / state["n"]) / env.max_episode_length_s
+        state["step"], state["sum"], state["n"] = env.common_step_counter, 0.0, 0
         if reward > reward_term.weight * 0.8:
             delta_command = torch.tensor([-0.1, 0.1], device=env.device)
             ranges.ang_vel_z = torch.clamp(

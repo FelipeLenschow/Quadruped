@@ -17,4 +17,4 @@ run () {
 
 run Unitree-Go2-Velocity-Coverage   # arm C  -- command coverage
 run Unitree-Go2-Velocity-Sigma      # arm S  -- reward shape
-run Unitree-Go2-Velocity-Both       # arm SC -- both
+run Unitree-Go2-Velocity-Sigma-Density  # arm SC -- both

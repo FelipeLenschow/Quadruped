@@ -20,8 +20,8 @@ Writes ``isaac_eval_report_<checkpoint>.json`` next to the checkpoint, in the sa
 Mujoco/eval_mujoco.py's report ({"metadata": ..., "results": {axis: {speed: metrics}}}) so both
 plot on one axis.
 
-    python scripts/rsl_rl/sweep.py --task=Unitree-Go2-Velocity-Both --headless \
-        --checkpoint logs/rsl_rl/unitree_go2_velocity_both/Both/model_2999.pt
+    python scripts/rsl_rl/sweep.py --task=Unitree-Go2-Velocity-Sigma-Density --headless \
+        --checkpoint logs/rsl_rl/unitree_go2_velocity_sigma_density/Sigma_density/model_2999.pt
 """
 
 """Launch Isaac Sim Simulator first."""

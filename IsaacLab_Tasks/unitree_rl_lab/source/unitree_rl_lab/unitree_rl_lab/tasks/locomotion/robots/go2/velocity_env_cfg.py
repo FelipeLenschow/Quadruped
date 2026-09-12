@@ -433,7 +433,7 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
 #   RobotEnvCfg          baseline. Unitree's config as shipped.            (arm U0)
 #   RobotSigmaEnvCfg     + command-scaled tracking kernel.                 (arm S)  reward SHAPE
 #   RobotCoverageEnvCfg  + slow-command quota in the sampler.              (arm C)  command COVERAGE
-#   RobotBothEnvCfg      + both, to check they are not redundant.          (arm SC)
+#   RobotSigmaDensityEnvCfg  + both, to check they are not redundant.      (arm SC)
 #
 # Nothing else moves: same rewards, weights, curriculum, events, terminations, PPO config and
 # sample budget. Overridable from the environment so a sweep needs no edit here; the resolved
@@ -473,6 +473,7 @@ def _apply_slow_coverage(cfg) -> None:
     cfg.commands.base_velocity.slow_command_fraction = SLOW_FRACTION
     cfg.commands.base_velocity.slow_command_range = SLOW_RANGE
     print(f"[PaperArm] slow-command coverage, fraction = {SLOW_FRACTION}, range = {SLOW_RANGE}")
+    _drop_level_curriculum(cfg)
 
 
 # Noise on the velocity estimate, as a Unoise half-width in m/s. 0.0 (the default) keeps
@@ -556,8 +557,8 @@ def _drop_level_curriculum(cfg) -> None:
     print(f"[PaperArm] level curriculum removed; command box fixed at x {ranges.lin_vel_x} y {ranges.lin_vel_y}")
 
 
-# Default ON, so re-running any arm reproduces the runs already done. Set
-# PAPER_KEEP_CURRICULUM=0 to drop the command curriculum -- see _drop_level_curriculum.
+# Default ON for arms without the slow-command quota (arms with it always drop the curriculum).
+# Set PAPER_KEEP_CURRICULUM=0 to drop it there too -- see _drop_level_curriculum.
 KEEP_CURRICULUM = os.environ.get("PAPER_KEEP_CURRICULUM", "1") == "1"
 
 
@@ -583,18 +584,16 @@ class RobotCoverageEnvCfg(RobotEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         _apply_slow_coverage(self)
-        _maybe_drop_curriculum(self)
 
 
 @configclass
-class RobotBothEnvCfg(RobotEnvCfg):
+class RobotSigmaDensityEnvCfg(RobotEnvCfg):
     """Arm SC: both fixes, to test whether either is redundant given the other."""
 
     def __post_init__(self):
         super().__post_init__()
         _apply_scaled_tracking(self)
         _apply_slow_coverage(self)
-        _maybe_drop_curriculum(self)
 
 
 @configclass
@@ -607,7 +606,7 @@ class RobotVelEnvCfg(RobotEnvCfg):
 
 
 @configclass
-class RobotBothVelEnvCfg(RobotEnvCfg):
+class RobotSigmaDensityVelEnvCfg(RobotEnvCfg):
     """Arm SCV: both fixes plus velocity feedback -- the candidate for hardware."""
 
     def __post_init__(self):
@@ -615,7 +614,91 @@ class RobotBothVelEnvCfg(RobotEnvCfg):
         _apply_scaled_tracking(self)
         _apply_slow_coverage(self)
         _apply_lin_vel_obs(self)
-        _maybe_drop_curriculum(self)
+
+
+@configclass
+class RobotSigmaVelEnvCfg(RobotSigmaEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_lin_vel_obs(self)
+
+
+FOOT_TARGET_HEIGHT = float(os.environ.get("PAPER_FOOT_TARGET_HEIGHT", 0.07))
+FOOT_CLEARANCE_STD = float(os.environ.get("PAPER_FOOT_CLEARANCE_STD", 0.005))
+FOOT_CLEARANCE_WEIGHT = float(os.environ.get("PAPER_FOOT_CLEARANCE_WEIGHT", 0.5))
+
+
+def _apply_foot_clearance(cfg) -> None:
+    cfg.rewards.feet_clearance = RewTerm(
+        func=mdp.foot_clearance_reward,
+        weight=FOOT_CLEARANCE_WEIGHT,
+        params={
+            "std": FOOT_CLEARANCE_STD,
+            "tanh_mult": 2.0,
+            "target_height": FOOT_TARGET_HEIGHT,
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
+        },
+    )
+    print(
+        f"[PaperArm] foot clearance, target = {FOOT_TARGET_HEIGHT} m, std = {FOOT_CLEARANCE_STD},"
+        f" weight = {FOOT_CLEARANCE_WEIGHT}"
+    )
+
+
+@configclass
+class RobotVelFootEnvCfg(RobotVelEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_foot_clearance(self)
+
+
+@configclass
+class RobotSigmaFootEnvCfg(RobotSigmaEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_foot_clearance(self)
+
+
+@configclass
+class RobotSigmaVelFootEnvCfg(RobotSigmaFootEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_lin_vel_obs(self)
+
+
+@configclass
+class RobotSigmaDensityVelFootEnvCfg(RobotSigmaDensityVelEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_foot_clearance(self)
+
+
+ROUGH_NOISE = float(os.environ.get("PAPER_ROUGH_NOISE", 0.02))
+
+
+def _apply_rough_terrain(cfg) -> None:
+    cfg.scene.terrain.terrain_generator = cfg.scene.terrain.terrain_generator.replace(
+        sub_terrains={
+            "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
+                proportion=1.0, noise_range=(0.0, ROUGH_NOISE), noise_step=0.005, border_width=0.25
+            ),
+        }
+    )
+    print(f"[PaperArm] rough terrain, uniform noise 0-{ROUGH_NOISE} m")
+
+
+@configclass
+class RobotSigmaDensityVelRoughEnvCfg(RobotSigmaDensityVelEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_rough_terrain(self)
+
+
+@configclass
+class RobotSigmaVelFootRoughEnvCfg(RobotSigmaVelFootEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_rough_terrain(self)
 
 
 def _apply_play_overrides(cfg) -> None:
@@ -662,7 +745,7 @@ class RobotCoveragePlayEnvCfg(RobotCoverageEnvCfg):
 
 
 @configclass
-class RobotBothPlayEnvCfg(RobotBothEnvCfg):
+class RobotSigmaDensityPlayEnvCfg(RobotSigmaDensityEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         _apply_play_overrides(self)
@@ -676,7 +759,56 @@ class RobotVelPlayEnvCfg(RobotVelEnvCfg):
 
 
 @configclass
-class RobotBothVelPlayEnvCfg(RobotBothVelEnvCfg):
+class RobotSigmaDensityVelPlayEnvCfg(RobotSigmaDensityVelEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+@configclass
+class RobotVelFootPlayEnvCfg(RobotVelFootEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+@configclass
+class RobotSigmaFootPlayEnvCfg(RobotSigmaFootEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+@configclass
+class RobotSigmaVelFootPlayEnvCfg(RobotSigmaVelFootEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+@configclass
+class RobotSigmaDensityVelRoughPlayEnvCfg(RobotSigmaDensityVelRoughEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+@configclass
+class RobotSigmaVelFootRoughPlayEnvCfg(RobotSigmaVelFootRoughEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+@configclass
+class RobotSigmaDensityVelFootPlayEnvCfg(RobotSigmaDensityVelFootEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+@configclass
+class RobotSigmaVelPlayEnvCfg(RobotSigmaVelEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         _apply_play_overrides(self)

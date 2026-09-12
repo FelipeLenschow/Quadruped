@@ -35,8 +35,8 @@ share/python-wheels/
 !**/logs/**/*isaac_eval_report*.json
 !**/logs/**/*.yaml
 !IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity/Original/model_5999.pt
-!IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity_both/Both/model_2999.pt
-!IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity_both_vel/Both_vel/model_5999.pt
+!IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity_sigma_density/Sigma_density/model_2999.pt
+!IsaacLab_Tasks/unitree_rl_lab/logs/rsl_rl/unitree_go2_velocity_sigma_density_vel/Sigma_density_vel/model_5999.pt
 *.jit
 .launcher_last_command.json
 IsaacLab_Tasks/unitree_rl_lab/.git_upstream/

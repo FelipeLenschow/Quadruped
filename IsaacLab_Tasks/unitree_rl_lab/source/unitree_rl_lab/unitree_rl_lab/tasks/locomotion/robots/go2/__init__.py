@@ -11,12 +11,19 @@ _ARMS = {
     # command COVERAGE: an explicit quota of slow commands
     "Unitree-Go2-Velocity-Coverage": ("RobotCoverageEnvCfg", "RobotCoveragePlayEnvCfg"),
     # both, to check neither is redundant given the other
-    "Unitree-Go2-Velocity-Both": ("RobotBothEnvCfg", "RobotBothPlayEnvCfg"),
+    "Unitree-Go2-Velocity-Sigma-Density": ("RobotSigmaDensityEnvCfg", "RobotSigmaDensityPlayEnvCfg"),
     # base_lin_vel in the ACTOR (48-dim observation instead of 45) -- unitree's actor is
     # velocity-blind. Alone, to attribute the sim2sim gap:
     "Unitree-Go2-Velocity-Vel": ("RobotVelEnvCfg", "RobotVelPlayEnvCfg"),
     # and on top of both fixes -- the version intended for hardware:
-    "Unitree-Go2-Velocity-Both-Vel": ("RobotBothVelEnvCfg", "RobotBothVelPlayEnvCfg"),
+    "Unitree-Go2-Velocity-Sigma-Density-Vel": ("RobotSigmaDensityVelEnvCfg", "RobotSigmaDensityVelPlayEnvCfg"),
+    "Unitree-Go2-Velocity-Vel-Foot": ("RobotVelFootEnvCfg", "RobotVelFootPlayEnvCfg"),
+    "Unitree-Go2-Velocity-Sigma-Foot": ("RobotSigmaFootEnvCfg", "RobotSigmaFootPlayEnvCfg"),
+    "Unitree-Go2-Velocity-Sigma-Vel-Foot": ("RobotSigmaVelFootEnvCfg", "RobotSigmaVelFootPlayEnvCfg"),
+    "Unitree-Go2-Velocity-Sigma-Density-Vel-Rough": ("RobotSigmaDensityVelRoughEnvCfg", "RobotSigmaDensityVelRoughPlayEnvCfg"),
+    "Unitree-Go2-Velocity-Sigma-Vel-Foot-Rough": ("RobotSigmaVelFootRoughEnvCfg", "RobotSigmaVelFootRoughPlayEnvCfg"),
+    "Unitree-Go2-Velocity-Sigma-Density-Vel-Foot": ("RobotSigmaDensityVelFootEnvCfg", "RobotSigmaDensityVelFootPlayEnvCfg"),
+    "Unitree-Go2-Velocity-Sigma-Vel": ("RobotSigmaVelEnvCfg", "RobotSigmaVelPlayEnvCfg"),
 }
 
 for _task_id, (_env_cfg, _play_cfg) in _ARMS.items():
