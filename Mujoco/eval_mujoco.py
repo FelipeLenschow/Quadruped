@@ -308,10 +308,15 @@ class MujocoEvaluator(Node):
         )
 
     def _evaluation_loop(self):
+        # y and yaw are signed axes -- left/right strafe, CW/CCW turn -- swept on both sides.
+        # Kept in step with Operator/sweep_teleop.py's SWEEP_SPEEDS: a speed that exists in only
+        # one of the two has nothing on the other side to be compared against.
         axes_tests = {
             "x": [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50, 0.75, 1.00],
-            "y": [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50],
-            "yaw": [0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00]
+            "y": [-0.50, -0.35, -0.25, -0.20, -0.15, -0.10, -0.05,
+                  0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50],
+            "yaw": [-1.00, -0.75, -0.50, -0.40, -0.30, -0.20, -0.10,
+                    0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00],
         }
         steps_per_speed = 32000  # 32 seconds at 1000Hz (30s walking + 2s warmup)
         warmup_steps = 2000     # 2 seconds standing still

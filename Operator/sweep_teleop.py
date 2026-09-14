@@ -51,8 +51,14 @@ from Configs.config_loader import load_config
 # exists in only one of them has nothing to be compared against in the viewer.
 SWEEP_SPEEDS = {
     "x": [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50, 0.75, 1.00],
-    "y": [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50],
-    "yaw": [0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00],
+    # y and yaw are signed axes -- left/right strafe, CW/CCW turn -- and nothing says the gait
+    # is symmetric under the sign, so both sides are swept: negative descending to 0, then
+    # positive ascending, so the D-pad steps outward from one extreme through standing to the
+    # other rather than jumping across zero.
+    "y": [-0.50, -0.35, -0.25, -0.20, -0.15, -0.10, -0.05,
+          0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50],
+    "yaw": [-1.00, -0.75, -0.50, -0.40, -0.30, -0.20, -0.10,
+            0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00],
 }
 SPEED_UNITS = {"x": "m/s", "y": "m/s", "yaw": "rad/s"}
 
@@ -331,15 +337,18 @@ class SweepTeleop(Node):
         With --walk_m, x and y cover that distance at the commanded speed - ramp included - and walk
         no longer than walk_s, or the slow end would take minutes. 0.0 and yaw cover no distance, so
         they walk walk_s. The robot's real speed differs from the command, so the distance it covers
-        does too; the room needs some slack beyond walk_m."""
-        if self.walk_m <= 0 or axis not in ("x", "y") or speed <= 0:
+        does too; the room needs some slack beyond walk_m. y is signed (left/right strafe), so the
+        distance covered is the same either way -- abs(speed) drives the formula, the sign stays in
+        the command sent to the robot."""
+        v = abs(speed)
+        if self.walk_m <= 0 or axis not in ("x", "y") or v <= 0:
             return self.walk_s
-        if self.walk_m / speed >= self.ramp_s / 2:
+        if self.walk_m / v >= self.ramp_s / 2:
             # The ramp covers half of its own time's worth of distance.
-            t = self.walk_m / speed + self.ramp_s / 2
+            t = self.walk_m / v + self.ramp_s / 2
         else:
             # The distance runs out before the ramp reaches the speed.
-            t = (2 * self.walk_m * self.ramp_s / speed) ** 0.5
+            t = (2 * self.walk_m * self.ramp_s / v) ** 0.5
         return min(self.walk_s, t)
 
     def _start_segment(self):
@@ -516,9 +525,11 @@ def main():
     parser.add_argument("--axes", type=str, default="x,y,yaw")
     parser.add_argument("--rate", type=float, default=50.0, help="/cmd_vel publish rate")
     parser.add_argument("--max_lin_speed", type=float, default=1.0,
-                        help="leave out x and y speeds above this, m/s (the table goes to 1.0)")
+                        help="leave out x/y speeds above this in magnitude, m/s "
+                             "(x goes to 1.0, y to +-0.5)")
     parser.add_argument("--max_yaw_rate", type=float, default=1.0,
-                        help="leave out yaw speeds above this, rad/s (the table goes to 1.0)")
+                        help="leave out yaw speeds above this in magnitude, rad/s "
+                             "(the table goes to +-1.0)")
     args = parser.parse_args()
 
     args.axes = [a.strip() for a in args.axes.split(",") if a.strip()]
@@ -532,8 +543,10 @@ def main():
 
     # Trim the table before the node reads it. Entries are dropped, never rescaled, so every speed
     # left still lines up with the same entry of a MuJoCo sweep in the viewer. 0.0 always stays.
+    # y and yaw are signed, so the cap is on magnitude, not on the raw (signed) value -- otherwise
+    # every negative entry passes "s <= cap" regardless of how large the cap actually is.
     for axis, cap in (("x", args.max_lin_speed), ("y", args.max_lin_speed), ("yaw", args.max_yaw_rate)):
-        SWEEP_SPEEDS[axis] = [s for s in SWEEP_SPEEDS[axis] if s <= cap + 1e-9]
+        SWEEP_SPEEDS[axis] = [s for s in SWEEP_SPEEDS[axis] if abs(s) <= cap + 1e-9]
 
     rclpy.init()
     try:
