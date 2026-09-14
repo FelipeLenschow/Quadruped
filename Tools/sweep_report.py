@@ -30,6 +30,7 @@ What the robot can give, compared with the MuJoCo sweep:
 """
 
 import os
+import sys
 import json
 import glob
 import time
@@ -38,6 +39,9 @@ import importlib.util
 
 import numpy as np
 from mcap_ros2.reader import read_ros2_messages
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import contact_filter
 
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -63,7 +67,13 @@ TOPICS = [
     "/sensors/foot_force",
     "/sensors/foot_force_calibration",
     "/safety/reset",
+    "/diagnostics/loop_stats",
 ]
+FEET = ["FL", "FR", "RL", "RR"]
+# Trot targets: diagonals land together, every other pair half a stride apart.
+LEG_PAIRS = [("front_FL_FR", 0, 1, 0.5), ("rear_RL_RR", 2, 3, 0.5),
+             ("lat_L_FL_RL", 0, 2, 0.5), ("lat_R_FR_RR", 1, 3, 0.5),
+             ("diag_FL_RR", 0, 3, 0.0), ("diag_FR_RL", 1, 2, 0.0)]
 AXIS_ORDER = {"x": 0, "y": 1, "yaw": 2}
 UNITS = {"x": "m/s", "y": "m/s", "yaw": "rad/s"}
 
@@ -93,6 +103,7 @@ class Recording:
         contact, contact_log = [], []
         fsr, fsr_log = [], []
         calibration, resets_log = [], []
+        loop_stats_t, loop_stats = [], []
         order = None
 
         for f in mcap_files(path):
@@ -126,6 +137,9 @@ class Recording:
                 elif topic == "/safety/reset":
                     if msg.data:
                         resets_log.append(log)
+                elif topic == "/diagnostics/loop_stats":
+                    loop_stats_t.append(log)
+                    loop_stats.append(list(msg.data))
                 elif topic == "/sweep/state":
                     try:
                         markers.append((log, json.loads(msg.data)))
@@ -162,6 +176,11 @@ class Recording:
         self.fsr_t, self.fsr = self._sorted(np.asarray(fsr_log) - self.clock_offset, fsr)
         self.calibration = [(t - self.clock_offset, d) for t, d in calibration]
         self.resets_t = np.asarray(resets_log) - self.clock_offset
+        lt = np.asarray(loop_stats_t, dtype=np.float64) - self.clock_offset
+        ls = np.asarray(loop_stats, dtype=np.float64).reshape(len(lt), -1) if len(lt) \
+            else np.zeros((0, 3))
+        l_sort = np.argsort(lt, kind="stable")
+        self.loop_stats_t, self.loop_stats = lt[l_sort], ls[l_sort]
 
         # Markers carry "t", the operator machine's clock when they were sent. Their receive time
         # cannot stand in for it: /sweep/state is transient-local, so a recorder that joined late was
@@ -260,43 +279,68 @@ def measure(seg, settle_s=0.0):
     else:
         actual = float(np.mean(v[:, 0 if axis == "x" else 1]))
 
-    # --- Gait timing from contacts (same bookkeeping as eval_mujoco.py, on 25 ms samples) ---
-    sc = _window(rec.contact_t, t0, t1)
-    tc, c = rec.contact_t[sc], rec.contact[sc] > 0.5
-    swing_times = [[] for _ in range(4)]
-    swing_start = [None] * 4
-    seen_stance = [False] * 4      # a swing already under way when the window opens is not counted
-    last_strike = [None] * 4
-    stride = [0.0] * 4
-    front, right, diag = [], [], []
-    for k in range(len(tc)):
-        t = tc[k]
-        for f in range(4):
-            if not c[k, f]:
-                if seen_stance[f] and swing_start[f] is None:
-                    swing_start[f] = t
-                continue
-            seen_stance[f] = True
-            if swing_start[f] is None:
-                continue
-            swing_times[f].append(t - swing_start[f])
-            swing_start[f] = None
-            if last_strike[f] is not None:
-                stride[f] = t - last_strike[f]
-            last_strike[f] = t
-            if f == 1 and stride[0] > 0.1 and last_strike[0] is not None:    # FR vs FL
-                p = ((t - last_strike[0]) % stride[0]) / stride[0]
-                front.append(min(p, 1.0 - p))
-            if f == 3 and stride[1] > 0.1 and last_strike[1] is not None:    # RR vs FR
-                p = ((t - last_strike[1]) % stride[1]) / stride[1]
-                right.append(min(p, 1.0 - p))
-            if f == 3 and stride[0] > 0.1 and last_strike[0] is not None:    # RR vs FL
-                p = ((t - last_strike[0]) % stride[0]) / stride[0]
-                diag.append(min(p, 1.0 - p))
-    valid_swings = [[s for s in leg if s > 0.05] for leg in swing_times]
-    all_valid = [s for leg in valid_swings for s in leg]
-    avg_swing = float(np.mean(all_valid)) if all_valid else 0.0
-    step_freqs = [len(leg) / duration for leg in valid_swings]
+    # --- Gait timing, per foot, from that foot's own FSR counts ---
+    # real_driver.py gates every foot on one global threshold; measured against this robot's
+    # sensors that threshold falls inside the rear feet's stance band, so their stance is cut to
+    # pieces and every swing time, step frequency and phase offset taken from it inherits the
+    # error. contact_filter reads each foot's own swing floor and stance plateau instead.
+    sf = _window(rec.fsr_t, t0, t1)
+    cal = [d for t, d in rec.calibration if t <= t1 and len(d) >= 5]
+    detected, contact_t, contact_source = None, None, "driver"
+    if sf.stop - sf.start >= 3 and cal:
+        offsets = np.asarray(cal[-1][1:5])
+        contact_t = rec.fsr_t[sf]
+        detected = contact_filter.segment_contacts(contact_t, rec.fsr[sf] - offsets)
+        contact_source = "fsr_counts"
+    if detected is None:
+        sc = _window(rec.contact_t, t0, t1)
+        contact_t = rec.contact_t[sc]
+        flags = rec.contact[sc] > 0.5
+        detected = [{"contact": flags[:, f], "touchdown": list(contact_t[1:][
+                        flags[1:, f] & ~flags[:-1, f]]), "liftoff": [], "usable": True,
+                     "note": "driver contact flag", "plateau": 0.0} for f in range(4)]
+
+    stance_mask = np.column_stack([d["contact"] for d in detected]) if len(contact_t) else \
+        np.zeros((0, 4), dtype=bool)
+    duty = [float(np.mean(d["contact"])) if len(contact_t) else 0.0 for d in detected]
+    step_freqs = [len(d["touchdown"]) / duration if duration > 0 else 0.0 for d in detected]
+
+    swings = []
+    for d in detected:
+        flags = d["contact"]
+        if len(flags) < 3:
+            continue
+        edges = np.flatnonzero(np.diff(flags.astype(np.int8)))
+        # A swing is a liftoff followed by a touchdown, both inside the window.
+        for a, b in zip(edges[:-1], edges[1:]):
+            if not flags[a + 1]:
+                swings.append(contact_t[b] - contact_t[a])
+    swings = [w for w in swings if w > contact_filter.MIN_PHASE_S]
+    avg_swing = float(np.mean(swings)) if swings else 0.0
+
+    phase_pairs = {}
+    for name, a, b, target in LEG_PAIRS:
+        # percent is the folded phase difference, the same [0, 50]% convention eval_mujoco.py
+        # reports; from_trot is how far that pair sits from its place in a trot.
+        got = contact_filter.phase_offset(detected[a]["touchdown"], detected[b]["touchdown"], 0.0)
+        if got is None:
+            continue
+        aim = contact_filter.phase_offset(detected[a]["touchdown"], detected[b]["touchdown"], target)
+        phase_pairs[name] = {
+            "percent": round(got["offset"] * 100.0, 2),
+            "from_trot": round(aim["offset"] * 100.0, 2),
+            "mean_phase": round(got["mean_phase"], 3),
+            "lock": round(got["lock"], 3),
+            "n": got["n"],
+            "usable": bool(detected[a]["usable"] and detected[b]["usable"]),
+        }
+
+    quality = [{"foot": FEET[f], "usable": bool(d["usable"]), "note": d["note"],
+                "stance_plateau_counts": round(d["plateau"], 1),
+                "touchdowns": len(d["touchdown"])} for f, d in enumerate(detected)]
+
+    def pair_percent(name):
+        return phase_pairs[name]["percent"] if name in phase_pairs else 0.0
 
     # --- Foot lift: FK in the gravity-aligned frame, against that foot's stance level ---
     sj = _window(rec.js_t, t0, t1)
@@ -304,7 +348,8 @@ def measure(seg, settle_s=0.0):
     lift = [0.0] * 4
     if len(tj) and len(rec.imu_t) >= 2 and len(rec.contact_t) >= 2:
         quat = rec.imu_quat[_nearest(rec.imu_t, tj)]
-        in_contact = rec.contact[_nearest(rec.contact_t, tj)] > 0.5
+        in_contact = (stance_mask[_nearest(contact_t, tj)] if len(contact_t)
+                      else np.zeros((len(tj), 4), dtype=bool))
         z = np.zeros((len(tj), 4))
         for k in range(len(tj)):
             R = _rotation(quat[k])
@@ -316,17 +361,21 @@ def measure(seg, settle_s=0.0):
                 lift[f] = max(0.0, float(swing.max() - np.median(stance)))
 
     # --- FSR load in counts, gated exactly as real_driver.py gates contact ---
-    fsr_mean = fsr_peak = None
-    sf = _window(rec.fsr_t, t0, t1)
-    cal = [d for t, d in rec.calibration if t <= t1 and len(d) >= 5]
+    fsr_mean = fsr_peak = fsr_measured = None
     if sf.stop > sf.start and cal:
-        threshold, offsets = cal[-1][0], np.asarray(cal[-1][1:5])
-        load = rec.fsr[sf] - offsets
-        stance = load > threshold
+        load = rec.fsr[sf] - np.asarray(cal[-1][1:5])
+        # Stance from the per-foot filter, not the driver's one threshold, so a rear foot whose
+        # plateau never reaches it still reports the load it was carrying.
+        stance = stance_mask if stance_mask.shape[0] == load.shape[0] else load > cal[-1][0]
         fsr_mean = [round(float(load[stance[:, f], f].mean()), 1) if stance[:, f].any() else 0.0
                     for f in range(4)]
         fsr_peak = [round(float(load[stance[:, f], f].max()), 1) if stance[:, f].any() else 0.0
                     for f in range(4)]
+        # 1.0 per foot if real_driver.py measured that foot's zero at startup, 0.0 if it looked
+        # loaded or moving and kept the configured default instead. Older recordings only carry
+        # the first five floats [threshold, offsets x4]; those report None, not a false 1.0.
+        if len(cal[-1]) >= 9:
+            fsr_measured = [bool(v) for v in cal[-1][5:9]]
 
     resets = int(np.sum((rec.resets_t >= seg["t_start"]) & (rec.resets_t <= t1)))
     gaps = np.diff(tj) if len(tj) > 1 else np.array([0.0])
@@ -342,9 +391,14 @@ def measure(seg, settle_s=0.0):
         "foot_landing_vel_ms": None,
         "fsr_stance_counts": fsr_mean,
         "fsr_peak_stance_counts": fsr_peak,
-        "phase_diff_front_percent": round(float(np.mean(front)) * 100.0, 2) if front else 0.0,
-        "phase_diff_right_percent": round(float(np.mean(right)) * 100.0, 2) if right else 0.0,
-        "phase_diff_diag_percent": round(float(np.mean(diag)) * 100.0, 2) if diag else 0.0,
+        "fsr_calibration_measured": fsr_measured,
+        "phase_diff_front_percent": pair_percent("front_FL_FR"),
+        "phase_diff_right_percent": pair_percent("lat_R_FR_RR"),
+        "phase_diff_diag_percent": pair_percent("diag_FL_RR"),
+        "phase_pairs": phase_pairs,
+        "duty_factor": [round(d, 3) for d in duty],
+        "contact_quality": quality,
+        "contact_source": contact_source,
         "base_oscillation": {
             "std_z_vel": round(float(np.std(v[:, 2])), 2),
             "std_roll_vel": round(float(np.std(gyro[:, 0])), 2),
@@ -398,12 +452,25 @@ def main():
     args = parser.parse_args()
 
     segments = []
+    loop_hz_all, infer_mean_all, infer_max_all = [], [], []
     for path in args.recordings:
         print(f"[sweep_report] reading {path}")
         rec = Recording(path)
         found = rec.completed_segments()
         print(f"[sweep_report]   {len(found)} completed segment(s), robot clock offset "
               f"{rec.clock_offset * 1000.0:+.0f} ms")
+        if rec.calibration and len(rec.calibration[-1][1]) >= 9:
+            names = ("FL", "FR", "RL", "RR")
+            measured = rec.calibration[-1][1][5:9]
+            rejected = [n for n, m in zip(names, measured) if not m]
+            if rejected:
+                print(f"[sweep_report]   WARNING: FSR zero not measured for {', '.join(rejected)} "
+                      f"- kept the configured default. Load in counts is not trustworthy for "
+                      f"{'that foot' if len(rejected) == 1 else 'those feet'} in this session.")
+        if len(rec.loop_stats):
+            loop_hz_all.append(rec.loop_stats[:, 0])
+            infer_mean_all.append(rec.loop_stats[:, 1])
+            infer_max_all.append(rec.loop_stats[:, 2])
         segments += found
     if not segments:
         raise SystemExit("[sweep_report] no completed segments in these recordings.")
@@ -451,6 +518,21 @@ def main():
         walks = sorted({float(s.get("walk_s") or 0) for s in latest.values()})
         ramps = sorted({float(s.get("ramp_s") or 0) for s in latest.values()})
         robot = next((s.get("robot") for s in latest.values() if s.get("robot")), "go2")
+        loop_hz = np.concatenate(loop_hz_all) if loop_hz_all else np.zeros(0)
+        infer_mean = np.concatenate(infer_mean_all) if infer_mean_all else np.zeros(0)
+        infer_max = np.concatenate(infer_max_all) if infer_max_all else np.zeros(0)
+        loop_meta = None
+        if len(loop_hz):
+            loop_meta = {
+                "control_loop_hz_median": round(float(np.median(loop_hz)), 1),
+                "control_loop_hz_min": round(float(loop_hz.min()), 1),
+                "infer_time_ms_mean": round(float(infer_mean.mean()), 2),
+                "infer_time_ms_max": round(float(infer_max.max()), 2),
+            }
+            print(f"[sweep_report]   loop rate {loop_meta['control_loop_hz_median']:.0f} Hz "
+                  f"(min {loop_meta['control_loop_hz_min']:.0f}), inference "
+                  f"{loop_meta['infer_time_ms_mean']:.2f} ms mean / "
+                  f"{loop_meta['infer_time_ms_max']:.2f} ms max")
         report = {
             "metadata": {
                 "checkpoint": ckpt_local or ckpt or "None",
@@ -464,6 +546,7 @@ def main():
                 "ramp_s": ramps,
                 "settle_s": args.settle_s,
                 "source_recordings": sorted(sources),
+                "loop_stats": loop_meta,
             },
             "results": {a: results[a] for a in sorted(results, key=lambda a: AXIS_ORDER.get(a, 9))},
         }
