@@ -176,7 +176,16 @@ class RealDriver(Node):
         # all, so nothing off-robot infers either - both are published.
         self.foot_cal_pub = self.create_publisher(
             Float32MultiArray, "/sensors/foot_force_calibration", 10)
+        self._calib_measured = np.zeros(4, dtype=np.float64)  # 1.0 once that foot's zero is measured
         self.create_timer(1.0, self._publish_contact_calibration)
+
+        # Loop rate and policy inference time, at 1 Hz, so a recording carries the runtime
+        # numbers Section III-A reports instead of a console screenshot taken once by hand.
+        self.loop_stats_pub = self.create_publisher(
+            Float32MultiArray, "/diagnostics/loop_stats", 10)
+        self._loop_ticks = 0
+        self._loop_stats_last_t = time.perf_counter()
+        self.create_timer(1.0, self._publish_loop_stats)
 
         self.create_subscription(Float32, "/control/kp", self.kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self.kd_cb, 10)
@@ -259,10 +268,38 @@ class RealDriver(Node):
         }
 
     def _publish_contact_calibration(self):
-        """Broadcast the FSR gate so viewers show what the robot actually applies."""
+        """Broadcast the FSR gate so viewers show what the robot actually applies.
+
+        The trailing four floats are 1.0 for a foot whose zero was actually measured this run
+        and 0.0 for one that kept the configured default because it looked loaded or moving at
+        startup -- append-only, so mujoco_twin.py and foot_contact_overlay.py, which only read
+        the first five floats, are unaffected. Without this a recording cannot tell "FL reads
+        16.0 because that is genuinely its zero" from "FL reads 16.0 because its calibration
+        was rejected", which is exactly the ambiguity that hid the rear-foot miscalibration.
+        """
         msg = Float32MultiArray()
-        msg.data = [float(self.contact_threshold)] + [float(o) for o in self.fsr_offset]
+        msg.data = ([float(self.contact_threshold)] + [float(o) for o in self.fsr_offset]
+                    + [float(m) for m in self._calib_measured])
         self.foot_cal_pub.publish(msg)
+
+    def _publish_loop_stats(self):
+        """Achieved control-loop rate and policy inference time, over the last second."""
+        now = time.perf_counter()
+        elapsed = now - self._loop_stats_last_t
+        hz = self._loop_ticks / elapsed if elapsed > 0 else 0.0
+        self._loop_ticks = 0
+        self._loop_stats_last_t = now
+
+        infer_mean_ms = infer_max_ms = 0.0
+        runner = self.pipeline.policy_manager.policies.get("main")
+        if runner is not None and runner.inf_times:
+            times_ms = np.asarray(runner.inf_times) * 1000.0
+            infer_mean_ms, infer_max_ms = float(times_ms.mean()), float(times_ms.max())
+            runner.inf_times.clear()  # unbounded otherwise -- this is the only reader
+
+        msg = Float32MultiArray()
+        msg.data = [float(hz), infer_mean_ms, infer_max_ms]
+        self.loop_stats_pub.publish(msg)
 
     def _collect_fsr_sample(self, raw):
         """Average the unloaded FSR readings into a per-foot zero, once, at startup."""
@@ -282,6 +319,7 @@ class RealDriver(Node):
         # carrying - so keep the configured bias for that foot and say which.
         bad = (mean > self._calib_offset_max) | (spread > self._calib_spread_max)
         offsets = np.where(bad, self.fsr_offset, mean)
+        self._calib_measured = np.where(bad, 0.0, 1.0)
         self.get_logger().info(
             "[RealDriver] FSR zero: "
             + "  ".join(f"{n}={m:.1f}+-{s:.1f}" for n, m, s in zip(names, mean, spread))
@@ -301,6 +339,7 @@ class RealDriver(Node):
 
     def control_loop(self):
         """Internal inference logic."""
+        self._loop_ticks += 1
         if self.low_state is None:
             return
 
