@@ -299,6 +299,15 @@ class MujocoEvaluator(Node):
             kd = 0.0
 
         torques = kp * pos_err + kd * (0 - v)
+        # DIVERGENCE (documented, not yet resolved -- do not "fix" in isolation).
+        # Isaac Lab's DCMotor slopes the torque-speed line from saturation_effort and only then
+        # clips to effort_limit:  min(sat_effort * (1 - v/vel_lim), effort_limit).
+        # mujoco_sim2sim.py implements that. The lines below slope from effort_limit instead,
+        # giving 24.75 * (1 - v/vel_lim) for the Go2 rather than min(45 * (1 - v/vel_lim), 24.75).
+        # By accident that lands within ~5% of the 23.5 N.m envelope training actually used, so
+        # switching to sat_effort would make this evaluation LESS faithful to training, not more.
+        # Deciding this needs a choice of purpose: reproduce training (sat=eff=23.5, vel=30) or
+        # predict hardware (per-joint: calf 45.43 N.m / 15.6 rad/s, hip+thigh 23.7 / 30).
         vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
         v_clamp = np.clip(v, -vel_at_lim, vel_at_lim)
         t_top = effort_limit * (1.0 - v_clamp / vel_lim)
@@ -530,7 +539,9 @@ class MujocoEvaluator(Node):
                                 err_yaw_sum += (raw_data['gyro'][2] - speed) * 0.001
 
                     avg_actual_vel = np.mean(actual_vels) if actual_vels else 0.0
-                    avg_foot_height_max = [max(0.0, h - 0.02) for h in max_foot_heights]
+                    # Foot collision geom radius is 0.022 m (unitree_go2/go2.xml, class "foot"),
+                    # not 0.02 -- subtracting the wrong constant overstated clearance by ~0.2 cm.
+                    avg_foot_height_max = [max(0.0, h - 0.022) for h in max_foot_heights]
                     
                     valid_swing_times = [
                         [t for t in leg_times if t > 0.05] for leg_times in swing_times

@@ -476,6 +476,15 @@ class Ros2MujocoDriver(Node):
             # cancel the damping entirely and make the robot go limp again.
             return np.clip(torques, -sat_effort, sat_effort)
 
+        # DIVERGENCE (documented, not yet resolved -- do not "fix" in isolation).
+        # Isaac Lab's DCMotor slopes the torque-speed line from saturation_effort and only then
+        # clips to effort_limit:  min(sat_effort * (1 - v/vel_lim), effort_limit).
+        # mujoco_sim2sim.py implements that. The lines below slope from effort_limit instead,
+        # giving 24.75 * (1 - v/vel_lim) for the Go2 rather than min(45 * (1 - v/vel_lim), 24.75).
+        # By accident that lands within ~5% of the 23.5 N.m envelope training actually used, so
+        # switching to sat_effort would make this evaluation LESS faithful to training, not more.
+        # Deciding this needs a choice of purpose: reproduce training (sat=eff=23.5, vel=30) or
+        # predict hardware (per-joint: calf 45.43 N.m / 15.6 rad/s, hip+thigh 23.7 / 30).
         vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
         v_clamp = np.clip(v, -vel_at_lim, vel_at_lim)
         t_top = effort_limit * (1.0 - v_clamp / vel_lim)

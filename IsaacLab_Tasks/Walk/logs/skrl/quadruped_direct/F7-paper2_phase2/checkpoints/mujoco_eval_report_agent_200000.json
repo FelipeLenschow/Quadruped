@@ -111,10 +111,10 @@
                 "commanded_speed": 0.1,
                 "actual_speed": 0.01,
                 "foot_lift_height_cm": [
-                    6.61,
-                    5.11,
-                    5.73,
-                    2.23
+                    6.41,
+                    4.91,
+                    5.53,
+                    2.03
                 ],
                 "foot_swing_time_s": 0.11,
                 "step_frequency_hz": [
@@ -160,10 +160,10 @@
                 "commanded_speed": 0.15,
                 "actual_speed": 0.05,
                 "foot_lift_height_cm": [
-                    6.75,
-                    4.74,
-                    5.5,
-                    3.4
+                    6.55,
+                    4.54,
+                    5.3,
+                    3.2
                 ],
                 "foot_swing_time_s": 0.1,
                 "step_frequency_hz": [
@@ -209,10 +209,10 @@
                 "commanded_speed": 0.2,
                 "actual_speed": 0.12,
                 "foot_lift_height_cm": [
-                    7.72,
-                    4.54,
-                    5.62,
-                    4.47
+                    7.52,
+                    4.34,
+                    5.42,
+                    4.27
                 ],
                 "foot_swing_time_s": 0.11,
                 "step_frequency_hz": [
@@ -258,10 +258,10 @@
                 "commanded_speed": 0.25,
                 "actual_speed": 0.18,
                 "foot_lift_height_cm": [
-                    7.79,
-                    4.94,
-                    6.13,
-                    4.17
+                    7.59,
+                    4.74,
+                    5.93,
+                    3.97
                 ],
                 "foot_swing_time_s": 0.11,
                 "step_frequency_hz": [
@@ -307,10 +307,10 @@
                 "commanded_speed": 0.35,
                 "actual_speed": 0.27,
                 "foot_lift_height_cm": [
-                    8.36,
-                    5.24,
-                    6.73,
-                    3.9
+                    8.16,
+                    5.04,
+                    6.53,
+                    3.7
                 ],
                 "foot_swing_time_s": 0.11,
                 "step_frequency_hz": [
@@ -356,10 +356,10 @@
                 "commanded_speed": 0.5,
                 "actual_speed": 0.39,
                 "foot_lift_height_cm": [
-                    9.9,
-                    6.01,
-                    8.09,
-                    5.38
+                    9.7,
+                    5.81,
+                    7.89,
+                    5.18
                 ],
                 "foot_swing_time_s": 0.12,
                 "step_frequency_hz": [
@@ -405,10 +405,10 @@
                 "commanded_speed": 0.75,
                 "actual_speed": 0.66,
                 "foot_lift_height_cm": [
-                    11.65,
-                    5.74,
-                    7.21,
-                    8.06
+                    11.45,
+                    5.54,
+                    7.01,
+                    7.86
                 ],
                 "foot_swing_time_s": 0.12,
                 "step_frequency_hz": [
@@ -454,10 +454,10 @@
                 "commanded_speed": 1.0,
                 "actual_speed": 0.88,
                 "foot_lift_height_cm": [
-                    14.02,
-                    7.85,
-                    10.12,
-                    9.53
+                    13.82,
+                    7.65,
+                    9.92,
+                    9.33
                 ],
                 "foot_swing_time_s": 0.13,
                 "step_frequency_hz": [
@@ -603,7 +603,7 @@
                 "commanded_speed": 0.1,
                 "actual_speed": 0.0,
                 "foot_lift_height_cm": [
-                    0.82,
+                    0.62,
                     0.0,
                     0.0,
                     0.0
@@ -652,10 +652,10 @@
                 "commanded_speed": 0.15,
                 "actual_speed": 0.08,
                 "foot_lift_height_cm": [
-                    3.3,
-                    4.76,
-                    3.4,
-                    1.54
+                    3.1,
+                    4.56,
+                    3.2,
+                    1.34
                 ],
                 "foot_swing_time_s": 0.09,
                 "step_frequency_hz": [
@@ -701,10 +701,10 @@
                 "commanded_speed": 0.2,
                 "actual_speed": 0.14,
                 "foot_lift_height_cm": [
-                    3.67,
-                    4.78,
-                    3.7,
-                    2.58
+                    3.47,
+                    4.58,
+                    3.5,
+                    2.38
                 ],
                 "foot_swing_time_s": 0.08,
                 "step_frequency_hz": [
@@ -750,10 +750,10 @@
                 "commanded_speed": 0.25,
                 "actual_speed": 0.21,
                 "foot_lift_height_cm": [
-                    4.87,
-                    5.58,
-                    4.0,
-                    3.02
+                    4.67,
+                    5.38,
+                    3.8,
+                    2.82
                 ],
                 "foot_swing_time_s": 0.08,
                 "step_frequency_hz": [
@@ -799,10 +799,10 @@
                 "commanded_speed": 0.35,
                 "actual_speed": 0.33,
                 "foot_lift_height_cm": [
-                    7.09,
-                    4.61,
-                    4.34,
-                    3.21
+                    6.89,
+                    4.41,
+                    4.14,
+                    3.01
                 ],
                 "foot_swing_time_s": 0.1,
                 "step_frequency_hz": [
@@ -848,10 +848,10 @@
                 "commanded_speed": 0.5,
                 "actual_speed": 0.45,
                 "foot_lift_height_cm": [
-                    9.52,
-                    4.35,
-                    5.88,
-                    7.55
+                    9.32,
+                    4.15,
+                    5.68,
+                    7.35
                 ],
                 "foot_swing_time_s": 0.12,
                 "step_frequency_hz": [
@@ -997,10 +997,10 @@
                 "commanded_speed": 0.2,
                 "actual_speed": 0.04,
                 "foot_lift_height_cm": [
-                    4.59,
+                    4.39,
                     0.0,
                     0.0,
-                    1.25
+                    1.05
                 ],
                 "foot_swing_time_s": 0.09,
                 "step_frequency_hz": [
@@ -1046,10 +1046,10 @@
                 "commanded_speed": 0.3,
                 "actual_speed": 0.08,
                 "foot_lift_height_cm": [
-                    7.88,
-                    2.01,
-                    0.67,
-                    8.94
+                    7.68,
+                    1.81,
+                    0.47,
+                    8.74
                 ],
                 "foot_swing_time_s": 0.1,
                 "step_frequency_hz": [
@@ -1095,10 +1095,10 @@
                 "commanded_speed": 0.4,
                 "actual_speed": 0.21,
                 "foot_lift_height_cm": [
-                    4.16,
-                    2.85,
-                    0.99,
-                    4.65
+                    3.96,
+                    2.65,
+                    0.79,
+                    4.45
                 ],
                 "foot_swing_time_s": 0.11,
                 "step_frequency_hz": [
@@ -1144,10 +1144,10 @@
                 "commanded_speed": 0.5,
                 "actual_speed": 0.3,
                 "foot_lift_height_cm": [
-                    5.04,
-                    4.14,
-                    1.91,
-                    6.8
+                    4.84,
+                    3.94,
+                    1.71,
+                    6.6
                 ],
                 "foot_swing_time_s": 0.12,
                 "step_frequency_hz": [
@@ -1193,10 +1193,10 @@
                 "commanded_speed": 0.75,
                 "actual_speed": 0.51,
                 "foot_lift_height_cm": [
-                    2.64,
-                    6.13,
-                    3.31,
-                    6.4
+                    2.44,
+                    5.93,
+                    3.11,
+                    6.2
                 ],
                 "foot_swing_time_s": 0.12,
                 "step_frequency_hz": [
@@ -1242,10 +1242,10 @@
                 "commanded_speed": 1.0,
                 "actual_speed": 0.71,
                 "foot_lift_height_cm": [
-                    3.11,
-                    9.08,
-                    4.16,
-                    9.25
+                    2.91,
+                    8.88,
+                    3.96,
+                    9.05
                 ],
                 "foot_swing_time_s": 0.12,
                 "step_frequency_hz": [

@@ -1,9 +1,9 @@
 {
     "metadata": {
-        "checkpoint": "/app/IsaacLab_Tasks/Walk/logs/skrl/quadruped_direct/Final7/checkpoints/agent_500000.pt",
+        "checkpoint": "/home/05680435969@corp.udesc.br/Quadruped/IsaacLab_Tasks/Walk/logs/skrl/quadruped_direct/Final7/checkpoints/agent_500000.pt",
         "checkpoint_name": "agent_500000.pt",
         "robot_type": "go2",
-        "timestamp": "2026-09-11 23:00:06",
+        "timestamp": "2026-09-14 13:42:59",
         "simulator": "real",
         "velocity_source": "state estimator",
         "walk_s": [
@@ -24,9 +24,7 @@
         ],
         "settle_s": 0.0,
         "source_recordings": [
-            "/app/Mcap/Recordings/run_teleop_sweep_20260911_214800",
-            "/app/Mcap/Recordings/run_teleop_sweep_20260911_222824",
-            "/app/Mcap/Recordings/run_teleop_sweep_20260911_224135"
+            "/home/05680435969@corp.udesc.br/Quadruped/Mcap/Recordings/run_teleop_sweep_20260911_224135"
         ]
     },
     "results": {
@@ -53,18 +51,56 @@
                 "fsr_stance_counts": [
                     30.8,
                     22.1,
-                    0.0,
-                    0.0
+                    7.0,
+                    9.7
                 ],
                 "fsr_peak_stance_counts": [
                     31.0,
                     22.1,
-                    0.0,
-                    0.0
+                    7.0,
+                    10.0
                 ],
                 "phase_diff_front_percent": 0.0,
                 "phase_diff_right_percent": 0.0,
                 "phase_diff_diag_percent": 0.0,
+                "phase_pairs": {},
+                "duty_factor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 31.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 22.1,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 7.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 10.0,
+                        "touchdowns": 0
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.0,
                     "std_roll_vel": 0.01,
@@ -103,18 +139,56 @@
                 "fsr_stance_counts": [
                     30.0,
                     23.7,
-                    0.0,
-                    0.0
+                    6.0,
+                    8.6
                 ],
                 "fsr_peak_stance_counts": [
                     31.0,
                     24.1,
-                    0.0,
-                    0.0
+                    7.0,
+                    10.0
                 ],
                 "phase_diff_front_percent": 0.0,
                 "phase_diff_right_percent": 0.0,
                 "phase_diff_diag_percent": 0.0,
+                "phase_pairs": {},
+                "duty_factor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 30.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 24.1,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 6.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 9.0,
+                        "touchdowns": 0
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.0,
                     "std_roll_vel": 0.01,
@@ -153,18 +227,56 @@
                 "fsr_stance_counts": [
                     22.8,
                     31.3,
-                    0.0,
+                    5.9,
                     0.0
                 ],
                 "fsr_peak_stance_counts": [
                     31.0,
                     34.1,
-                    0.0,
+                    7.0,
                     0.0
                 ],
                 "phase_diff_front_percent": 0.0,
                 "phase_diff_right_percent": 0.0,
                 "phase_diff_diag_percent": 0.0,
+                "phase_pairs": {},
+                "duty_factor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    0.0
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 22.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 32.1,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 6.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "held off the ground",
+                        "stance_plateau_counts": 0.0,
+                        "touchdowns": 0
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.0,
                     "std_roll_vel": 0.01,
@@ -185,26 +297,26 @@
                 "commanded_speed": 0.15,
                 "actual_speed": 0.09,
                 "foot_lift_height_cm": [
-                    7.62,
+                    7.68,
                     5.65,
                     7.32,
-                    3.36
+                    3.3
                 ],
-                "foot_swing_time_s": 0.69,
+                "foot_swing_time_s": 0.41,
                 "step_frequency_hz": [
-                    0.77,
                     0.65,
                     0.65,
-                    0.61
+                    0.65,
+                    0.65
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    25.6,
-                    33.1,
-                    19.5,
-                    14.5
+                    27.2,
+                    33.2,
+                    11.5,
+                    7.4
                 ],
                 "fsr_peak_stance_counts": [
                     70.0,
@@ -212,9 +324,96 @@
                     58.0,
                     23.0
                 ],
-                "phase_diff_front_percent": 23.5,
-                "phase_diff_right_percent": 13.35,
-                "phase_diff_diag_percent": 26.91,
+                "phase_diff_front_percent": 11.31,
+                "phase_diff_right_percent": 1.21,
+                "phase_diff_diag_percent": 9.88,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 11.31,
+                        "from_trot": 38.69,
+                        "mean_phase": 0.887,
+                        "lock": 0.304,
+                        "n": 14,
+                        "usable": false
+                    },
+                    "rear_RL_RR": {
+                        "percent": 0.34,
+                        "from_trot": 49.66,
+                        "mean_phase": 0.003,
+                        "lock": 0.306,
+                        "n": 14,
+                        "usable": false
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 11.6,
+                        "from_trot": 38.4,
+                        "mean_phase": 0.884,
+                        "lock": 0.351,
+                        "n": 14,
+                        "usable": false
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 1.21,
+                        "from_trot": 48.79,
+                        "mean_phase": 0.012,
+                        "lock": 0.3,
+                        "n": 14,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 9.88,
+                        "from_trot": 9.88,
+                        "mean_phase": 0.901,
+                        "lock": 0.473,
+                        "n": 14,
+                        "usable": false
+                    },
+                    "diag_FR_RL": {
+                        "percent": 3.15,
+                        "from_trot": 3.15,
+                        "mean_phase": 0.031,
+                        "lock": 0.989,
+                        "n": 15,
+                        "usable": false
+                    }
+                },
+                "duty_factor": [
+                    0.72,
+                    0.886,
+                    0.557,
+                    0.492
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": false,
+                        "note": "ambiguous 38%",
+                        "stance_plateau_counts": 50.0,
+                        "touchdowns": 16
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 4%",
+                        "stance_plateau_counts": 51.1,
+                        "touchdowns": 16
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": false,
+                        "note": "ambiguous 47%",
+                        "stance_plateau_counts": 24.0,
+                        "touchdowns": 16
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 25%",
+                        "stance_plateau_counts": 15.0,
+                        "touchdowns": 16
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.03,
                     "std_roll_vel": 0.25,
@@ -235,26 +434,26 @@
                 "commanded_speed": 0.2,
                 "actual_speed": 0.16,
                 "foot_lift_height_cm": [
-                    9.18,
-                    6.89,
-                    6.45,
-                    4.94
+                    9.21,
+                    6.9,
+                    6.58,
+                    4.97
                 ],
-                "foot_swing_time_s": 0.44,
+                "foot_swing_time_s": 0.32,
                 "step_frequency_hz": [
-                    1.04,
+                    0.98,
                     0.98,
                     1.04,
-                    1.16
+                    0.98
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    30.4,
-                    32.9,
-                    18.2,
-                    15.5
+                    31.0,
+                    33.0,
+                    12.7,
+                    10.0
                 ],
                 "fsr_peak_stance_counts": [
                     60.0,
@@ -262,9 +461,96 @@
                     50.0,
                     26.0
                 ],
-                "phase_diff_front_percent": 22.22,
-                "phase_diff_right_percent": 15.34,
-                "phase_diff_diag_percent": 29.28,
+                "phase_diff_front_percent": 24.73,
+                "phase_diff_right_percent": 5.66,
+                "phase_diff_diag_percent": 40.92,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 24.73,
+                        "from_trot": 25.27,
+                        "mean_phase": 0.753,
+                        "lock": 0.705,
+                        "n": 15,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 15.3,
+                        "from_trot": 34.7,
+                        "mean_phase": 0.847,
+                        "lock": 0.279,
+                        "n": 15,
+                        "usable": false
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 21.21,
+                        "from_trot": 28.79,
+                        "mean_phase": 0.788,
+                        "lock": 0.581,
+                        "n": 15,
+                        "usable": false
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 5.66,
+                        "from_trot": 44.34,
+                        "mean_phase": 0.943,
+                        "lock": 0.169,
+                        "n": 14,
+                        "usable": false
+                    },
+                    "diag_FL_RR": {
+                        "percent": 40.92,
+                        "from_trot": 40.92,
+                        "mean_phase": 0.591,
+                        "lock": 0.227,
+                        "n": 15,
+                        "usable": false
+                    },
+                    "diag_FR_RL": {
+                        "percent": 4.92,
+                        "from_trot": 4.92,
+                        "mean_phase": 0.049,
+                        "lock": 0.944,
+                        "n": 15,
+                        "usable": false
+                    }
+                },
+                "duty_factor": [
+                    0.751,
+                    0.809,
+                    0.615,
+                    0.447
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 20%",
+                        "stance_plateau_counts": 54.0,
+                        "touchdowns": 16
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 8%",
+                        "stance_plateau_counts": 52.1,
+                        "touchdowns": 16
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": false,
+                        "note": "ambiguous 30%",
+                        "stance_plateau_counts": 24.0,
+                        "touchdowns": 17
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": false,
+                        "note": "ambiguous 40%",
+                        "stance_plateau_counts": 19.0,
+                        "touchdowns": 16
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.04,
                     "std_roll_vel": 0.32,
@@ -285,26 +571,26 @@
                 "commanded_speed": 0.25,
                 "actual_speed": 0.2,
                 "foot_lift_height_cm": [
-                    11.67,
-                    7.39,
-                    6.82,
-                    3.99
+                    11.72,
+                    7.4,
+                    6.92,
+                    4.02
                 ],
-                "foot_swing_time_s": 0.36,
+                "foot_swing_time_s": 0.3,
                 "step_frequency_hz": [
                     1.06,
-                    1.14,
                     1.22,
-                    1.55
+                    1.14,
+                    1.14
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    33.2,
-                    34.0,
-                    19.7,
-                    15.9
+                    34.9,
+                    34.7,
+                    14.3,
+                    11.0
                 ],
                 "fsr_peak_stance_counts": [
                     73.0,
@@ -312,9 +598,96 @@
                     70.0,
                     27.0
                 ],
-                "phase_diff_front_percent": 29.88,
-                "phase_diff_right_percent": 24.32,
-                "phase_diff_diag_percent": 32.3,
+                "phase_diff_front_percent": 33.41,
+                "phase_diff_right_percent": 35.35,
+                "phase_diff_diag_percent": 7.62,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 33.41,
+                        "from_trot": 16.59,
+                        "mean_phase": 0.666,
+                        "lock": 0.88,
+                        "n": 12,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 23.72,
+                        "from_trot": 26.28,
+                        "mean_phase": 0.237,
+                        "lock": 0.343,
+                        "n": 12,
+                        "usable": false
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 27.77,
+                        "from_trot": 22.23,
+                        "mean_phase": 0.722,
+                        "lock": 0.833,
+                        "n": 12,
+                        "usable": false
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 35.35,
+                        "from_trot": 14.65,
+                        "mean_phase": 0.353,
+                        "lock": 0.321,
+                        "n": 13,
+                        "usable": false
+                    },
+                    "diag_FL_RR": {
+                        "percent": 7.62,
+                        "from_trot": 7.62,
+                        "mean_phase": 0.076,
+                        "lock": 0.267,
+                        "n": 12,
+                        "usable": false
+                    },
+                    "diag_FR_RL": {
+                        "percent": 5.79,
+                        "from_trot": 5.79,
+                        "mean_phase": 0.058,
+                        "lock": 0.944,
+                        "n": 14,
+                        "usable": false
+                    }
+                },
+                "duty_factor": [
+                    0.708,
+                    0.751,
+                    0.546,
+                    0.533
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 15%",
+                        "stance_plateau_counts": 56.0,
+                        "touchdowns": 13
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 21%",
+                        "stance_plateau_counts": 56.7,
+                        "touchdowns": 15
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": false,
+                        "note": "ambiguous 31%",
+                        "stance_plateau_counts": 25.0,
+                        "touchdowns": 14
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": false,
+                        "note": "ambiguous 31%",
+                        "stance_plateau_counts": 20.0,
+                        "touchdowns": 14
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.05,
                     "std_roll_vel": 0.35,
@@ -335,26 +708,26 @@
                 "commanded_speed": 0.35,
                 "actual_speed": 0.29,
                 "foot_lift_height_cm": [
-                    11.62,
-                    8.3,
+                    11.65,
+                    8.31,
                     6.32,
-                    5.06
+                    5.04
                 ],
-                "foot_swing_time_s": 0.28,
+                "foot_swing_time_s": 0.27,
                 "step_frequency_hz": [
                     1.36,
-                    1.36,
                     1.47,
-                    2.04
+                    1.47,
+                    1.59
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    37.9,
-                    33.9,
-                    20.4,
-                    16.7
+                    39.5,
+                    34.6,
+                    18.9,
+                    13.5
                 ],
                 "fsr_peak_stance_counts": [
                     77.0,
@@ -362,9 +735,96 @@
                     94.0,
                     27.0
                 ],
-                "phase_diff_front_percent": 35.89,
-                "phase_diff_right_percent": 30.36,
-                "phase_diff_diag_percent": 22.06,
+                "phase_diff_front_percent": 44.16,
+                "phase_diff_right_percent": 43.36,
+                "phase_diff_diag_percent": 14.12,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 44.16,
+                        "from_trot": 5.84,
+                        "mean_phase": 0.558,
+                        "lock": 0.897,
+                        "n": 10,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 45.14,
+                        "from_trot": 4.86,
+                        "mean_phase": 0.549,
+                        "lock": 0.433,
+                        "n": 13,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 40.52,
+                        "from_trot": 9.48,
+                        "mean_phase": 0.595,
+                        "lock": 0.927,
+                        "n": 10,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 43.36,
+                        "from_trot": 6.64,
+                        "mean_phase": 0.566,
+                        "lock": 0.72,
+                        "n": 13,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 14.12,
+                        "from_trot": 14.12,
+                        "mean_phase": 0.141,
+                        "lock": 0.593,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 3.78,
+                        "from_trot": 3.78,
+                        "mean_phase": 0.038,
+                        "lock": 0.926,
+                        "n": 12,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.648,
+                    0.686,
+                    0.496,
+                    0.473
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 11%",
+                        "stance_plateau_counts": 57.0,
+                        "touchdowns": 12
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 12%",
+                        "stance_plateau_counts": 52.1,
+                        "touchdowns": 13
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 11%",
+                        "stance_plateau_counts": 28.5,
+                        "touchdowns": 13
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 11%",
+                        "stance_plateau_counts": 22.0,
+                        "touchdowns": 14
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.06,
                     "std_roll_vel": 0.42,
@@ -385,26 +845,26 @@
                 "commanded_speed": 0.5,
                 "actual_speed": 0.41,
                 "foot_lift_height_cm": [
-                    15.12,
+                    15.16,
                     10.63,
-                    8.07,
-                    6.97
+                    8.06,
+                    6.96
                 ],
-                "foot_swing_time_s": 0.24,
+                "foot_swing_time_s": 0.25,
                 "step_frequency_hz": [
                     1.67,
                     1.52,
                     1.67,
-                    2.27
+                    1.67
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    43.1,
-                    33.5,
-                    22.2,
-                    18.6
+                    45.0,
+                    34.0,
+                    19.0,
+                    16.5
                 ],
                 "fsr_peak_stance_counts": [
                     114.0,
@@ -412,9 +872,96 @@
                     90.0,
                     30.0
                 ],
-                "phase_diff_front_percent": 42.06,
-                "phase_diff_right_percent": 36.3,
-                "phase_diff_diag_percent": 16.82,
+                "phase_diff_front_percent": 44.54,
+                "phase_diff_right_percent": 47.0,
+                "phase_diff_diag_percent": 11.42,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 44.54,
+                        "from_trot": 5.46,
+                        "mean_phase": 0.555,
+                        "lock": 0.876,
+                        "n": 9,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 48.11,
+                        "from_trot": 1.89,
+                        "mean_phase": 0.481,
+                        "lock": 0.592,
+                        "n": 10,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 42.44,
+                        "from_trot": 7.56,
+                        "mean_phase": 0.576,
+                        "lock": 0.748,
+                        "n": 9,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 47.0,
+                        "from_trot": 3.0,
+                        "mean_phase": 0.53,
+                        "lock": 0.751,
+                        "n": 9,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 11.42,
+                        "from_trot": 11.42,
+                        "mean_phase": 0.114,
+                        "lock": 0.89,
+                        "n": 9,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 2.07,
+                        "from_trot": 2.07,
+                        "mean_phase": 0.021,
+                        "lock": 0.715,
+                        "n": 8,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.619,
+                    0.614,
+                    0.553,
+                    0.477
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 8%",
+                        "stance_plateau_counts": 60.9,
+                        "touchdowns": 11
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 11%",
+                        "stance_plateau_counts": 56.1,
+                        "touchdowns": 10
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 17%",
+                        "stance_plateau_counts": 33.6,
+                        "touchdowns": 11
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 13%",
+                        "stance_plateau_counts": 25.3,
+                        "touchdowns": 11
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.06,
                     "std_roll_vel": 0.49,
@@ -435,26 +982,26 @@
                 "commanded_speed": 0.75,
                 "actual_speed": 0.57,
                 "foot_lift_height_cm": [
-                    14.86,
+                    14.75,
                     17.9,
-                    9.07,
-                    9.73
+                    9.06,
+                    9.52
                 ],
-                "foot_swing_time_s": 0.25,
+                "foot_swing_time_s": 0.26,
                 "step_frequency_hz": [
                     1.79,
                     1.79,
-                    1.79,
+                    2.01,
                     1.79
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    46.7,
-                    29.4,
-                    23.3,
-                    17.3
+                    47.5,
+                    29.1,
+                    22.7,
+                    16.1
                 ],
                 "fsr_peak_stance_counts": [
                     162.0,
@@ -462,9 +1009,96 @@
                     112.0,
                     28.0
                 ],
-                "phase_diff_front_percent": 41.4,
-                "phase_diff_right_percent": 35.28,
-                "phase_diff_diag_percent": 17.84,
+                "phase_diff_front_percent": 43.98,
+                "phase_diff_right_percent": 48.91,
+                "phase_diff_diag_percent": 12.81,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 43.98,
+                        "from_trot": 6.02,
+                        "mean_phase": 0.56,
+                        "lock": 0.836,
+                        "n": 7,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 47.9,
+                        "from_trot": 2.1,
+                        "mean_phase": 0.479,
+                        "lock": 0.903,
+                        "n": 7,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 40.76,
+                        "from_trot": 9.24,
+                        "mean_phase": 0.592,
+                        "lock": 0.883,
+                        "n": 7,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 48.91,
+                        "from_trot": 1.09,
+                        "mean_phase": 0.511,
+                        "lock": 0.775,
+                        "n": 6,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 12.81,
+                        "from_trot": 12.81,
+                        "mean_phase": 0.128,
+                        "lock": 0.824,
+                        "n": 6,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 5.12,
+                        "from_trot": 5.12,
+                        "mean_phase": 0.051,
+                        "lock": 0.978,
+                        "n": 7,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.59,
+                    0.59,
+                    0.425,
+                    0.463
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 3%",
+                        "stance_plateau_counts": 61.1,
+                        "touchdowns": 8
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 11%",
+                        "stance_plateau_counts": 46.6,
+                        "touchdowns": 8
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 20%",
+                        "stance_plateau_counts": 54.8,
+                        "touchdowns": 9
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 7%",
+                        "stance_plateau_counts": 22.9,
+                        "touchdowns": 8
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.09,
                     "std_roll_vel": 0.77,
@@ -485,26 +1119,26 @@
                 "commanded_speed": 1.0,
                 "actual_speed": 0.62,
                 "foot_lift_height_cm": [
-                    18.96,
+                    18.98,
                     18.63,
-                    8.32,
-                    10.65
+                    8.41,
+                    10.74
                 ],
                 "foot_swing_time_s": 0.27,
                 "step_frequency_hz": [
                     1.89,
                     1.89,
-                    1.62,
-                    1.89
+                    1.89,
+                    1.62
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    51.6,
-                    35.1,
-                    22.9,
-                    22.5
+                    57.0,
+                    40.7,
+                    18.0,
+                    23.6
                 ],
                 "fsr_peak_stance_counts": [
                     194.0,
@@ -512,9 +1146,96 @@
                     109.0,
                     54.0
                 ],
-                "phase_diff_front_percent": 35.33,
-                "phase_diff_right_percent": 36.56,
-                "phase_diff_diag_percent": 11.75,
+                "phase_diff_front_percent": 47.08,
+                "phase_diff_right_percent": 47.83,
+                "phase_diff_diag_percent": 9.48,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 47.08,
+                        "from_trot": 2.92,
+                        "mean_phase": 0.471,
+                        "lock": 0.382,
+                        "n": 5,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 44.9,
+                        "from_trot": 5.1,
+                        "mean_phase": 0.449,
+                        "lock": 0.954,
+                        "n": 6,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 37.49,
+                        "from_trot": 12.51,
+                        "mean_phase": 0.625,
+                        "lock": 0.103,
+                        "n": 5,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 47.83,
+                        "from_trot": 2.17,
+                        "mean_phase": 0.478,
+                        "lock": 0.842,
+                        "n": 6,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 9.48,
+                        "from_trot": 9.48,
+                        "mean_phase": 0.095,
+                        "lock": 0.897,
+                        "n": 5,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 3.24,
+                        "from_trot": 3.24,
+                        "mean_phase": 0.032,
+                        "lock": 0.945,
+                        "n": 6,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.495,
+                    0.422,
+                    0.422,
+                    0.349
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 12%",
+                        "stance_plateau_counts": 109.1,
+                        "touchdowns": 7
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 18%",
+                        "stance_plateau_counts": 85.3,
+                        "touchdowns": 7
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 15%",
+                        "stance_plateau_counts": 34.2,
+                        "touchdowns": 7
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 10%",
+                        "stance_plateau_counts": 38.1,
+                        "touchdowns": 6
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.11,
                     "std_roll_vel": 0.8,
@@ -555,18 +1276,56 @@
                 "fsr_stance_counts": [
                     34.0,
                     20.1,
-                    0.0,
+                    6.0,
                     19.0
                 ],
                 "fsr_peak_stance_counts": [
                     34.0,
                     20.1,
-                    0.0,
+                    6.0,
                     19.0
                 ],
                 "phase_diff_front_percent": 0.0,
                 "phase_diff_right_percent": 0.0,
                 "phase_diff_diag_percent": 0.0,
+                "phase_pairs": {},
+                "duty_factor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 34.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 20.1,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 6.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 19.0,
+                        "touchdowns": 0
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.0,
                     "std_roll_vel": 0.01,
@@ -605,18 +1364,56 @@
                 "fsr_stance_counts": [
                     34.0,
                     20.3,
-                    0.0,
+                    6.0,
                     19.0
                 ],
                 "fsr_peak_stance_counts": [
                     34.0,
                     21.1,
-                    0.0,
+                    6.0,
                     19.0
                 ],
                 "phase_diff_front_percent": 0.0,
                 "phase_diff_right_percent": 0.0,
                 "phase_diff_diag_percent": 0.0,
+                "phase_pairs": {},
+                "duty_factor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 34.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 20.1,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 6.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 19.0,
+                        "touchdowns": 0
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.0,
                     "std_roll_vel": 0.01,
@@ -639,14 +1436,14 @@
                 "foot_lift_height_cm": [
                     0.0,
                     0.0,
-                    0.82,
+                    0.0,
                     0.0
                 ],
-                "foot_swing_time_s": 0.14,
+                "foot_swing_time_s": 0.0,
                 "step_frequency_hz": [
                     0.0,
                     0.0,
-                    2.08,
+                    0.0,
                     0.0
                 ],
                 "grf_stance_N": null,
@@ -655,7 +1452,7 @@
                 "fsr_stance_counts": [
                     33.3,
                     19.1,
-                    11.0,
+                    10.1,
                     14.7
                 ],
                 "fsr_peak_stance_counts": [
@@ -667,6 +1464,44 @@
                 "phase_diff_front_percent": 0.0,
                 "phase_diff_right_percent": 0.0,
                 "phase_diff_diag_percent": 0.0,
+                "phase_pairs": {},
+                "duty_factor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 33.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 19.1,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 10.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 15.0,
+                        "touchdowns": 0
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.0,
                     "std_roll_vel": 0.01,
@@ -687,26 +1522,26 @@
                 "commanded_speed": 0.15,
                 "actual_speed": 0.07,
                 "foot_lift_height_cm": [
-                    7.61,
-                    7.29,
-                    5.3,
-                    3.16
+                    7.64,
+                    7.3,
+                    5.33,
+                    3.04
                 ],
-                "foot_swing_time_s": 0.36,
+                "foot_swing_time_s": 0.41,
                 "step_frequency_hz": [
                     0.66,
                     0.71,
                     0.71,
-                    1.37
+                    0.66
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    29.4,
-                    28.3,
-                    21.2,
-                    16.9
+                    30.5,
+                    29.5,
+                    20.4,
+                    14.7
                 ],
                 "fsr_peak_stance_counts": [
                     54.0,
@@ -714,9 +1549,96 @@
                     118.0,
                     37.0
                 ],
-                "phase_diff_front_percent": 26.57,
-                "phase_diff_right_percent": 29.89,
-                "phase_diff_diag_percent": 27.63,
+                "phase_diff_front_percent": 34.79,
+                "phase_diff_right_percent": 48.34,
+                "phase_diff_diag_percent": 20.32,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 34.79,
+                        "from_trot": 15.21,
+                        "mean_phase": 0.652,
+                        "lock": 0.651,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 45.88,
+                        "from_trot": 4.12,
+                        "mean_phase": 0.541,
+                        "lock": 0.587,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 37.14,
+                        "from_trot": 12.86,
+                        "mean_phase": 0.629,
+                        "lock": 0.687,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 48.34,
+                        "from_trot": 1.66,
+                        "mean_phase": 0.483,
+                        "lock": 0.499,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 20.32,
+                        "from_trot": 20.32,
+                        "mean_phase": 0.203,
+                        "lock": 0.728,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 2.69,
+                        "from_trot": 2.69,
+                        "mean_phase": 0.973,
+                        "lock": 0.613,
+                        "n": 12,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.74,
+                    0.74,
+                    0.808,
+                    0.484
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 9%",
+                        "stance_plateau_counts": 46.0,
+                        "touchdowns": 12
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 27%",
+                        "stance_plateau_counts": 48.1,
+                        "touchdowns": 13
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 28%",
+                        "stance_plateau_counts": 30.0,
+                        "touchdowns": 13
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 25%",
+                        "stance_plateau_counts": 30.0,
+                        "touchdowns": 12
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.03,
                     "std_roll_vel": 0.26,
@@ -737,26 +1659,26 @@
                 "commanded_speed": 0.2,
                 "actual_speed": 0.11,
                 "foot_lift_height_cm": [
-                    9.75,
+                    9.77,
                     7.33,
-                    6.48,
-                    4.08
+                    6.49,
+                    4.11
                 ],
-                "foot_swing_time_s": 0.37,
+                "foot_swing_time_s": 0.38,
                 "step_frequency_hz": [
-                    0.93,
+                    0.87,
                     1.03,
-                    0.98,
+                    1.03,
                     0.98
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    31.4,
-                    30.5,
-                    23.0,
-                    19.1
+                    31.8,
+                    31.5,
+                    22.0,
+                    19.4
                 ],
                 "fsr_peak_stance_counts": [
                     54.0,
@@ -764,9 +1686,96 @@
                     109.0,
                     38.0
                 ],
-                "phase_diff_front_percent": 35.93,
-                "phase_diff_right_percent": 33.43,
-                "phase_diff_diag_percent": 27.89,
+                "phase_diff_front_percent": 38.32,
+                "phase_diff_right_percent": 32.0,
+                "phase_diff_diag_percent": 30.05,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 38.32,
+                        "from_trot": 11.68,
+                        "mean_phase": 0.617,
+                        "lock": 0.704,
+                        "n": 16,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 31.09,
+                        "from_trot": 18.91,
+                        "mean_phase": 0.689,
+                        "lock": 0.674,
+                        "n": 18,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 41.04,
+                        "from_trot": 8.96,
+                        "mean_phase": 0.59,
+                        "lock": 0.68,
+                        "n": 16,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 32.0,
+                        "from_trot": 18.0,
+                        "mean_phase": 0.68,
+                        "lock": 0.614,
+                        "n": 18,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 30.05,
+                        "from_trot": 30.05,
+                        "mean_phase": 0.3,
+                        "lock": 0.806,
+                        "n": 16,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 0.31,
+                        "from_trot": 0.31,
+                        "mean_phase": 0.003,
+                        "lock": 0.733,
+                        "n": 18,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.724,
+                    0.701,
+                    0.708,
+                    0.336
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 9%",
+                        "stance_plateau_counts": 48.0,
+                        "touchdowns": 17
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 28%",
+                        "stance_plateau_counts": 51.1,
+                        "touchdowns": 20
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 17%",
+                        "stance_plateau_counts": 34.0,
+                        "touchdowns": 20
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 21%",
+                        "stance_plateau_counts": 33.0,
+                        "touchdowns": 19
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.03,
                     "std_roll_vel": 0.34,
@@ -787,26 +1796,26 @@
                 "commanded_speed": 0.25,
                 "actual_speed": 0.16,
                 "foot_lift_height_cm": [
-                    14.74,
-                    8.95,
+                    14.77,
+                    8.99,
                     8.11,
-                    5.9
+                    5.92
                 ],
-                "foot_swing_time_s": 0.31,
+                "foot_swing_time_s": 0.34,
                 "step_frequency_hz": [
                     1.29,
+                    1.29,
                     1.23,
-                    1.23,
-                    1.16
+                    1.23
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    33.2,
-                    33.2,
-                    23.6,
-                    22.5
+                    34.9,
+                    35.1,
+                    23.5,
+                    22.3
                 ],
                 "fsr_peak_stance_counts": [
                     60.0,
@@ -814,9 +1823,96 @@
                     116.0,
                     42.0
                 ],
-                "phase_diff_front_percent": 31.4,
-                "phase_diff_right_percent": 30.21,
-                "phase_diff_diag_percent": 21.61,
+                "phase_diff_front_percent": 44.24,
+                "phase_diff_right_percent": 34.48,
+                "phase_diff_diag_percent": 18.07,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 44.24,
+                        "from_trot": 5.76,
+                        "mean_phase": 0.558,
+                        "lock": 0.734,
+                        "n": 18,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 35.24,
+                        "from_trot": 14.76,
+                        "mean_phase": 0.648,
+                        "lock": 0.462,
+                        "n": 18,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 44.23,
+                        "from_trot": 5.77,
+                        "mean_phase": 0.558,
+                        "lock": 0.749,
+                        "n": 17,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 34.48,
+                        "from_trot": 15.52,
+                        "mean_phase": 0.655,
+                        "lock": 0.448,
+                        "n": 18,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 18.07,
+                        "from_trot": 18.07,
+                        "mean_phase": 0.181,
+                        "lock": 0.835,
+                        "n": 18,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 5.38,
+                        "from_trot": 5.38,
+                        "mean_phase": 0.054,
+                        "lock": 0.538,
+                        "n": 18,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.625,
+                    0.634,
+                    0.623,
+                    0.381
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 13%",
+                        "stance_plateau_counts": 53.0,
+                        "touchdowns": 20
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 16%",
+                        "stance_plateau_counts": 54.1,
+                        "touchdowns": 20
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 11%",
+                        "stance_plateau_counts": 33.0,
+                        "touchdowns": 19
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 8%",
+                        "stance_plateau_counts": 35.0,
+                        "touchdowns": 19
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.04,
                     "std_roll_vel": 0.49,
@@ -837,12 +1933,12 @@
                 "commanded_speed": 0.35,
                 "actual_speed": 0.22,
                 "foot_lift_height_cm": [
-                    11.54,
-                    9.27,
+                    11.6,
+                    9.32,
                     9.35,
-                    5.07
+                    5.12
                 ],
-                "foot_swing_time_s": 0.29,
+                "foot_swing_time_s": 0.32,
                 "step_frequency_hz": [
                     1.4,
                     1.4,
@@ -853,10 +1949,10 @@
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    37.8,
-                    34.9,
-                    24.1,
-                    22.8
+                    40.0,
+                    38.0,
+                    23.6,
+                    23.6
                 ],
                 "fsr_peak_stance_counts": [
                     81.0,
@@ -864,9 +1960,96 @@
                     112.0,
                     42.0
                 ],
-                "phase_diff_front_percent": 40.87,
-                "phase_diff_right_percent": 34.76,
-                "phase_diff_diag_percent": 23.52,
+                "phase_diff_front_percent": 40.79,
+                "phase_diff_right_percent": 39.35,
+                "phase_diff_diag_percent": 18.18,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 40.79,
+                        "from_trot": 9.21,
+                        "mean_phase": 0.592,
+                        "lock": 0.856,
+                        "n": 15,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 37.46,
+                        "from_trot": 12.54,
+                        "mean_phase": 0.625,
+                        "lock": 0.739,
+                        "n": 15,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 44.36,
+                        "from_trot": 5.64,
+                        "mean_phase": 0.556,
+                        "lock": 0.827,
+                        "n": 15,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 39.35,
+                        "from_trot": 10.65,
+                        "mean_phase": 0.606,
+                        "lock": 0.908,
+                        "n": 14,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 18.18,
+                        "from_trot": 18.18,
+                        "mean_phase": 0.182,
+                        "lock": 0.876,
+                        "n": 15,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 0.35,
+                        "from_trot": 0.35,
+                        "mean_phase": 0.996,
+                        "lock": 0.911,
+                        "n": 15,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.564,
+                    0.546,
+                    0.599,
+                    0.383
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 8%",
+                        "stance_plateau_counts": 54.0,
+                        "touchdowns": 16
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 12%",
+                        "stance_plateau_counts": 57.8,
+                        "touchdowns": 16
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 8%",
+                        "stance_plateau_counts": 35.0,
+                        "touchdowns": 17
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 9%",
+                        "stance_plateau_counts": 37.0,
+                        "touchdowns": 16
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.05,
                     "std_roll_vel": 0.52,
@@ -887,26 +2070,26 @@
                 "commanded_speed": 0.5,
                 "actual_speed": 0.33,
                 "foot_lift_height_cm": [
-                    14.36,
-                    9.28,
+                    14.43,
+                    9.4,
                     10.79,
-                    7.11
+                    7.15
                 ],
-                "foot_swing_time_s": 0.27,
+                "foot_swing_time_s": 0.31,
                 "step_frequency_hz": [
-                    1.67,
-                    1.67,
                     1.54,
-                    1.8
+                    1.67,
+                    1.67,
+                    1.54
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    41.6,
-                    35.4,
-                    24.2,
-                    23.7
+                    43.4,
+                    39.1,
+                    24.4,
+                    24.3
                 ],
                 "fsr_peak_stance_counts": [
                     100.0,
@@ -914,9 +2097,96 @@
                     92.0,
                     43.0
                 ],
-                "phase_diff_front_percent": 36.01,
-                "phase_diff_right_percent": 31.14,
-                "phase_diff_diag_percent": 10.3,
+                "phase_diff_front_percent": 43.66,
+                "phase_diff_right_percent": 44.28,
+                "phase_diff_diag_percent": 11.33,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 43.66,
+                        "from_trot": 6.34,
+                        "mean_phase": 0.563,
+                        "lock": 0.866,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 41.79,
+                        "from_trot": 8.21,
+                        "mean_phase": 0.582,
+                        "lock": 0.788,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 44.67,
+                        "from_trot": 5.33,
+                        "mean_phase": 0.553,
+                        "lock": 0.834,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 44.28,
+                        "from_trot": 5.72,
+                        "mean_phase": 0.557,
+                        "lock": 0.695,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 11.33,
+                        "from_trot": 11.33,
+                        "mean_phase": 0.113,
+                        "lock": 0.922,
+                        "n": 11,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 1.08,
+                        "from_trot": 1.08,
+                        "mean_phase": 0.989,
+                        "lock": 0.778,
+                        "n": 11,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.534,
+                    0.474,
+                    0.573,
+                    0.414
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 5%",
+                        "stance_plateau_counts": 58.0,
+                        "touchdowns": 12
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 14%",
+                        "stance_plateau_counts": 59.6,
+                        "touchdowns": 13
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 11%",
+                        "stance_plateau_counts": 37.4,
+                        "touchdowns": 13
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 9%",
+                        "stance_plateau_counts": 39.0,
+                        "touchdowns": 12
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.06,
                     "std_roll_vel": 0.64,
@@ -957,18 +2227,56 @@
                 "fsr_stance_counts": [
                     32.0,
                     24.1,
-                    0.0,
+                    7.0,
                     12.0
                 ],
                 "fsr_peak_stance_counts": [
                     32.0,
                     24.1,
-                    0.0,
+                    7.0,
                     12.0
                 ],
                 "phase_diff_front_percent": 0.0,
                 "phase_diff_right_percent": 0.0,
                 "phase_diff_diag_percent": 0.0,
+                "phase_pairs": {},
+                "duty_factor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 32.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 24.1,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 7.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 12.0,
+                        "touchdowns": 0
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.0,
                     "std_roll_vel": 0.01,
@@ -994,12 +2302,12 @@
                     0.0,
                     0.0
                 ],
-                "foot_swing_time_s": 0.06,
+                "foot_swing_time_s": 0.0,
                 "step_frequency_hz": [
                     0.0,
                     0.0,
                     0.0,
-                    0.23
+                    0.0
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
@@ -1007,18 +2315,56 @@
                 "fsr_stance_counts": [
                     29.4,
                     26.8,
-                    0.0,
+                    9.0,
                     11.0
                 ],
                 "fsr_peak_stance_counts": [
                     32.0,
                     27.1,
-                    0.0,
+                    10.0,
                     12.0
                 ],
                 "phase_diff_front_percent": 0.0,
                 "phase_diff_right_percent": 0.0,
                 "phase_diff_diag_percent": 0.0,
+                "phase_pairs": {},
+                "duty_factor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 29.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 27.1,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 9.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 11.0,
+                        "touchdowns": 0
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.0,
                     "std_roll_vel": 0.01,
@@ -1041,8 +2387,8 @@
                 "foot_lift_height_cm": [
                     0.0,
                     0.0,
-                    0.77,
-                    0.01
+                    0.0,
+                    0.0
                 ],
                 "foot_swing_time_s": 0.0,
                 "step_frequency_hz": [
@@ -1057,18 +2403,56 @@
                 "fsr_stance_counts": [
                     16.7,
                     37.3,
-                    21.1,
-                    11.0
+                    20.9,
+                    0.0
                 ],
                 "fsr_peak_stance_counts": [
                     30.0,
                     38.1,
                     22.0,
-                    11.0
+                    0.0
                 ],
                 "phase_diff_front_percent": 0.0,
                 "phase_diff_right_percent": 0.0,
                 "phase_diff_diag_percent": 0.0,
+                "phase_pairs": {},
+                "duty_factor": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    0.0
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 16.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 38.1,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "held in stance",
+                        "stance_plateau_counts": 22.0,
+                        "touchdowns": 0
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "held off the ground",
+                        "stance_plateau_counts": 0.0,
+                        "touchdowns": 0
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.0,
                     "std_roll_vel": 0.01,
@@ -1089,26 +2473,26 @@
                 "commanded_speed": 0.3,
                 "actual_speed": 0.18,
                 "foot_lift_height_cm": [
-                    13.76,
-                    4.62,
-                    2.91,
-                    10.06
+                    13.72,
+                    4.64,
+                    2.93,
+                    9.97
                 ],
-                "foot_swing_time_s": 1.08,
+                "foot_swing_time_s": 1.33,
                 "step_frequency_hz": [
-                    0.8,
                     0.23,
                     0.23,
-                    0.2
+                    0.27,
+                    0.23
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    19.4,
-                    41.2,
-                    23.8,
-                    19.2
+                    18.5,
+                    41.6,
+                    24.0,
+                    12.9
                 ],
                 "fsr_peak_stance_counts": [
                     49.0,
@@ -1116,9 +2500,96 @@
                     68.0,
                     30.0
                 ],
-                "phase_diff_front_percent": 11.77,
-                "phase_diff_right_percent": 15.32,
-                "phase_diff_diag_percent": 3.47,
+                "phase_diff_front_percent": 8.29,
+                "phase_diff_right_percent": 10.8,
+                "phase_diff_diag_percent": 1.01,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 8.29,
+                        "from_trot": 41.71,
+                        "mean_phase": 0.083,
+                        "lock": 0.995,
+                        "n": 6,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 3.1,
+                        "from_trot": 46.9,
+                        "mean_phase": 0.969,
+                        "lock": 0.455,
+                        "n": 6,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 7.2,
+                        "from_trot": 42.8,
+                        "mean_phase": 0.072,
+                        "lock": 0.995,
+                        "n": 6,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 10.8,
+                        "from_trot": 39.2,
+                        "mean_phase": 0.892,
+                        "lock": 0.531,
+                        "n": 5,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 1.01,
+                        "from_trot": 1.01,
+                        "mean_phase": 0.01,
+                        "lock": 0.999,
+                        "n": 6,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 5.43,
+                        "from_trot": 5.43,
+                        "mean_phase": 0.946,
+                        "lock": 0.539,
+                        "n": 5,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.242,
+                    0.932,
+                    0.928,
+                    0.092
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 22%",
+                        "stance_plateau_counts": 37.4,
+                        "touchdowns": 7
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 1%",
+                        "stance_plateau_counts": 50.1,
+                        "touchdowns": 7
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 16%",
+                        "stance_plateau_counts": 33.0,
+                        "touchdowns": 8
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 10%",
+                        "stance_plateau_counts": 26.0,
+                        "touchdowns": 7
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.03,
                     "std_roll_vel": 0.21,
@@ -1141,12 +2612,12 @@
                 "foot_lift_height_cm": [
                     12.4,
                     6.05,
-                    4.41,
+                    4.47,
                     11.97
                 ],
-                "foot_swing_time_s": 0.87,
+                "foot_swing_time_s": 1.03,
                 "step_frequency_hz": [
-                    0.9,
+                    0.37,
                     0.37,
                     0.37,
                     0.37
@@ -1156,9 +2627,9 @@
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
                     23.2,
-                    38.8,
-                    25.6,
-                    19.1
+                    38.9,
+                    25.7,
+                    15.7
                 ],
                 "fsr_peak_stance_counts": [
                     58.0,
@@ -1166,9 +2637,96 @@
                     65.0,
                     33.0
                 ],
-                "phase_diff_front_percent": 18.92,
-                "phase_diff_right_percent": 15.83,
-                "phase_diff_diag_percent": 7.48,
+                "phase_diff_front_percent": 8.58,
+                "phase_diff_right_percent": 10.41,
+                "phase_diff_diag_percent": 0.94,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 8.58,
+                        "from_trot": 41.42,
+                        "mean_phase": 0.086,
+                        "lock": 0.955,
+                        "n": 10,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 11.04,
+                        "from_trot": 38.96,
+                        "mean_phase": 0.89,
+                        "lock": 0.578,
+                        "n": 9,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 8.36,
+                        "from_trot": 41.64,
+                        "mean_phase": 0.084,
+                        "lock": 0.956,
+                        "n": 10,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 10.41,
+                        "from_trot": 39.59,
+                        "mean_phase": 0.896,
+                        "lock": 0.575,
+                        "n": 9,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 0.94,
+                        "from_trot": 0.94,
+                        "mean_phase": 0.009,
+                        "lock": 0.964,
+                        "n": 10,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 4.68,
+                        "from_trot": 4.68,
+                        "mean_phase": 0.047,
+                        "lock": 0.835,
+                        "n": 9,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.264,
+                    0.912,
+                    0.904,
+                    0.09
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 19%",
+                        "stance_plateau_counts": 42.3,
+                        "touchdowns": 11
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 2%",
+                        "stance_plateau_counts": 48.1,
+                        "touchdowns": 11
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 14%",
+                        "stance_plateau_counts": 37.9,
+                        "touchdowns": 11
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 1%",
+                        "stance_plateau_counts": 26.0,
+                        "touchdowns": 11
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.04,
                     "std_roll_vel": 0.3,
@@ -1189,26 +2747,26 @@
                 "commanded_speed": 0.5,
                 "actual_speed": 0.4,
                 "foot_lift_height_cm": [
-                    12.35,
-                    6.65,
-                    5.52,
-                    11.46
+                    12.49,
+                    6.7,
+                    5.6,
+                    11.45
                 ],
-                "foot_swing_time_s": 0.62,
+                "foot_swing_time_s": 0.79,
                 "step_frequency_hz": [
-                    1.37,
-                    0.47,
-                    0.47,
-                    0.53
+                    0.5,
+                    0.5,
+                    0.5,
+                    0.47
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    23.8,
-                    37.2,
-                    25.8,
-                    17.9
+                    25.1,
+                    37.4,
+                    25.9,
+                    15.9
                 ],
                 "fsr_peak_stance_counts": [
                     68.0,
@@ -1216,9 +2774,96 @@
                     77.0,
                     27.0
                 ],
-                "phase_diff_front_percent": 19.27,
-                "phase_diff_right_percent": 16.53,
-                "phase_diff_diag_percent": 13.69,
+                "phase_diff_front_percent": 10.9,
+                "phase_diff_right_percent": 4.94,
+                "phase_diff_diag_percent": 2.01,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 10.9,
+                        "from_trot": 39.1,
+                        "mean_phase": 0.109,
+                        "lock": 0.846,
+                        "n": 13,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 5.73,
+                        "from_trot": 44.27,
+                        "mean_phase": 0.943,
+                        "lock": 0.579,
+                        "n": 13,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 10.66,
+                        "from_trot": 39.34,
+                        "mean_phase": 0.107,
+                        "lock": 0.841,
+                        "n": 13,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 4.94,
+                        "from_trot": 45.06,
+                        "mean_phase": 0.951,
+                        "lock": 0.427,
+                        "n": 13,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 2.01,
+                        "from_trot": 2.01,
+                        "mean_phase": 0.02,
+                        "lock": 0.831,
+                        "n": 12,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 2.0,
+                        "from_trot": 2.0,
+                        "mean_phase": 0.02,
+                        "lock": 0.91,
+                        "n": 14,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.286,
+                    0.897,
+                    0.887,
+                    0.116
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 19%",
+                        "stance_plateau_counts": 49.3,
+                        "touchdowns": 15
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 2%",
+                        "stance_plateau_counts": 48.1,
+                        "touchdowns": 15
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 11%",
+                        "stance_plateau_counts": 38.0,
+                        "touchdowns": 15
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 2%",
+                        "stance_plateau_counts": 24.0,
+                        "touchdowns": 14
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.04,
                     "std_roll_vel": 0.34,
@@ -1239,15 +2884,15 @@
                 "commanded_speed": 0.75,
                 "actual_speed": 0.57,
                 "foot_lift_height_cm": [
-                    27.56,
-                    17.96,
-                    19.8,
+                    27.7,
+                    18.26,
+                    19.84,
                     27.73
                 ],
-                "foot_swing_time_s": 0.32,
+                "foot_swing_time_s": 0.37,
                 "step_frequency_hz": [
-                    1.42,
-                    0.95,
+                    0.63,
+                    0.63,
                     0.79,
                     0.63
                 ],
@@ -1255,10 +2900,10 @@
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    27.5,
-                    28.0,
-                    24.1,
-                    23.7
+                    33.1,
+                    31.6,
+                    23.3,
+                    22.9
                 ],
                 "fsr_peak_stance_counts": [
                     158.0,
@@ -1266,9 +2911,96 @@
                     97.0,
                     43.0
                 ],
-                "phase_diff_front_percent": 27.89,
-                "phase_diff_right_percent": 40.08,
-                "phase_diff_diag_percent": 27.19,
+                "phase_diff_front_percent": 28.02,
+                "phase_diff_right_percent": 32.82,
+                "phase_diff_diag_percent": 2.61,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 28.02,
+                        "from_trot": 21.98,
+                        "mean_phase": 0.28,
+                        "lock": 0.713,
+                        "n": 3,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 49.87,
+                        "from_trot": 0.13,
+                        "mean_phase": 0.501,
+                        "lock": 0.311,
+                        "n": 3,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 25.32,
+                        "from_trot": 24.68,
+                        "mean_phase": 0.253,
+                        "lock": 0.628,
+                        "n": 3,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 32.82,
+                        "from_trot": 17.18,
+                        "mean_phase": 0.672,
+                        "lock": 0.25,
+                        "n": 2,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 2.61,
+                        "from_trot": 2.61,
+                        "mean_phase": 0.026,
+                        "lock": 0.925,
+                        "n": 3,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 3.63,
+                        "from_trot": 3.63,
+                        "mean_phase": 0.036,
+                        "lock": 0.982,
+                        "n": 2,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.269,
+                    0.543,
+                    0.601,
+                    0.12
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 13%",
+                        "stance_plateau_counts": 58.0,
+                        "touchdowns": 4
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 18%",
+                        "stance_plateau_counts": 53.9,
+                        "touchdowns": 4
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 4%",
+                        "stance_plateau_counts": 38.0,
+                        "touchdowns": 5
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 7%",
+                        "stance_plateau_counts": 40.4,
+                        "touchdowns": 4
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.08,
                     "std_roll_vel": 0.61,
@@ -1289,36 +3021,123 @@
                 "commanded_speed": 1.0,
                 "actual_speed": 0.86,
                 "foot_lift_height_cm": [
-                    24.64,
-                    13.29,
-                    11.69,
-                    19.76
+                    24.76,
+                    13.34,
+                    11.71,
+                    19.74
                 ],
-                "foot_swing_time_s": 0.25,
+                "foot_swing_time_s": 0.32,
                 "step_frequency_hz": [
-                    1.83,
-                    1.93,
-                    1.83,
-                    1.6
+                    1.6,
+                    1.63,
+                    1.53,
+                    1.53
                 ],
                 "grf_stance_N": null,
                 "grf_peak_stance_N": null,
                 "foot_landing_vel_ms": null,
                 "fsr_stance_counts": [
-                    35.9,
-                    34.4,
-                    25.9,
-                    22.9
+                    39.9,
+                    36.6,
+                    25.3,
+                    22.7
                 ],
                 "fsr_peak_stance_counts": [
                     141.0,
                     179.1,
                     152.0,
-                    75.0
+                    70.0
                 ],
-                "phase_diff_front_percent": 31.52,
-                "phase_diff_right_percent": 31.13,
-                "phase_diff_diag_percent": 20.96,
+                "phase_diff_front_percent": 42.62,
+                "phase_diff_right_percent": 49.01,
+                "phase_diff_diag_percent": 8.79,
+                "phase_pairs": {
+                    "front_FL_FR": {
+                        "percent": 42.62,
+                        "from_trot": 7.38,
+                        "mean_phase": 0.426,
+                        "lock": 0.335,
+                        "n": 47,
+                        "usable": true
+                    },
+                    "rear_RL_RR": {
+                        "percent": 46.81,
+                        "from_trot": 3.19,
+                        "mean_phase": 0.468,
+                        "lock": 0.34,
+                        "n": 45,
+                        "usable": true
+                    },
+                    "lat_L_FL_RL": {
+                        "percent": 49.41,
+                        "from_trot": 0.59,
+                        "mean_phase": 0.494,
+                        "lock": 0.246,
+                        "n": 44,
+                        "usable": true
+                    },
+                    "lat_R_FR_RR": {
+                        "percent": 49.01,
+                        "from_trot": 0.99,
+                        "mean_phase": 0.51,
+                        "lock": 0.287,
+                        "n": 45,
+                        "usable": true
+                    },
+                    "diag_FL_RR": {
+                        "percent": 8.79,
+                        "from_trot": 8.79,
+                        "mean_phase": 0.088,
+                        "lock": 0.474,
+                        "n": 45,
+                        "usable": true
+                    },
+                    "diag_FR_RL": {
+                        "percent": 14.24,
+                        "from_trot": 14.24,
+                        "mean_phase": 0.142,
+                        "lock": 0.464,
+                        "n": 44,
+                        "usable": true
+                    }
+                },
+                "duty_factor": [
+                    0.515,
+                    0.513,
+                    0.59,
+                    0.348
+                ],
+                "contact_quality": [
+                    {
+                        "foot": "FL",
+                        "usable": true,
+                        "note": "ambiguous 16%",
+                        "stance_plateau_counts": 61.0,
+                        "touchdowns": 48
+                    },
+                    {
+                        "foot": "FR",
+                        "usable": true,
+                        "note": "ambiguous 12%",
+                        "stance_plateau_counts": 67.4,
+                        "touchdowns": 49
+                    },
+                    {
+                        "foot": "RL",
+                        "usable": true,
+                        "note": "ambiguous 11%",
+                        "stance_plateau_counts": 45.0,
+                        "touchdowns": 46
+                    },
+                    {
+                        "foot": "RR",
+                        "usable": true,
+                        "note": "ambiguous 6%",
+                        "stance_plateau_counts": 35.6,
+                        "touchdowns": 46
+                    }
+                ],
+                "contact_source": "fsr_counts",
                 "base_oscillation": {
                     "std_z_vel": 0.07,
                     "std_roll_vel": 0.83,
