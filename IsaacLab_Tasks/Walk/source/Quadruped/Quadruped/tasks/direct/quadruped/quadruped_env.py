@@ -12,6 +12,16 @@ from collections.abc import Sequence
 from typing import Dict, Tuple
 
 import isaaclab.sim as sim_utils
+from isaaclab import cloner
+import warp as wp
+
+
+def _as_torch(x):
+    if hasattr(x, "torch"):
+        return x.torch
+    if isinstance(x, wp.array):
+        return wp.to_torch(x)
+    return x
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor, RayCaster
@@ -53,7 +63,7 @@ class QuadrupedEnv(DirectRLEnv):
             self.robot_feet_ids = []
             for i, view in enumerate(self.robot_views):
                 indices = self.robot_view_indices[i]
-                self.desired_joint_pos[indices] = view.data.default_joint_pos[
+                self.desired_joint_pos[indices] = view.data.default_joint_pos.torch[
                     0, :12
                 ].clone()
                 # Find feet for this specific view (relative to Articulation)
@@ -71,16 +81,16 @@ class QuadrupedEnv(DirectRLEnv):
             else:
                 self._feet_ids = c_feet_ids
         else:
-            self.joint_pos = self.robot.data.joint_pos
-            self.joint_vel = self.robot.data.joint_vel
-            self.base_lin_vel = self.robot.data.root_lin_vel_b
-            self.base_ang_vel = self.robot.data.root_ang_vel_b
-            self.projected_gravity = self.robot.data.projected_gravity_b
-            self.body_pos_w = self.robot.data.body_pos_w
-            self.root_pos_w = self.robot.data.root_pos_w
-            self.root_quat_w = self.robot.data.root_quat_w
-            self.applied_torque = self.robot.data.applied_torque
-            self.desired_joint_pos = self.robot.data.default_joint_pos[:, :12].clone()
+            self.joint_pos = self.robot.data.joint_pos.torch
+            self.joint_vel = self.robot.data.joint_vel.torch
+            self.base_lin_vel = self.robot.data.root_lin_vel_b.torch
+            self.base_ang_vel = self.robot.data.root_ang_vel_b.torch
+            self.projected_gravity = self.robot.data.projected_gravity_b.torch
+            self.body_pos_w = self.robot.data.body_pos_w.torch
+            self.root_pos_w = self.robot.data.root_pos_w.torch
+            self.root_quat_w = self.robot.data.root_quat_w.torch
+            self.applied_torque = self.robot.data.applied_torque.torch
+            self.desired_joint_pos = self.robot.data.default_joint_pos.torch[:, :12].clone()
             feet_ids, _ = self.robot.find_bodies(".*_foot")
             # Articulation ordering: FL(2), FR(3), RL(0), RR(1)
             self._feet_ids_articulation = [
@@ -127,17 +137,17 @@ class QuadrupedEnv(DirectRLEnv):
             for i, view in enumerate(self.robot_views):
                 indices = self.robot_view_indices[i]
                 v_idx = self._view_joint_dof_idx[i]
-                self.joint_limit_lower[indices] = view.data.soft_joint_pos_limits[
+                self.joint_limit_lower[indices] = view.data.soft_joint_pos_limits.torch[
                     0, v_idx, 0
                 ].clone()
-                self.joint_limit_upper[indices] = view.data.soft_joint_pos_limits[
+                self.joint_limit_upper[indices] = view.data.soft_joint_pos_limits.torch[
                     0, v_idx, 1
                 ].clone()
         else:
-            self.joint_limit_lower[:] = self.robot.data.soft_joint_pos_limits[
+            self.joint_limit_lower[:] = self.robot.data.soft_joint_pos_limits.torch[
                 :, self._joint_dof_idx, 0
             ]
-            self.joint_limit_upper[:] = self.robot.data.soft_joint_pos_limits[
+            self.joint_limit_upper[:] = self.robot.data.soft_joint_pos_limits.torch[
                 :, self._joint_dof_idx, 1
             ]
         
@@ -344,14 +354,13 @@ class QuadrupedEnv(DirectRLEnv):
             elif "QUADRUPED" in selection:
                 variant_cfg = ROBOT_VARIANTS[1]
 
-            if self.scene.cfg.replicate_physics:
-                variant_cfg.spawn.func("/World/envs/env_0/Robot", variant_cfg.spawn)
-            else:
+            if not self.scene.cfg.replicate_physics:
                 for i in range(num_envs):
                     variant_cfg.spawn.func(f"/World/envs/env_{i}/Robot", variant_cfg.spawn)
 
             robot_cfg = copy.deepcopy(variant_cfg)
-            robot_cfg.spawn = None
+            if not self.scene.cfg.replicate_physics:
+                robot_cfg.spawn = None
             robot_cfg.prim_path = "/World/envs/env_.*/Robot"
             self.robot = Articulation(robot_cfg)
             # Register as 'robot' (default) and also as aliases for Event Manager
@@ -374,7 +383,14 @@ class QuadrupedEnv(DirectRLEnv):
 
         # Clone environments if replicate_physics is enabled
         if self.scene.cfg.replicate_physics:
-            self.scene.clone_environments(copy_from_source=False)
+            src, dest = "/World/envs/env_0", "/World/envs/env_{}"
+            pos = cloner.grid_transforms(self.scene.num_envs, self.scene.cfg.env_spacing, device=self.device)[0]
+            plan = cloner.clone_plan_from_env_0(
+                src, dest, self.scene.num_envs, self.device, pos, global_paths=("/World/ground",)
+            )
+            cloner.replicate(plan, stage=self.scene.stage)
+            if "physx" in self.scene.physics_backend:
+                self.scene.filter_collisions(global_prim_paths=["/World/ground"])
 
     # Observation vector layout, 49 dims. Any change here must match _get_observations.
     OBS_GROUPS = {
@@ -781,8 +797,8 @@ class QuadrupedEnv(DirectRLEnv):
                 if len(indices) == 0: continue
                 v_idx = self._view_joint_dof_idx[i]
                 # Clamp per-robot (they all have same limits usually, but good practice)
-                lower = view.data.soft_joint_pos_limits[0, v_idx, 0]
-                upper = view.data.soft_joint_pos_limits[0, v_idx, 1]
+                lower = view.data.soft_joint_pos_limits.torch[0, v_idx, 0]
+                upper = view.data.soft_joint_pos_limits.torch[0, v_idx, 1]
                 view_targets = torch.clamp(targets[indices], lower, upper)
 
                 view.set_joint_position_target(
@@ -793,10 +809,10 @@ class QuadrupedEnv(DirectRLEnv):
                 )
         else:
             # 2. Safety limits (Standard)
-            lower_limits = self.robot.data.soft_joint_pos_limits[
+            lower_limits = self.robot.data.soft_joint_pos_limits.torch[
                 0, self._joint_dof_idx, 0
             ]
-            upper_limits = self.robot.data.soft_joint_pos_limits[
+            upper_limits = self.robot.data.soft_joint_pos_limits.torch[
                 0, self._joint_dof_idx, 1
             ]
             targets = torch.clamp(targets, lower_limits, upper_limits)
@@ -829,36 +845,36 @@ class QuadrupedEnv(DirectRLEnv):
             # AGGREGATE state from partitioned views
             for i, view in enumerate(self.robot_views):
                 indices = self.robot_view_indices[i]
-                self.joint_pos[indices] = view.data.joint_pos[:, self._joint_dof_idx]
-                self.joint_vel[indices] = view.data.joint_vel[:, self._joint_dof_idx]
-                self.base_lin_vel[indices] = view.data.root_lin_vel_b
-                self.base_ang_vel[indices] = view.data.root_ang_vel_b
-                self.projected_gravity[indices] = view.data.projected_gravity_b
-                self.root_pos_w[indices] = view.data.root_pos_w
-                self.root_quat_w[indices] = view.data.root_quat_w
-                self.applied_torque[indices] = view.data.applied_torque[
+                self.joint_pos[indices] = view.data.joint_pos.torch[:, self._joint_dof_idx]
+                self.joint_vel[indices] = view.data.joint_vel.torch[:, self._joint_dof_idx]
+                self.base_lin_vel[indices] = view.data.root_lin_vel_b.torch
+                self.base_ang_vel[indices] = view.data.root_ang_vel_b.torch
+                self.projected_gravity[indices] = view.data.projected_gravity_b.torch
+                self.root_pos_w[indices] = view.data.root_pos_w.torch
+                self.root_quat_w[indices] = view.data.root_quat_w.torch
+                self.applied_torque[indices] = view.data.applied_torque.torch[
                     :, self._joint_dof_idx
                 ]
 
                 # Handle possible body count differences
                 num_bodies = min(
-                    self.body_pos_w.shape[1], view.data.body_pos_w.shape[1]
+                    self.body_pos_w.shape[1], view.data.body_pos_w.torch.shape[1]
                 )
-                self.body_pos_w[indices, :num_bodies] = view.data.body_pos_w[
+                self.body_pos_w[indices, :num_bodies] = view.data.body_pos_w.torch[
                     :, :num_bodies
                 ]
         else:
-            self.joint_pos = self.robot.data.joint_pos[:, self._joint_dof_idx]
-            self.joint_vel = self.robot.data.joint_vel[:, self._joint_dof_idx]
-            self.base_lin_vel = self.robot.data.root_lin_vel_b
-            self.base_ang_vel = self.robot.data.root_ang_vel_b
-            self.projected_gravity = self.robot.data.projected_gravity_b
-            self.body_pos_w = self.robot.data.body_pos_w
-            self.root_pos_w = self.robot.data.root_pos_w
-            self.root_quat_w = self.robot.data.root_quat_w
-            self.applied_torque = self.robot.data.applied_torque
+            self.joint_pos = self.robot.data.joint_pos.torch[:, self._joint_dof_idx]
+            self.joint_vel = self.robot.data.joint_vel.torch[:, self._joint_dof_idx]
+            self.base_lin_vel = self.robot.data.root_lin_vel_b.torch
+            self.base_ang_vel = self.robot.data.root_ang_vel_b.torch
+            self.projected_gravity = self.robot.data.projected_gravity_b.torch
+            self.body_pos_w = self.robot.data.body_pos_w.torch
+            self.root_pos_w = self.robot.data.root_pos_w.torch
+            self.root_quat_w = self.robot.data.root_quat_w.torch
+            self.applied_torque = self.robot.data.applied_torque.torch
 
-        self.net_contact_forces = self._contact_sensor.data.net_forces_w
+        self.net_contact_forces = self._contact_sensor.data.net_forces_w.torch
         if len(self._undesired_contact_body_ids) > 0:
             self.net_undesired_contact_forces = self.net_contact_forces[:, self._undesired_contact_body_ids, :]
         else:
@@ -943,7 +959,7 @@ class QuadrupedEnv(DirectRLEnv):
                 feet_ids = self.robot_feet_ids[
                     i
                 ]  # Relative to Articulation (FL, FR, RL, RR order)
-                all_feet_heights[indices] = view.data.body_pos_w[:, feet_ids, 2]
+                all_feet_heights[indices] = view.data.body_pos_w.torch[:, feet_ids, 2]
             feet_heights = all_feet_heights
         else:
             # Homogeneous case
@@ -1044,10 +1060,10 @@ class QuadrupedEnv(DirectRLEnv):
             for i, view in enumerate(self.robot_views):
                 indices = self.robot_view_indices[i]
                 feet_ids = self.robot_feet_ids[i]  # relative to Articulation (FL, FR, RL, RR)
-                all_feet_vel_z[indices] = view.data.body_lin_vel_w[:, feet_ids, 2]
+                all_feet_vel_z[indices] = view.data.body_lin_vel_w.torch[:, feet_ids, 2]
             feet_vel_z = all_feet_vel_z
         else:
-            feet_vel_z = self.robot.data.body_lin_vel_w[:, self._feet_ids_articulation, 2]
+            feet_vel_z = self.robot.data.body_lin_vel_w.torch[:, self._feet_ids_articulation, 2]
 
         # Squared, so an upward-moving foot at touchdown (a scuff into a bump, or a skimming
         # re-contact) is charged the same as one dropping. No env-origin correction is needed the
@@ -1297,7 +1313,7 @@ class QuadrupedEnv(DirectRLEnv):
         # Only the peak-force term uses this: contact detection and the grf_balance_stance/grf_target terms
         # stay on the instantaneous value on purpose, since those describe steady stance-phase load
         # sharing and would be distorted by folding a landing spike into them.
-        force_hist = self._contact_sensor.data.net_forces_w_history
+        force_hist = self._contact_sensor.data.net_forces_w_history.torch
         if force_hist is not None and force_hist.dim() == 4:
             feet_forces_z_peak = force_hist[:, :, self._feet_ids, 2].abs().amax(dim=1)  # (N, 4)
         else:
@@ -1713,35 +1729,37 @@ class QuadrupedEnv(DirectRLEnv):
         env_ids_cpu = env_ids.cpu()
         local_ids_cpu = local_ids.cpu() if local_ids is not None else env_ids_cpu
 
-        masses = view.root_physx_view.get_masses().clone()
+        ids = local_ids if local_ids is not None else env_ids
+        masses = _as_torch(view.data.body_mass.torch).clone()
         mass_noise = sample_uniform(
             self.cfg.payload_mass_range[0],
             self.cfg.payload_mass_range[1],
-            (len(env_ids_cpu), 1),
-            "cpu",
+            (len(ids), 1),
+            masses.device,
         )
-        masses[local_ids_cpu, 0] = (
-            view.data.default_mass[local_ids_cpu, 0] + mass_noise[:, 0]
+        masses[ids, 0] = (
+            _as_torch(view.data.default_mass.torch)[ids, 0] + mass_noise[:, 0]
         )
-        view.root_physx_view.set_masses(masses, local_ids_cpu)
+        view.set_masses_index(masses=masses[ids], env_ids=ids)
 
         # Cache total robot weight (mg) for physics-based GRF penalty
-        total_mass_per_env = masses[local_ids_cpu].sum(dim=1)  # sum all body masses
+        total_mass_per_env = masses[ids].sum(dim=1)  # sum all body masses
         self.robot_total_weight[env_ids] = total_mass_per_env.to(self.device) * 9.81
 
         # 0.5 Randomize Center of Mass (Sim2Real)
         _com_x_rng = self.cfg.com_displacement_range
         _com_y_rng = self.cfg.com_displacement_range_y
         if any(v != 0.0 for v in _com_x_rng + _com_y_rng):
-            coms = view.root_physx_view.get_coms().clone()
+            coms = _as_torch(view.root_physx_view.get_coms()).clone().to(self.device)
+            ids_c = ids.to(coms.device)
             if not hasattr(view, "default_coms"):
                 view.default_coms = coms.clone()
 
             com_noise_x = sample_uniform(
                 _com_x_rng[0],
                 _com_x_rng[1],
-                (len(env_ids_cpu), 1),
-                "cpu",
+                (len(ids), 1),
+                coms.device,
             )
             # y gets its own range on purpose. It used to reuse the x range, so a fore/aft-skewed
             # setting like [-0.05, 0.1] also put the CoM an average 2.5cm off to one side in every
@@ -1749,12 +1767,12 @@ class QuadrupedEnv(DirectRLEnv):
             com_noise_y = sample_uniform(
                 _com_y_rng[0],
                 _com_y_rng[1],
-                (len(env_ids_cpu), 1),
-                "cpu",
+                (len(ids), 1),
+                coms.device,
             )
-            coms[local_ids_cpu, 0, 0] = view.default_coms[local_ids_cpu, 0, 0] + com_noise_x[:, 0]
-            coms[local_ids_cpu, 0, 1] = view.default_coms[local_ids_cpu, 0, 1] + com_noise_y[:, 0]
-            view.root_physx_view.set_coms(coms, local_ids_cpu)
+            coms[ids_c, 0, 0] = view.default_coms[ids_c, 0, 0] + com_noise_x[:, 0]
+            coms[ids_c, 0, 1] = view.default_coms[ids_c, 0, 1] + com_noise_y[:, 0]
+            view.set_coms_index(coms=coms[ids_c], env_ids=ids)
 
         # Use correct ID set for shape (local_ids if heterogeneous, else env_ids)
         ids = local_ids if local_ids is not None else env_ids
@@ -1766,7 +1784,7 @@ class QuadrupedEnv(DirectRLEnv):
             (len(ids), len(v_idx)),
             self.device,
         )
-        base_friction = view.data.default_joint_friction_coeff[ids][:, v_idx]
+        base_friction = view.data.default_joint_friction_coeff.torch[ids][:, v_idx]
         randomized_friction = torch.clamp(base_friction + friction_noise, min=0.0)
         
         view.write_joint_friction_coefficient_to_sim(
@@ -1849,8 +1867,8 @@ class QuadrupedEnv(DirectRLEnv):
 
         # 1. Reset Joint States (Use Default Pose + Noise on controlled joints)
         # Use full joint arrays (all joints, not just controlled ones)
-        joint_pos = view.data.default_joint_pos[ids].clone()
-        joint_vel = view.data.default_joint_vel[ids].clone()
+        joint_pos = view.data.default_joint_pos.torch[ids].clone()
+        joint_vel = view.data.default_joint_vel.torch[ids].clone()
 
         # Add small random noise to initial joint positions and velocities
         pos_noise = sample_uniform(
@@ -1865,7 +1883,7 @@ class QuadrupedEnv(DirectRLEnv):
         joint_vel[:, v_idx] += vel_noise
 
         # 2. Reset Base State (Position + Velocity)
-        default_root_state = view.data.default_root_state[ids].clone()
+        default_root_state = view.data.default_root_state.torch[ids].clone()
         # Offset the base to the environment origin (so robots don't spawn on top of each other)
         # env_origins is global (32 rows)
         default_root_state[:, :3] += self.scene.env_origins[env_ids]
@@ -2006,7 +2024,7 @@ def compute_rewards(
     )
 
     # 7. DOF Acceleration L2 (Penalty)
-    # self.robot.data.joint_acc is always zero in this DirectRLEnv setup (confirmed via
+    # self.robot.data.joint_acc.torch is always zero in this DirectRLEnv setup (confirmed via
     # scripts/check_joint_acc.py), so compute via finite difference instead, same as base_acc below.
     joint_acc = (joint_vel - last_joint_vel) / step_dt
     rew_dof_acc_l2 = rew_scale_dof_acc_l2 * torch.sum(torch.square(joint_acc), dim=1)

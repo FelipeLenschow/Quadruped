@@ -100,6 +100,12 @@ args_cli, hydra_args = parser.parse_known_args()
 if args_cli.video:
     args_cli.enable_cameras = True
 
+if "--headless" in hydra_args:
+    hydra_args.remove("--headless")
+    args_cli.headless = True
+if not getattr(args_cli, "headless", False) and args_cli.visualizer is None:
+    args_cli.visualizer = "kit"
+
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
 

@@ -115,6 +115,7 @@ from isaaclab_assets.robots.unitree import (
     UNITREE_GO2_CFG,
 )
 from isaaclab.actuators import DCMotorCfg
+from isaaclab_physx.physics import PhysxCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm, SceneEntityCfg
@@ -234,7 +235,8 @@ class QuadrupedEnvCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=0.005, 
         render_interval=decimation,
-        physx=sim_utils.PhysxCfg(
+        use_newton_actuators=False,
+        physics=PhysxCfg(
             gpu_max_rigid_contact_count=2**24,       # ~16.7M contacts
             gpu_max_rigid_patch_count=2**23,         # ~8.3M patches
             gpu_found_lost_pairs_capacity=2**24,

@@ -46,7 +46,7 @@ def push_robot_heterogeneous(env, env_ids, asset_cfg, velocity_range):
         asset = env.scene[asset_name]
         
         # PUSH logic from mdp.push_by_setting_velocity (using local_ids write)
-        root_vel = asset.data.root_vel_w[local_ids].clone()
+        root_vel = asset.data.root_vel_w.torch[local_ids].clone()
         # Sample random velocities
         vel_x = sample_uniform(velocity_range["x"][0], velocity_range["x"][1], (len(local_ids),), device=env.device)
         vel_y = sample_uniform(velocity_range["y"][0], velocity_range["y"][1], (len(local_ids),), device=env.device)

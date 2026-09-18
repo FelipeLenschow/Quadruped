@@ -41,7 +41,7 @@ Each backend (MuJoCo, Gazebo, Isaac Sim, Real Robot) has a dedicated driver that
 
 ## ⚠️ Requirements
 
-- **Isaac Sim Environment**: Python 3.11 (for Isaac Lab, training, and MuJoCo drivers). Activate with `source ~/env_isaacsim/bin/activate`.
+- **Isaac Sim Environment**: Python 3.12 (for Isaac Lab, training, and MuJoCo drivers). Activate with `source ~/env_isaacsim/bin/activate`.
 - **System ROS 2**: Python 3.10 (for Gazebo drivers and monitoring). Activate with `source venv_robot/bin/activate`, or use `Docker/` if the host isn't natively Python 3.10.
 - The launcher automatically handles environment switching between `env_isaacsim` and `/usr/bin/python3`, and disables menu options incompatible with the currently active environment.
 
