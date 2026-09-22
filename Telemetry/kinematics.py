@@ -63,6 +63,11 @@ _FOOT_X_OFF: float = float(_cfg["foot_x_offset"])  # small forward offset
 # Elementary rotation matrices
 # ---------------------------------------------------------------------------
 
+def _cross(a, b) -> np.ndarray:
+    """np.cross for 3-vectors, without its axis handling (~10x faster here)."""
+    return np.array([a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]])
+
+
 def _Rx(a: float) -> np.ndarray:
     """3×3 rotation about X by angle a (radians)."""
     ca, sa = np.cos(a), np.sin(a)
@@ -185,9 +190,9 @@ class Go2Kinematics:
 
         # --- Jacobian columns: J_i = z_i × (p_foot - p_i) ---
         J = np.column_stack([
-            np.cross(z0, p_foot - p0),
-            np.cross(z1, p_foot - p1),
-            np.cross(z2, p_foot - p2),
+            _cross(z0, p_foot - p0),
+            _cross(z1, p_foot - p1),
+            _cross(z2, p_foot - p2),
         ])
         return J
 

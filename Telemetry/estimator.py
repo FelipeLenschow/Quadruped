@@ -22,6 +22,7 @@ References
 
 from __future__ import annotations
 import numpy as np
+from .kinematics import _cross
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +262,7 @@ class StateEstimator:
             # accelerometer here and decay what is already in the state.
             x_pred[:3] = v * self._relax_factor
         else:
-            x_pred[:3] = v + (a_linear - np.cross(omega_p, v)) * self.dt
+            x_pred[:3] = v + (a_linear - _cross(omega_p, v)) * self.dt
         x_pred[3:] = b                            # bias random walk: no change
 
         P_pred = self._F @ self._P @ self._F.T + self._Q
@@ -292,7 +293,7 @@ class StateEstimator:
                 J      = kin.foot_jacobian_body(leg_idx, q_leg)
 
                 # No-slip: v_body = -J @ dq - ω × r_foot
-                z = -J @ dq_leg - np.cross(omega, r_foot)
+                z = -J @ dq_leg - _cross(omega, r_foot)
 
                 # Sequential Kalman update (one 3D measurement)
                 # Innovation

@@ -7,6 +7,7 @@ from geometry_msgs.msg import Quaternion, Vector3
 from std_msgs.msg import Float32, Float32MultiArray
 import numpy as np
 from .estimator import StateEstimator, rot_from_quat, projected_gravity_b
+from .kinematics import _cross
 from Configs.config_loader import load_config
 
 
@@ -14,22 +15,33 @@ from Configs.config_loader import load_config
 # Standard State
 # ---------------------------------------------------------------------------
 
+class _Imu:
+    __slots__ = ("quaternion", "gyroscope", "accelerometer")
+
+    def __init__(self):
+        self.quaternion = [1.0, 0.0, 0.0, 0.0]
+        self.gyroscope = [0.0, 0.0, 0.0]
+        self.accelerometer = [0.0, 0.0, 9.81]   # body-frame specific force
+
+
+class _MotorState:
+    __slots__ = ("q", "dq")
+
+    def __init__(self):
+        self.q = 0.0
+        self.dq = 0.0
+
+
 class StandardState:
     """Standardized state object used as input for the PolicyRunner."""
     def __init__(self):
-        self.imu = type('obj', (object,), {
-            'quaternion':    [1.0, 0.0, 0.0, 0.0],
-            'gyroscope':     [0.0, 0.0, 0.0],
-            'accelerometer': [0.0, 0.0, 9.81],   # body-frame specific force
-        })
+        self.imu = _Imu()
         self.base_lin_vel  = [0.0, 0.0, 0.0]
         self.base_lin_vel_sim = [0.0, 0.0, 0.0]
         self.base_lin_vel_est = [0.0, 0.0, 0.0]
         self.base_pos      = [0.0, 0.0, 0.5]
         self.feet_contact  = [0.0, 0.0, 0.0, 0.0]  # FL, FR, RL, RR binary
-        self.motorState    = [
-            type('obj', (object,), {'q': 0.0, 'dq': 0.0}) for _ in range(12)
-        ]
+        self.motorState    = [_MotorState() for _ in range(12)]
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +287,7 @@ class TelemetryManager:
             dq_leg  = np.array([state.motorState[i].dq for i in idx])
             r_foot  = _kin.foot_position_body(leg_idx, q_leg)
             J       = _kin.foot_jacobian_body(leg_idx, q_leg)
-            v_leg   = -J @ dq_leg - np.cross(omega, r_foot)
+            v_leg   = -J @ dq_leg - _cross(omega, r_foot)
             norms.append(float(np.linalg.norm(v_leg)))
         lo_msg      = Float32MultiArray()
         lo_msg.data = norms
