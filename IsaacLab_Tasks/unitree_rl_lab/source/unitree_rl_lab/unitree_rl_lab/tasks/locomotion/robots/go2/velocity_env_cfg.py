@@ -17,7 +17,10 @@ from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
-from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+try:
+    from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+except ImportError:
+    from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from unitree_rl_lab.assets.robots.unitree import UNITREE_GO2_CFG as ROBOT_CFG
 from unitree_rl_lab.tasks.locomotion import mdp
@@ -389,7 +392,13 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
-        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
+        if hasattr(self.sim, "physx"):
+            self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
+        else:
+            from isaaclab_physx.physics import PhysxCfg
+
+            self.sim.physics = PhysxCfg(gpu_max_rigid_patch_count=10 * 2**15)
+            self.sim.use_newton_actuators = False
 
         # The height scanner has NO readers: the only term that would consume it is the
         # commented-out height_scan ObsTerm in CriticCfg above. It still casts
@@ -426,24 +435,11 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
                 self.scene.terrain.terrain_generator.curriculum = False
 
 
-# ── Paper arms ────────────────────────────────────────────────────────────────────────────
-# Three configs that differ from RobotEnvCfg by exactly one thing each, to separate the two
-# candidate causes of the low-speed dead zone:
-#
-#   RobotEnvCfg          baseline. Unitree's config as shipped.            (arm U0)
-#   RobotSigmaEnvCfg     + command-scaled tracking kernel.                 (arm S)  reward SHAPE
-#   RobotCoverageEnvCfg  + slow-command quota in the sampler.              (arm C)  command COVERAGE
-#   RobotSigmaDensityEnvCfg  + both, to check they are not redundant.      (arm SC)
-#
-# Nothing else moves: same rewards, weights, curriculum, events, terminations, PPO config and
-# sample budget. Overridable from the environment so a sweep needs no edit here; the resolved
-# value is printed at startup and lands in the run's params/env.yaml either way.
+# ── Sigma-Vel-Foot-Rough ───────────────────────────────────────────────────────────────────
+# RobotEnvCfg (unitree's config as shipped) plus: command-scaled tracking kernel, base_lin_vel in
+# the actor, a foot clearance reward, and rough terrain. Overridable from the environment; the
+# resolved values are printed at startup and land in the run's params/env.yaml.
 SIGMA_EXP = float(os.environ.get("PAPER_SIGMA_EXP", 1.0))
-SLOW_FRACTION = float(os.environ.get("PAPER_SLOW_FRACTION", 0.6))
-SLOW_RANGE = (
-    float(os.environ.get("PAPER_SLOW_LO", 0.05)),
-    float(os.environ.get("PAPER_SLOW_HI", 0.3)),
-)
 
 
 def _apply_scaled_tracking(cfg) -> None:
@@ -466,14 +462,6 @@ def _apply_scaled_tracking(cfg) -> None:
         "sigma_exp": SIGMA_EXP,
     }
     print(f"[PaperArm] command-scaled tracking kernel, sigma_exp = {SIGMA_EXP}")
-
-
-def _apply_slow_coverage(cfg) -> None:
-    """Give the sampler an explicit slow-command quota."""
-    cfg.commands.base_velocity.slow_command_fraction = SLOW_FRACTION
-    cfg.commands.base_velocity.slow_command_range = SLOW_RANGE
-    print(f"[PaperArm] slow-command coverage, fraction = {SLOW_FRACTION}, range = {SLOW_RANGE}")
-    _drop_level_curriculum(cfg)
 
 
 # Noise on the velocity estimate, as a Unoise half-width in m/s. 0.0 (the default) keeps
@@ -557,8 +545,7 @@ def _drop_level_curriculum(cfg) -> None:
     print(f"[PaperArm] level curriculum removed; command box fixed at x {ranges.lin_vel_x} y {ranges.lin_vel_y}")
 
 
-# Default ON for arms without the slow-command quota (arms with it always drop the curriculum).
-# Set PAPER_KEEP_CURRICULUM=0 to drop it there too -- see _drop_level_curriculum.
+# Set PAPER_KEEP_CURRICULUM=0 to drop the command-level curriculum -- see _drop_level_curriculum.
 KEEP_CURRICULUM = os.environ.get("PAPER_KEEP_CURRICULUM", "1") == "1"
 
 
@@ -567,110 +554,96 @@ def _maybe_drop_curriculum(cfg) -> None:
         _drop_level_curriculum(cfg)
 
 
-@configclass
-class RobotSigmaEnvCfg(RobotEnvCfg):
-    """Arm S: baseline + the command-scaled tracking kernel, and nothing else."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_scaled_tracking(self)
-        _maybe_drop_curriculum(self)
-
-
-@configclass
-class RobotCoverageEnvCfg(RobotEnvCfg):
-    """Arm C: baseline + slow-command coverage, and nothing else."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_slow_coverage(self)
-
-
-@configclass
-class RobotSigmaDensityEnvCfg(RobotEnvCfg):
-    """Arm SC: both fixes, to test whether either is redundant given the other."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_scaled_tracking(self)
-        _apply_slow_coverage(self)
-
-
-@configclass
-class RobotVelEnvCfg(RobotEnvCfg):
-    """Arm V: baseline + base_lin_vel in the actor, nothing else. Isolates velocity feedback."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_lin_vel_obs(self)
-
-
-@configclass
-class RobotSigmaDensityVelEnvCfg(RobotEnvCfg):
-    """Arm SCV: both fixes plus velocity feedback -- the candidate for hardware."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_scaled_tracking(self)
-        _apply_slow_coverage(self)
-        _apply_lin_vel_obs(self)
-
-
-@configclass
-class RobotSigmaVelEnvCfg(RobotSigmaEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_lin_vel_obs(self)
-
-
-FOOT_TARGET_HEIGHT = float(os.environ.get("PAPER_FOOT_TARGET_HEIGHT", 0.07))
-FOOT_CLEARANCE_STD = float(os.environ.get("PAPER_FOOT_CLEARANCE_STD", 0.005))
-FOOT_CLEARANCE_WEIGHT = float(os.environ.get("PAPER_FOOT_CLEARANCE_WEIGHT", 0.5))
+# Walk's foot_height term with Final7's values. See mdp.foot_apex_reward.
+FOOT_TARGET_HEIGHT = float(os.environ.get("PAPER_FOOT_TARGET_HEIGHT", 0.08))
+FOOT_HEIGHT_SIGMA = float(os.environ.get("PAPER_FOOT_HEIGHT_SIGMA", 0.002))
+FOOT_HEIGHT_BIAS = float(os.environ.get("PAPER_FOOT_HEIGHT_BIAS", 0.5))
+FOOT_HEIGHT_WEIGHT = float(os.environ.get("PAPER_FOOT_HEIGHT_WEIGHT", 1.0))
 
 
 def _apply_foot_clearance(cfg) -> None:
-    cfg.rewards.feet_clearance = RewTerm(
-        func=mdp.foot_clearance_reward,
-        weight=FOOT_CLEARANCE_WEIGHT,
+    cfg.rewards.foot_height = RewTerm(
+        func=mdp.foot_apex_reward,
+        weight=FOOT_HEIGHT_WEIGHT,
         params={
-            "std": FOOT_CLEARANCE_STD,
-            "tanh_mult": 2.0,
             "target_height": FOOT_TARGET_HEIGHT,
+            "sigma": FOOT_HEIGHT_SIGMA,
+            "bias": FOOT_HEIGHT_BIAS,
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
         },
     )
     print(
-        f"[PaperArm] foot clearance, target = {FOOT_TARGET_HEIGHT} m, std = {FOOT_CLEARANCE_STD},"
-        f" weight = {FOOT_CLEARANCE_WEIGHT}"
+        f"[PaperArm] foot height at touchdown, target = {FOOT_TARGET_HEIGHT} m, sigma = {FOOT_HEIGHT_SIGMA},"
+        f" bias = {FOOT_HEIGHT_BIAS}, weight = {FOOT_HEIGHT_WEIGHT}"
     )
 
 
-@configclass
-class RobotVelFootEnvCfg(RobotVelEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_foot_clearance(self)
+# Walk's speed-dependent swing-time term, replacing unitree's feet_air_time (threshold 0.5 s,
+# which never pays). See mdp.feet_air_time_target.
+AIR_TIME_SLOW = float(os.environ.get("PAPER_AIR_TIME_SLOW", 0.25))
+AIR_TIME_FAST = float(os.environ.get("PAPER_AIR_TIME_FAST", 0.35))
+AIR_TIME_SPEED_LO = float(os.environ.get("PAPER_AIR_TIME_SPEED_LO", 0.1))
+AIR_TIME_SPEED_HI = float(os.environ.get("PAPER_AIR_TIME_SPEED_HI", 0.35))
+AIR_TIME_SIGMA = float(os.environ.get("PAPER_AIR_TIME_SIGMA", 0.05))
+AIR_TIME_WEIGHT = float(os.environ.get("PAPER_AIR_TIME_WEIGHT", 0.2))
 
 
-@configclass
-class RobotSigmaFootEnvCfg(RobotSigmaEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_foot_clearance(self)
+def _apply_air_time_target(cfg) -> None:
+    cfg.rewards.feet_air_time = None
+    cfg.rewards.feet_air_time_dyn = RewTerm(
+        func=mdp.feet_air_time_target,
+        weight=AIR_TIME_WEIGHT,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+            "target_slow": AIR_TIME_SLOW,
+            "target_fast": AIR_TIME_FAST,
+            "speed_lo": AIR_TIME_SPEED_LO,
+            "speed_hi": AIR_TIME_SPEED_HI,
+            "sigma": AIR_TIME_SIGMA,
+        },
+    )
+    print(
+        f"[PaperArm] swing time target {AIR_TIME_SLOW} s at {AIR_TIME_SPEED_LO} m/s -> {AIR_TIME_FAST} s at"
+        f" {AIR_TIME_SPEED_HI} m/s, sigma = {AIR_TIME_SIGMA}, weight = {AIR_TIME_WEIGHT}"
+    )
 
 
-@configclass
-class RobotSigmaVelFootEnvCfg(RobotSigmaFootEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_lin_vel_obs(self)
+# Final7's slow-command share: 60% of resamples keep their direction but take a speed in
+# 0.05-0.3 m/s. Uniform sampling puts only ~12% there, so the foot terms barely see slow steps.
+# It switches on only once the level curriculum has reached the full x range, so a slow-heavy
+# batch cannot hold mean tracking under the curriculum's 0.8 x weight bar.
+SLOW_FRACTION = float(os.environ.get("PAPER_SLOW_FRACTION", 0.6))
+SLOW_RANGE = (
+    float(os.environ.get("PAPER_SLOW_LO", 0.05)),
+    float(os.environ.get("PAPER_SLOW_HI", 0.3)),
+)
 
 
-@configclass
-class RobotSigmaDensityVelFootEnvCfg(RobotSigmaDensityVelEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_foot_clearance(self)
+def _apply_slow_coverage(cfg) -> None:
+    cfg.commands.base_velocity.slow_command_fraction = SLOW_FRACTION
+    cfg.commands.base_velocity.slow_command_range = SLOW_RANGE
+    cfg.commands.base_velocity.slow_after_full_range = True
+    print(
+        f"[PaperArm] slow-command coverage after full range, fraction = {SLOW_FRACTION}, range = {SLOW_RANGE}"
+    )
+
+
+# Final7's posture terms: no whole-body pose penalty while walking (a high step needs knee and
+# hip bend, which joint_pos charged at -0.7 on every moving step), the stand-still branch kept,
+# and a hip-only L1 penalty so the legs do not splay.
+POSE_MOVING_SCALE = float(os.environ.get("PAPER_POSE_MOVING_SCALE", 0.0))
+HIP_DEV_WEIGHT = float(os.environ.get("PAPER_HIP_DEV_WEIGHT", -0.2))
+
+
+def _apply_walking_posture(cfg) -> None:
+    cfg.rewards.joint_pos.params["moving_scale"] = POSE_MOVING_SCALE
+    cfg.rewards.hip_dev = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=HIP_DEV_WEIGHT,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*_hip_joint")},
+    )
+    print(f"[PaperArm] pose penalty while moving x{POSE_MOVING_SCALE}, hip deviation weight = {HIP_DEV_WEIGHT}")
 
 
 ROUGH_NOISE = float(os.environ.get("PAPER_ROUGH_NOISE", 0.02))
@@ -688,16 +661,16 @@ def _apply_rough_terrain(cfg) -> None:
 
 
 @configclass
-class RobotSigmaDensityVelRoughEnvCfg(RobotSigmaDensityVelEnvCfg):
+class RobotSigmaVelFootRoughEnvCfg(RobotEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        _apply_rough_terrain(self)
-
-
-@configclass
-class RobotSigmaVelFootRoughEnvCfg(RobotSigmaVelFootEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
+        _apply_scaled_tracking(self)
+        _maybe_drop_curriculum(self)
+        _apply_slow_coverage(self)
+        _apply_foot_clearance(self)
+        _apply_air_time_target(self)
+        _apply_walking_posture(self)
+        _apply_lin_vel_obs(self)
         _apply_rough_terrain(self)
 
 
@@ -724,91 +697,7 @@ def _apply_play_overrides(cfg) -> None:
 
 
 @configclass
-class RobotPlayEnvCfg(RobotEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotSigmaPlayEnvCfg(RobotSigmaEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotCoveragePlayEnvCfg(RobotCoverageEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotSigmaDensityPlayEnvCfg(RobotSigmaDensityEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotVelPlayEnvCfg(RobotVelEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotSigmaDensityVelPlayEnvCfg(RobotSigmaDensityVelEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotVelFootPlayEnvCfg(RobotVelFootEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotSigmaFootPlayEnvCfg(RobotSigmaFootEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotSigmaVelFootPlayEnvCfg(RobotSigmaVelFootEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotSigmaDensityVelRoughPlayEnvCfg(RobotSigmaDensityVelRoughEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
 class RobotSigmaVelFootRoughPlayEnvCfg(RobotSigmaVelFootRoughEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotSigmaDensityVelFootPlayEnvCfg(RobotSigmaDensityVelFootEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        _apply_play_overrides(self)
-
-
-@configclass
-class RobotSigmaVelPlayEnvCfg(RobotSigmaVelEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         _apply_play_overrides(self)

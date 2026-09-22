@@ -42,6 +42,12 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         fraction = getattr(self.cfg, "slow_command_fraction", 0.0)
         if fraction <= 0.0:
             return
+        if self.cfg.slow_after_full_range:
+            if self.cfg.ranges.lin_vel_x[1] < self.cfg.limit_ranges.lin_vel_x[1] - 1e-6:
+                return
+            if not getattr(self, "_slow_announced", False):
+                self._slow_announced = True
+                print(f"[Command] level curriculum at full range; slow-command share {fraction} now active.")
 
         ids = torch.as_tensor(env_ids, device=self.device).reshape(-1)
         if ids.numel() == 0:
@@ -72,3 +78,5 @@ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
     # slow_command_range. 0.0 reproduces upstream sampling exactly.
     slow_command_fraction: float = 0.0
     slow_command_range: tuple[float, float] = (0.05, 0.3)
+    # Hold the slow share off until the level curriculum has widened lin_vel_x to its limit.
+    slow_after_full_range: bool = False

@@ -7,6 +7,11 @@ from isaaclab.actuators import DelayedPDActuator, DelayedPDActuatorCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.types import ArticulationActions
 
+try:
+    from isaaclab.actuators.actuator_base import resolve_joint_parameter
+except ImportError:
+    resolve_joint_parameter = None
+
 
 class UnitreeActuator(DelayedPDActuator):
     """Unitree actuator class that implements a torque-speed curve for the actuators.
@@ -52,6 +57,11 @@ class UnitreeActuator(DelayedPDActuator):
         self._friction_static = self._parse_joint_parameter(cfg.Fs, 0.0)
         self._friction_dynamic = self._parse_joint_parameter(cfg.Fd, 0.0)
         self._activation_vel = self._parse_joint_parameter(cfg.Va, 0.01)
+
+    def _parse_joint_parameter(self, cfg_value, default_value):
+        if resolve_joint_parameter is None:
+            return super()._parse_joint_parameter(cfg_value, default_value)
+        return resolve_joint_parameter(cfg_value, default_value, self._joint_names, self._num_envs, self._device)
 
     def compute(
         self, control_action: ArticulationActions, joint_pos: torch.Tensor, joint_vel: torch.Tensor

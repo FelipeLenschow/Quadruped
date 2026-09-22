@@ -54,6 +54,12 @@ args_cli, hydra_args = parser.parse_known_args()
 if args_cli.video:
     args_cli.enable_cameras = True
 
+if "--headless" in hydra_args:
+    hydra_args.remove("--headless")
+    args_cli.headless = True
+if not getattr(args_cli, "headless", False) and getattr(args_cli, "visualizer", "") is None:
+    args_cli.visualizer = "kit"
+
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
 
@@ -163,7 +169,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # save resume path before creating a new log_dir
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        if os.path.isfile(agent_cfg.load_checkpoint):
+            resume_path = os.path.abspath(agent_cfg.load_checkpoint)
+        else:
+            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
     # wrap for video recording
     if args_cli.video:
@@ -181,6 +190,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     # create runner from rsl-rl
+    agent_cfg = cli_args.migrate_rsl_rl_cfg(agent_cfg)
     runner_cfg = cli_args.runner_cfg_for_installed_rsl_rl(agent_cfg)
     runner = OnPolicyRunner(env, runner_cfg, log_dir=log_dir, device=agent_cfg.device)
     # write git state to logs
@@ -189,7 +199,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
-        runner.load(resume_path)
+        cli_args.load_checkpoint(runner, resume_path)
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)

@@ -13,6 +13,39 @@ if TYPE_CHECKING:
     from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg
 
 
+def migrate_rsl_rl_cfg(agent_cfg):
+    """Convert the legacy `policy` block into the actor/critic configs rsl-rl >= 4 expects."""
+    try:
+        from isaaclab_rl.rsl_rl.utils import handle_deprecated_rsl_rl_cfg
+    except ImportError:
+        return agent_cfg
+    import importlib.metadata as metadata
+
+    return handle_deprecated_rsl_rl_cfg(agent_cfg, metadata.version("rsl-rl-lib"))
+
+
+def load_checkpoint(runner, path):
+    """runner.load, plus checkpoints saved by rsl-rl < 4 (model_state_dict with actor.* / critic.* /
+    std). Those have no layout-compatible optimizer state, so the optimizer starts fresh."""
+    import torch
+
+    data = torch.load(path, weights_only=False, map_location="cpu")
+    if "actor_state_dict" in data or "model_state_dict" not in data:
+        runner.load(path)
+        return
+    actor, critic = {}, {}
+    for k, v in data["model_state_dict"].items():
+        if k.startswith("actor."):
+            actor["mlp." + k[len("actor."):]] = v
+        elif k.startswith("critic."):
+            critic["mlp." + k[len("critic."):]] = v
+        elif k == "std":
+            actor["distribution.std_param"] = v
+    runner.alg.load({"actor_state_dict": actor, "critic_state_dict": critic}, {"actor": True, "critic": True}, True)
+    runner.current_learning_iteration = data["iter"]
+    print(f"[rsl_rl] Loaded legacy checkpoint (iteration {data['iter']}); optimizer state not restored.")
+
+
 def runner_cfg_for_installed_rsl_rl(agent_cfg) -> dict:
     """agent_cfg.to_dict(), with algorithm kwargs the installed rsl-rl cannot accept removed.
 

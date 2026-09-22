@@ -20,8 +20,8 @@ Writes ``isaac_eval_report_<checkpoint>.json`` next to the checkpoint, in the sa
 Mujoco/eval_mujoco.py's report ({"metadata": ..., "results": {axis: {speed: metrics}}}) so both
 plot on one axis.
 
-    python scripts/rsl_rl/sweep.py --task=Unitree-Go2-Velocity-Sigma-Density --headless \
-        --checkpoint logs/rsl_rl/unitree_go2_velocity_sigma_density/Sigma_density/model_2999.pt
+    python scripts/rsl_rl/sweep.py --task=Unitree-Go2-Velocity-Sigma-Vel-Foot-Rough --headless \
+        --checkpoint logs/rsl_rl/unitree_go2_velocity_sigma_vel_foot_rough/2026-09-21_15-22-42/model_5999.pt
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -50,7 +50,12 @@ parser.add_argument(
 parser.add_argument("--disable_fabric", action="store_true", default=False)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
-args_cli = parser.parse_args()
+args_cli, unknown = parser.parse_known_args()
+if "--headless" in unknown:
+    unknown.remove("--headless")
+    args_cli.headless = True
+if unknown:
+    parser.error(f"unrecognized arguments: {' '.join(unknown)}")
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -58,6 +63,7 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
+import importlib.util
 import json
 import os
 import torch
@@ -65,6 +71,7 @@ from datetime import datetime
 
 from rsl_rl.runners import OnPolicyRunner
 
+import isaaclab.utils.math as math_utils
 import isaaclab_tasks  # noqa: F401
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
@@ -72,6 +79,17 @@ from isaaclab_tasks.utils import get_checkpoint_path
 
 import unitree_rl_lab.tasks  # noqa: F401
 from unitree_rl_lab.utils.parser_cfg import parse_env_cfg
+
+
+_GAIT_PY = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "Tools", "gait_metrics.py"))
+_spec = importlib.util.spec_from_file_location("gait_metrics", _GAIT_PY)
+gait_metrics = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(gait_metrics)
+
+
+def _t(x):
+    """Isaac Lab 3.0 data fields are ProxyArrays; .torch is the tensor view."""
+    return getattr(x, "torch", x)
 
 
 def _round(x, n=3):
@@ -131,8 +149,8 @@ class GaitTracker:
         sensor = env.scene.sensors["contact_forces"]
         ground = env.scene.env_origins[:, 2]
 
-        contact = sensor.data.net_forces_w[:, self.sensor_foot_ids, :].norm(dim=-1) > 1.0
-        foot_h = robot.data.body_pos_w[:, self.robot_foot_ids, 2] - ground.unsqueeze(1)
+        contact = _t(sensor.data.net_forces_w)[:, self.sensor_foot_ids, :].norm(dim=-1) > 1.0
+        foot_h = _t(robot.data.body_pos_w)[:, self.robot_foot_ids, 2] - ground.unsqueeze(1)
 
         self.air_time += dt
         self.swing_peak = torch.maximum(self.swing_peak, foot_h)
@@ -148,7 +166,7 @@ class GaitTracker:
         self.prev_contact = contact
 
         # Ground reaction force on each foot while loaded, and the peak seen over the window.
-        fz = sensor.data.net_forces_w[:, self.sensor_foot_ids, 2].abs()
+        fz = _t(sensor.data.net_forces_w)[:, self.sensor_foot_ids, 2].abs()
         self.grf_sum += torch.where(contact, fz, torch.zeros_like(fz))
         self.grf_contacts += contact.float()
         self.grf_peak = torch.maximum(self.grf_peak, fz)
@@ -156,36 +174,29 @@ class GaitTracker:
         # Touchdown speed is read from the PREVIOUS step: by the time a contact force crosses the
         # threshold the collision is already resolved, so this step's vertical velocity is
         # post-impact (near zero for exactly the hard landings this is meant to catch).
-        foot_vz = robot.data.body_lin_vel_w[:, self.robot_foot_ids, 2]
+        foot_vz = _t(robot.data.body_lin_vel_w)[:, self.robot_foot_ids, 2]
         self.landing_vel_sum += torch.where(landed, self.prev_foot_vz.abs(), torch.zeros_like(foot_vz))
         self.prev_foot_vz = foot_vz
 
         osc = torch.stack(
-            [robot.data.root_lin_vel_b[:, 2], robot.data.root_ang_vel_b[:, 0], robot.data.root_ang_vel_b[:, 1]],
+            [_t(robot.data.root_lin_vel_b)[:, 2], _t(robot.data.root_ang_vel_b)[:, 0], _t(robot.data.root_ang_vel_b)[:, 1]],
             dim=1,
         )
         self.osc_sum += osc
         self.osc_sq += osc.square()
 
         if self.start_pos is None:
-            self.start_pos = robot.data.root_pos_w[:, :2].clone()
-            q = robot.data.root_quat_w
-            self.start_yaw = torch.atan2(
-                2.0 * (q[:, 0] * q[:, 3] + q[:, 1] * q[:, 2]),
-                1.0 - 2.0 * (q[:, 2] ** 2 + q[:, 3] ** 2),
-            )
-        self.end_pos = robot.data.root_pos_w[:, :2]
-        q = robot.data.root_quat_w
-        self.end_yaw = torch.atan2(
-            2.0 * (q[:, 0] * q[:, 3] + q[:, 1] * q[:, 2]), 1.0 - 2.0 * (q[:, 2] ** 2 + q[:, 3] ** 2)
-        )
+            self.start_pos = _t(robot.data.root_pos_w)[:, :2].clone()
+            self.start_yaw = math_utils.euler_xyz_from_quat(_t(robot.data.root_quat_w))[2]
+        self.end_pos = _t(robot.data.root_pos_w)[:, :2]
+        self.end_yaw = math_utils.euler_xyz_from_quat(_t(robot.data.root_quat_w))[2]
 
         self._update_phase(landed, dt)
 
-        self.base_h_sum += robot.data.root_pos_w[:, 2] - ground
-        self.vx_sum += robot.data.root_lin_vel_b[:, 0]
-        self.vy_sum += robot.data.root_lin_vel_b[:, 1]
-        self.wz_sum += robot.data.root_ang_vel_b[:, 2]
+        self.base_h_sum += _t(robot.data.root_pos_w)[:, 2] - ground
+        self.vx_sum += _t(robot.data.root_lin_vel_b)[:, 0]
+        self.vy_sum += _t(robot.data.root_lin_vel_b)[:, 1]
+        self.wz_sum += _t(robot.data.root_ang_vel_b)[:, 2]
         self.steps += 1
 
     # Which foot's landing is measured against which foot's stride. Same three pairs
@@ -312,10 +323,11 @@ def main():
     env = gym.make(args_cli.task, cfg=env_cfg)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
+    agent_cfg = cli_args.migrate_rsl_rl_cfg(agent_cfg)
     runner = OnPolicyRunner(
         env, cli_args.runner_cfg_for_installed_rsl_rl(agent_cfg), log_dir=None, device=agent_cfg.device
     )
-    runner.load(resume_path)
+    cli_args.load_checkpoint(runner, resume_path)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     base = env.unwrapped
@@ -358,6 +370,8 @@ def main():
         if isinstance(obs, tuple):
             obs = obs[0]
         tracker = None
+        contact_log = torch.zeros(measure_steps, num_envs, len(FOOT_ORDER), dtype=torch.bool, device=base.device)
+        foot_xy_log = torch.zeros(measure_steps, num_envs, len(FOOT_ORDER), 2, device=base.device)
         for step in range(settle_steps + measure_steps):
             # Overwrite the sampled command every step. The command manager resamples on its own
             # timer and zeroes the rel_standing_envs share, both of which would corrupt a sweep.
@@ -370,12 +384,22 @@ def main():
             if tracker is not None:
                 command_term.vel_command_b[:] = pinned
                 tracker.update(base, dt)
+                k = step - settle_steps
+                if k < measure_steps:
+                    forces = _t(base.scene.sensors["contact_forces"].data.net_forces_w)[:, sensor_foot_ids, :]
+                    contact_log[k] = forces.norm(dim=-1) > 1.0
+                    foot_xy_log[k] = _t(base.scene["robot"].data.body_pos_w)[:, robot_foot_ids, :2]
                 # A robot that fell and got teleported back is not tracking anything; count it so
                 # a suspiciously good number can be checked against how often it reset.
                 tracker.resets += base.termination_manager.terminated.float()
 
+        contact_np = contact_log.cpu().numpy()
+        foot_xy_np = foot_xy_log.cpu().numpy()
         axis_out = {}
         for i, sp in enumerate(speeds):
+            env_ids = rows[i].tolist()
+            gait = gait_metrics.rounded(gait_metrics.average(
+                [gait_metrics.analyze(contact_np[:, e], foot_xy_np[:, e], dt) for e in env_ids]))
             tracker.cmd = pinned[rows[i][0]].tolist()
             m = tracker.metrics(rows[i], args_cli.measure)
             actual = {"x": m["actual_speed_x"], "y": m["actual_speed_y"], "yaw": m["actual_yaw_rate"]}[axis]
@@ -404,6 +428,7 @@ def main():
                 "phase_diff_front_percent": m["phase_diff_front_percent"],
                 "phase_diff_right_percent": m["phase_diff_right_percent"],
                 "phase_diff_diag_percent": m["phase_diff_diag_percent"],
+                **gait,
             }
             print(
                 f"[{axis}] cmd {sp:5.2f} -> {float(actual):6.3f}  "
