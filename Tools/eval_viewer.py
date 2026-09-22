@@ -53,9 +53,87 @@ def _load_yaml(path):
         return {}
 
 
+# rsl_rl (unitree_rl_lab) logs under its own names. Map them onto what Walk's skrl runs log, so
+# both chart on the same panels.
+_RSL_TAGS = {
+    "Train/mean_reward": "Reward / Total reward (mean)",
+    "Train/mean_episode_length": "Episode / Total timesteps (mean)",
+    "Policy/mean_noise_std": "Policy / Standard deviation",
+    "Policy/mean_std": "Policy / Standard deviation",
+    "Loss/value_function": "Loss / Value loss",
+    "Loss/value": "Loss / Value loss",
+    "Loss/surrogate": "Loss / Policy loss",
+    "Loss/learning_rate": "Learning / Learning rate",
+    "Curriculum/lin_vel_cmd_levels": "curriculum/command_x_max",
+}
+_RSL_TERMS = {
+    "track_lin_vel_xy": "track_lin_vel_xy_exp",
+    "track_ang_vel_z": "track_ang_vel_z_exp",
+    "base_linear_velocity": "lin_vel_z_l2",
+    "base_angular_velocity": "ang_vel_xy_l2",
+    "joint_vel": "joint_vel_l2",
+    "joint_acc": "dof_acc_l2",
+    "joint_torques": "dof_torques_l2",
+    "action_rate": "action_rate_l2",
+    "dof_pos_limits": "joint_pos_limits",
+    "joint_pos": "joint_deviation",
+    "feet_air_time": "feet_air_time_thresh",
+    "feet_clearance": "foot_clearance",
+    "feet_air_time_dyn": "feet_air_time",
+}
+
+
+def _rsl_rl_params(run_dir):
+    """(env steps per iteration, env step dt) for an rsl_rl run, None for anything else."""
+    agent = _load_yaml(os.path.join(run_dir, "params", "agent.yaml"))
+    if "num_steps_per_env" not in agent:
+        return None
+    env = _load_yaml(os.path.join(run_dir, "params", "env.yaml"))
+    sim = env.get("sim") or {}
+    return agent["num_steps_per_env"], (sim.get("dt") or 0.005) * (env.get("decimation") or 4)
+
+
+def _canon_rsl_rl(data, run_dir):
+    """rsl_rl steps are PPO iterations and its episode return is summed with a dt factor.
+    Convert to env steps and to Walk's plain per-step sum."""
+    p = _rsl_rl_params(run_dir)
+    if not p:
+        return data
+    per_iter, step_dt = p
+    out = {}
+    for tag, series in data.items():
+        if tag.endswith("/time"):
+            continue
+        k = 1.0
+        if tag.startswith("Episode_Reward/"):
+            name = tag.split("/", 1)[1]
+            new = f"Info / reward/{_RSL_TERMS.get(name, name)}"
+        else:
+            new = _RSL_TAGS.get(tag, tag)
+            if tag == "Train/mean_reward":
+                k = 1.0 / step_dt
+        out[new] = [[s * per_iter, w, v * k] for s, w, v in series]
+    return out
+
+
 def _flatten_cfg(env_cfg, agent_cfg):
     """Pull the fields that actually distinguish one run from another into a flat dict."""
     out = {}
+    rewards = (env_cfg or {}).get("rewards")
+    if isinstance(rewards, dict):
+        for name, term in rewards.items():
+            if isinstance(term, dict) and isinstance(term.get("weight"), (int, float)):
+                out[f"rew_scale_{_RSL_TERMS.get(name, name)}"] = term["weight"]
+    if "num_steps_per_env" in (agent_cfg or {}):
+        alg = agent_cfg.get("algorithm") or {}
+        out["ppo.rollouts"] = agent_cfg["num_steps_per_env"]
+        for src, dst in (("num_learning_epochs", "learning_epochs"), ("num_mini_batches", "mini_batches"),
+                         ("learning_rate", "learning_rate"), ("entropy_coef", "entropy_loss_scale"),
+                         ("value_loss_coef", "value_loss_scale"), ("desired_kl", "kl_threshold")):
+            if src in alg:
+                out[f"ppo.{dst}"] = alg[src]
+        if "max_iterations" in agent_cfg:
+            out["ppo.timesteps"] = agent_cfg["max_iterations"] * agent_cfg["num_steps_per_env"]
     for k, v in (env_cfg or {}).items():
         if isinstance(v, (int, float, str, bool)) or (
             isinstance(v, list) and len(v) <= 4 and all(isinstance(x, (int, float)) for x in v)
@@ -142,6 +220,7 @@ def _read_scalars(events_path):
         ea.Reload()
         data = {_canon_tag(t): [[e.step, e.wall_time, float(e.value)] for e in ea.Scalars(t)]
                 for t in ea.Tags()["scalars"]}
+        data = _canon_rsl_rl(data, os.path.dirname(events_path))
     except Exception as e:
         print(f"[viewer] failed reading {events_path}: {e}")
         data = {}
@@ -242,6 +321,10 @@ def _report_identity(file_path, meta):
         label = re.sub(r"^.*?(mujoco|isaac)_eval_report_?", "", os.path.basename(file_path))
     label = re.sub(r"\.(pt|json)$", "", label)
     label = re.sub(r"^agent_", "", label)
+    m = re.fullmatch(r"model_(\d+)", label)
+    rsl = _rsl_rl_params(run_dir) if m else None
+    if rsl:
+        label = str(int(m.group(1)) * rsl[0])
     steps = int(label) if label.isdigit() else None
     if steps is not None:
         label = f"{steps // 1000}k" if steps >= 1000 else str(steps)

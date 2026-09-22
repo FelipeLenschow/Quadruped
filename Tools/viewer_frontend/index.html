@@ -111,6 +111,9 @@ th{color:var(--text-muted);font-weight:500;font-size:.72rem;text-transform:upper
 .ck:hover{border-color:#334155;color:#e2e8f0}
 .ck.on{font-weight:600}
 .chart-group{display:contents}
+.fold{float:right;font-size:.72rem;color:var(--text-muted);cursor:pointer;user-select:none;
+     border:1px solid var(--border-color);border-radius:99px;padding:2px 10px}
+.fold:hover{color:#7dd3fc;border-color:#334155}
 </style>
 </head>
 <body>
@@ -170,8 +173,8 @@ th{color:var(--text-muted);font-weight:500;font-size:.72rem;text-transform:upper
       </div>
       <div class="grid" id="grid"></div>
       <div class="card wide" style="margin-top:16px">
-        <h3 data-tip="__raw" data-tip-html="&lt;b&gt;Config differences&lt;/b&gt;Diff of &lt;code&gt;params/env.yaml&lt;/code&gt; and &lt;code&gt;params/agent.yaml&lt;/code&gt; across the selected runs. Only keys that differ are shown.&lt;span class=&quot;note&quot;&gt;If more than one row is listed, the runs are not a controlled comparison.&lt;/span&gt;">Config differences</h3>
-        <div class="sub">Only settings that differ between the selected runs. Identical settings are hidden.</div>
+        <span class="fold" id="difftoggle"></span><h3 data-tip="__raw" data-tip-html="&lt;b&gt;Config differences&lt;/b&gt;Diff of &lt;code&gt;params/env.yaml&lt;/code&gt; and &lt;code&gt;params/agent.yaml&lt;/code&gt; across the selected runs. Only keys that differ are shown.&lt;span class=&quot;note&quot;&gt;If more than one row is listed, the runs are not a controlled comparison.&lt;/span&gt;">Config differences</h3>
+        <div class="sub" id="diffsub">Only settings that differ between the selected runs. Identical settings are hidden.</div>
         <div id="diff"></div>
       </div>
 
@@ -191,6 +194,7 @@ th{color:var(--text-muted);font-weight:500;font-size:.72rem;text-transform:upper
             <button data-c="base">Base Variation</button>
             <button data-c="feet">Feet Behavior</button>
             <button data-c="gait">Gait Metrics</button>
+            <button data-c="swing">Swing &amp; Stance</button>
             <button data-c="position">Position Drift</button>
           </div>
         </div>
@@ -259,6 +263,49 @@ th{color:var(--text-muted);font-weight:500;font-size:.72rem;text-transform:upper
             <h3>Foot Landing Velocity</h3>
             <div class="sub">Vertical foot speed at touchdown, sampled pre-impact (lower is a softer set-down). Blank for runs evaluated before this metric existed.</div>
             <div class="wrap" style="height:300px"><canvas id="chartLandingVel"></canvas></div>
+          </div>
+        </div>
+        <div id="ecat-swing" class="chart-group" style="display:none">
+          <div class="card">
+            <h3>Swing Time</h3>
+            <div class="sub">Mean time each foot is in the air (s). Band is the min/max across legs.</div>
+            <div class="wrap" style="height:300px"><canvas id="chartSwingTime"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>Stance Time</h3>
+            <div class="sub">Mean time each foot is on the ground (s). Band is the min/max across legs.</div>
+            <div class="wrap" style="height:300px"><canvas id="chartStanceTime"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>Duty Factor</h3>
+            <div class="sub">Fraction of time each foot is on the ground. A trot sits near 0.5; above 0.75 is closer to a walk.</div>
+            <div class="wrap" style="height:300px"><canvas id="chartDuty"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>Stride Length</h3>
+            <div class="sub">Distance a foot travels between two touchdowns (m).</div>
+            <div class="wrap" style="height:300px"><canvas id="chartStrideLen"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>Stride Period</h3>
+            <div class="sub">Time between two touchdowns of the same foot (s).</div>
+            <div class="wrap" style="height:300px"><canvas id="chartStridePeriod"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>Swing Time Spread</h3>
+            <div class="sub">Standard deviation of swing time (s). Lower means a more regular gait.</div>
+            <div class="wrap" style="height:300px"><canvas id="chartSwingStd"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>Feet on Ground</h3>
+            <div class="sub">Mean number of feet in contact. A clean trot is close to 2.</div>
+            <div class="wrap" style="height:300px"><canvas id="chartFeetDown"></canvas></div>
+          </div>
+          <div class="card wide">
+            <h3>Footfall Pattern
+              <select id="gaitspeed" style="margin-left:10px"></select></h3>
+            <div class="sub">Contact of each foot over the last 2 s of the test. Filled = on the ground.</div>
+            <div id="gaitdiagrams"></div>
           </div>
         </div>
         <div id="ecat-position" class="chart-group" style="display:none">
@@ -969,6 +1016,12 @@ function renderDecomp(){
                  grid:{color:'rgba(148,163,184,.08)'}},
               y:{ticks:{display:false},grid:{display:false}}}}});
 }
+let diffOpen=saved.diffOpen!==false;
+function toggleDiff(){
+  diffOpen=!diffOpen;
+  ViewerState.patch('training',{diffOpen:diffOpen});
+  renderDiff();
+}
 function renderDiff(){
   const keys=new Set(); sel.forEach(id=>Object.keys(data[id]?.config||{}).forEach(k=>keys.add(k)));
   const rows=[...keys].filter(k=>{
@@ -976,6 +1029,12 @@ function renderDiff(){
     return new Set(vals).size>1;
   }).sort();
   const el=document.getElementById('diff');
+  const tog=document.getElementById('difftoggle');
+  tog.onclick=toggleDiff;
+  tog.textContent=(diffOpen?'▾ hide':'▸ show')+(rows.length?' · '+rows.length+' setting'+(rows.length===1?'':'s'):'');
+  el.style.display=diffOpen?'':'none';
+  document.getElementById('diffsub').style.display=diffOpen?'':'none';
+  if(!diffOpen){el.innerHTML='';return;}
   if(!rows.length){el.innerHTML='<div class="sub">No differences — these runs share the same configuration.</div>';return;}
   let h='<table class="diff"><tr><th>setting</th>'+
         sel.map(id=>`<th style="color:${colorOf[id]}">${RUNS.find(r=>r.id===id)?.name||id}</th>`).join('')+'</tr>';
@@ -1188,6 +1247,15 @@ function renderEvalCharts(reports){
     renderSimpleLineChart(reports,'chartPhaseRight','phase_diff_right_percent','Phase Offset (%)');
     renderSimpleLineChart(reports,'chartPhaseDiag','phase_diff_diag_percent','Phase Offset (%)');
     renderChartEnvelope(reports,'chartLandingVel','foot_landing_vel_ms','Landing Speed (m/s)');
+  } else if(evCat==='swing'){
+    renderChartEnvelope(reports,'chartSwingTime','swing_time_s','Swing Time (s)');
+    renderChartEnvelope(reports,'chartStanceTime','stance_time_s','Stance Time (s)');
+    renderChartEnvelope(reports,'chartDuty','duty_factor','Duty Factor');
+    renderChartEnvelope(reports,'chartStrideLen','stride_length_m','Stride Length (m)');
+    renderChartEnvelope(reports,'chartStridePeriod','stride_period_s','Stride Period (s)');
+    renderChartEnvelope(reports,'chartSwingStd','swing_time_std_s','Swing Time Std (s)');
+    renderFeetDown(reports);
+    renderGaitDiagrams(reports);
   } else if(evCat==='position'){
     renderSimpleLineChart(reports,'chartErrX',['position_error','x_m'],'Forward Drift (m)');
     renderSimpleLineChart(reports,'chartErrY',['position_error','y_m'],'Lateral Drift (m)');
@@ -1244,6 +1312,8 @@ function renderChartEnvelope(reports,chartId,dataKey,yLabel){
       if(!res||res[dataKey]==null) return;
       let arr=res[dataKey];
       if(!Array.isArray(arr)) arr=[arr];
+      arr=arr.filter(v=>v!=null);
+      if(!arr.length) return;
       maxData.push({x:l,y:Math.max(...arr)});
       minData.push({x:l,y:Math.min(...arr)});
       meanData.push({x:l,y:arr.reduce((a,b)=>a+b,0)/arr.length});
@@ -1279,6 +1349,75 @@ function renderSimpleLineChart(reports,chartId,dataKeyPath,yLabel){
   });
   evalChart(chartId,{type:'line',data:{datasets},
     options:{responsive:true,maintainAspectRatio:false,scales:evalScales(yLabel,true)}});
+}
+function renderFeetDown(reports){
+  const labels=extractSpeeds(reports);
+  const datasets=reports.map(r=>{
+    const data=[];
+    labels.forEach(l=>{
+      const f=getRes(r,l,evAxis)?.feet_in_contact_frac;
+      if(f) data.push({x:l,y:f.reduce((a,v,k)=>a+k*v,0)});
+    });
+    return {label:r.label,data,borderColor:r.color,backgroundColor:r.color,
+            borderDash:r.dash,tension:.3,borderWidth:2};
+  });
+  evalChart('chartFeetDown',{type:'line',data:{datasets},
+    options:{responsive:true,maintainAspectRatio:false,scales:evalScales('Feet in Contact',true)}});
+}
+function renderGaitDiagrams(reports){
+  const selEl=document.getElementById('gaitspeed');
+  const speeds=extractSpeeds(reports).filter(l=>reports.some(r=>getRes(r,l,evAxis)?.gait_timeline));
+  const prev=selEl.value;
+  selEl.innerHTML=speeds.map(l=>`<option value="${l}">${l} ${evAxis==='yaw'?'rad/s':'m/s'}</option>`).join('');
+  if(speeds.map(String).includes(prev)) selEl.value=prev;
+  else if(speeds.length) selEl.value=String(speeds.reduce((a,b)=>Math.abs(b-0.5)<Math.abs(a-0.5)?b:a));
+  selEl.onchange=()=>renderGaitDiagrams(reports);
+  const host=document.getElementById('gaitdiagrams');
+  host.innerHTML='';
+  if(!speeds.length){
+    host.innerHTML='<div class="sub">No footfall data. Re-evaluate the checkpoint to get it.</div>';
+    return;
+  }
+  const speed=parseFloat(selEl.value);
+  const css=getComputedStyle(document.body);
+  const muted=css.getPropertyValue('--text-muted').trim()||'#94a3b8';
+  const grid=css.getPropertyValue('--border-color').trim()||'#1e293b';
+  reports.forEach(r=>{
+    const tl=getRes(r,speed,evAxis)?.gait_timeline;
+    if(!tl) return;
+    const box=document.createElement('div');
+    box.style.margin='8px 0 14px';
+    const title=document.createElement('div');
+    title.style.cssText=`font-size:.74rem;font-weight:600;color:${r.color};margin-bottom:4px`;
+    title.textContent=r.label;
+    const cv=document.createElement('canvas');
+    box.appendChild(title); box.appendChild(cv); host.appendChild(box);
+    const W=host.clientWidth||800, rowH=16, gap=5, left=34, H=4*(rowH+gap)+18;
+    const dpr=window.devicePixelRatio||1;
+    cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
+    const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
+    const n=Math.max(...tl.contact.map(c=>c.length)), cw=(W-left-6)/Math.max(n,1);
+    ctx.font='11px sans-serif'; ctx.textBaseline='middle';
+    ['FL','FR','RL','RR'].forEach((name,f)=>{
+      const y=f*(rowH+gap);
+      ctx.fillStyle=muted; ctx.fillText(name,4,y+rowH/2);
+      ctx.fillStyle=grid; ctx.fillRect(left,y,W-left-6,rowH);
+      ctx.fillStyle=r.color;
+      const c=tl.contact[f]||'';
+      for(let i=0;i<c.length;){
+        if(c[i]!=='1'){i++;continue;}
+        let j=i; while(j<c.length&&c[j]==='1') j++;
+        ctx.fillRect(left+i*cw,y,(j-i)*cw,rowH);
+        i=j;
+      }
+    });
+    ctx.fillStyle=muted;
+    const tot=n*tl.dt, y0=4*(rowH+gap)+8;
+    for(let t=0;t<=tot+1e-9;t+=0.5){
+      const x=left+(t/tot)*(W-left-6);
+      ctx.fillText(t.toFixed(1)+'s',Math.min(x,W-28),y0);
+    }
+  });
 }
 async function fetchReports(){
   try{

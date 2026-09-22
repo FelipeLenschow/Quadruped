@@ -44,6 +44,7 @@ REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 EVAL_SCRIPT = os.path.join(REPO_DIR, "Mujoco", "eval_mujoco.py")
 SUPERVISOR = os.path.join(REPO_DIR, "Operator", "supervisor.py")
 CKPT_RE = re.compile(r"^agent_(\d+)\.pt$")
+RSL_CKPT_RE = re.compile(r"^model_(\d+)\.pt$")
 
 _stop = False
 
@@ -148,6 +149,15 @@ def _obs_dim(run_dir):
         return 0
 
 
+def _rsl_rl_steps_per_iter(run_dir):
+    """rsl_rl names checkpoints by PPO iteration; each one is num_steps_per_env env steps."""
+    try:
+        with open(os.path.join(run_dir, "params", "agent.yaml")) as f:
+            return int((yaml.load(f, Loader=yaml.UnsafeLoader) or {}).get("num_steps_per_env") or 24)
+    except Exception:
+        return 24
+
+
 _target = None
 
 
@@ -202,6 +212,13 @@ def due_checkpoints(run_dir, interval, settle=0.0):
         m = CKPT_RE.match(os.path.basename(pt))
         if m:
             ckpts.append((int(m.group(1)), pt))
+    rsl = glob.glob(os.path.join(run_dir, "model_*.pt"))
+    if rsl:
+        per_iter = _rsl_rl_steps_per_iter(run_dir)
+        for pt in rsl:
+            m = RSL_CKPT_RE.match(os.path.basename(pt))
+            if m:
+                ckpts.append((int(m.group(1)) * per_iter, pt))
     ckpts.sort()
 
     now = time.time()
@@ -392,7 +409,7 @@ def main():
         run_dir, step, pt = work[0]
         if run_dir not in obs_cache:
             obs_cache[run_dir] = args.obs_dim or _obs_dim(run_dir) or 51
-        log_path = os.path.join(run_dir, "checkpoints", "auto_eval.log")
+        log_path = os.path.join(os.path.dirname(pt), "auto_eval.log")
         if evaluate(prefix, pt, args.robot, obs_cache[run_dir], log_path, extra,
                     supervise=not args.no_supervisor):
             done += 1

@@ -17,10 +17,11 @@ import threading
 from pipeline import LocomotionPipeline
 from Configs.config_loader import load_config
 from Controller.robot_defaults import DEFAULT_STANCE_QPOS
+from Tools import gait_metrics
 
 class MujocoEvaluator(Node):
     def __init__(self, robot_type="go2", checkpoint=None, obs_dim=49, use_estimator=False,
-                 headless=True, auto_reset_safety=True, rom_margin=0.0):
+                 headless=True, auto_reset_safety=True, rom_margin=0.0, warmup_s=2.0, measure_s=10.0):
         super().__init__("mujoco_evaluator_node")
         self.robot_type = robot_type
         self.checkpoint = checkpoint
@@ -28,6 +29,8 @@ class MujocoEvaluator(Node):
         self.headless = headless
         self.use_estimator = use_estimator
         self.safety_resets = 0
+        self.warmup_s = warmup_s
+        self.measure_s = measure_s
 
         # 0. Load Central Config
         self.config = load_config()
@@ -222,6 +225,31 @@ class MujocoEvaluator(Node):
                 self.model.dof_damping[self.model.jnt_dofadr[i]] = 0.0
                 self.model.dof_frictionloss[self.model.jnt_dofadr[i]] = 0.01
 
+        self.foot_of_geom = {}
+        for g in range(self.model.ngeom):
+            name = (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g) or "").lower()
+            if not name or name == "floor":
+                continue
+            for foot_idx, foot_name in enumerate(["fl", "fr", "rl", "rr"]):
+                if foot_name in name:
+                    self.foot_of_geom[g] = foot_idx
+                    break
+
+    def _floor_contacts(self):
+        """(contact index, foot index) for every floor contact touching a foot geom."""
+        out = []
+        for i in range(self.data.ncon):
+            con = self.data.contact[i]
+            if con.geom1 == 0:
+                foot = self.foot_of_geom.get(con.geom2)
+            elif con.geom2 == 0:
+                foot = self.foot_of_geom.get(con.geom1)
+            else:
+                continue
+            if foot is not None:
+                out.append((i, foot))
+        return out
+
     def _get_raw_sensor_data(self):
         """Extracts raw state vectors from MuJoCo data."""
         q = self.data.qpos[self.isaac_qpos_addr]
@@ -246,17 +274,8 @@ class MujocoEvaluator(Node):
             accel = np.array([0.0, 0.0, 9.81])
 
         contact = [0.0, 0.0, 0.0, 0.0]
-        for i in range(self.data.ncon):
-            con = self.data.contact[i]
-            g1, g2 = con.geom1, con.geom2
-            if g1 == 0 or g2 == 0:
-                for foot_idx, foot_name in enumerate(["FL", "FR", "RL", "RR"]):
-                    name1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g1)
-                    name2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g2)
-                    is_match1 = name1 and name1.lower() != "floor" and foot_name.lower() in name1.lower()
-                    is_match2 = name2 and name2.lower() != "floor" and foot_name.lower() in name2.lower()
-                    if is_match1 or is_match2:
-                        contact[foot_idx] = 1.0
+        for _, foot_idx in self._floor_contacts():
+            contact[foot_idx] = 1.0
 
         return {
             'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro, 
@@ -313,8 +332,8 @@ class MujocoEvaluator(Node):
             "y": [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.35, 0.50],
             "yaw": [0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00]
         }
-        steps_per_speed = 32000  # 32 seconds at 1000Hz (30s walking + 2s warmup)
-        warmup_steps = 2000     # 2 seconds standing still
+        warmup_steps = int(round(self.warmup_s / 0.001))
+        steps_per_speed = warmup_steps + int(round(self.measure_s / 0.001))
         
         results = {"x": {}, "y": {}, "yaw": {}}
         
@@ -393,6 +412,10 @@ class MujocoEvaluator(Node):
                     phase_diff_front_list = []
                     phase_diff_right_list = []
                     phase_diff_diag_list = []
+
+                    n_measure = steps_per_speed - warmup_steps
+                    contact_log = np.zeros((n_measure, 4), dtype=bool)
+                    foot_xy_log = np.zeros((n_measure, 4, 2))
                     
                     for step in range(steps_per_speed):
                         if not rclpy.ok(): return
@@ -435,8 +458,12 @@ class MujocoEvaluator(Node):
                             viewer.sync()
                             
                         if step >= warmup_steps:
-                            eval_steps += 1
                             contact = raw_data['contact']
+                            contact_log[eval_steps] = np.asarray(contact) > 0
+                            if len(self.foot_geom_ids) == 4:
+                                foot_xy_log[eval_steps] = self.data.geom_xpos[self.foot_geom_ids, :2]
+                            eval_steps += 1
+                            floor_contacts = None
                             
                             for foot_idx in range(4):
                                 is_contact = (contact[foot_idx] > 0)
@@ -471,18 +498,12 @@ class MujocoEvaluator(Node):
                                     
                                     force = np.zeros(6, dtype=np.float64)
                                     foot_force = 0.0
-                                    for c_i in range(self.data.ncon):
-                                        con = self.data.contact[c_i]
-                                        g1, g2 = con.geom1, con.geom2
-                                        if g1 == 0 or g2 == 0:
-                                            name1 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g1)
-                                            name2 = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, g2)
-                                            fn = ["FL", "FR", "RL", "RR"][foot_idx]
-                                            is_match1 = name1 and name1.lower() != "floor" and fn.lower() in name1.lower()
-                                            is_match2 = name2 and name2.lower() != "floor" and fn.lower() in name2.lower()
-                                            if is_match1 or is_match2:
-                                                mujoco.mj_contactForce(self.model, self.data, c_i, force)
-                                                foot_force += abs(force[0])
+                                    if floor_contacts is None:
+                                        floor_contacts = self._floor_contacts()
+                                    for c_i, c_foot in floor_contacts:
+                                        if c_foot == foot_idx:
+                                            mujoco.mj_contactForce(self.model, self.data, c_i, force)
+                                            foot_force += abs(force[0])
                                     # Drop the airborne height history so the next swing starts
                                     # its finite difference fresh instead of across the stance.
                                     prev_foot_z[foot_idx] = None
@@ -553,6 +574,9 @@ class MujocoEvaluator(Node):
                     avg_phase_right = np.mean(phase_diff_right_list) * 100.0 if phase_diff_right_list else 0.0
                     avg_phase_diag = np.mean(phase_diff_diag_list) * 100.0 if phase_diff_diag_list else 0.0
                     
+                    gait = gait_metrics.rounded(gait_metrics.analyze(
+                        contact_log[:eval_steps], foot_xy_log[:eval_steps], 0.001))
+
                     results[axis][str(speed)] = {
                         "commanded_speed": round(float(speed), 2),
                         "actual_speed": round(float(avg_actual_vel), 2),
@@ -579,7 +603,8 @@ class MujocoEvaluator(Node):
                         # is normal (the stop that fires at reset); a large count means the policy
                         # kept violating ROM or tilt here and spent the test being gated, so treat
                         # that speed's numbers as suspect rather than as behaviour.
-                        "safety_resets": self.safety_resets - resets_at_start
+                        "safety_resets": self.safety_resets - resets_at_start,
+                        **gait,
                     }
     
                     print(f"   => Actual Vel: {avg_actual_vel:.3f}")
@@ -647,6 +672,8 @@ def main():
                         help="clear the safety emergency stop without an operator, and detach "
                              "stdin so the stop's reset prompt cannot eat the launcher's keyboard "
                              "(default on). 'off' restores the press-ENTER-to-continue behaviour")
+    parser.add_argument("--warmup", type=float, default=2.0, help="seconds standing before each test")
+    parser.add_argument("--measure", type=float, default=10.0, help="seconds measured per test")
     args = parser.parse_args()
 
     rclpy.init()
@@ -657,7 +684,9 @@ def main():
         use_estimator=args.use_estimator,
         headless=args.headless,
         auto_reset_safety=(args.auto_reset_safety == "on"),
-        rom_margin=None if args.rom_margin == "config" else float(args.rom_margin)
+        rom_margin=None if args.rom_margin == "config" else float(args.rom_margin),
+        warmup_s=args.warmup,
+        measure_s=args.measure,
     )
     try:
         rclpy.spin(node)
