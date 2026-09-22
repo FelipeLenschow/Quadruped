@@ -701,3 +701,90 @@ class RobotSigmaVelFootRoughPlayEnvCfg(RobotSigmaVelFootRoughEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         _apply_play_overrides(self)
+
+
+# ── Deploy ─────────────────────────────────────────────────────────────────────────────────
+# Sigma-Vel-Foot-Rough trained on a base_lin_vel the simulator hands over exactly. FeetHeight,
+# trained that way, leans on it hard -- on the robot its thigh targets move 1-2.4 rad per m/s of
+# estimated forward velocity, against 0.1-0.2 rad for Final7 -- and on hardware that input is a
+# Kalman estimate driven by leg odometry, so the policy closes a loop through its own leg motion
+# and oscillates at standstill. This arm trains the same task with the three things Final7 had
+# and this one does not: noise and drift on the velocity estimate, actuator latency, and PD gains
+# that are not exactly the deployed 25 / 0.5.
+
+# Unoise half-width, m/s. Final7's effective value was 0.125 (0.10 x observation_noise_scale 1.25).
+DEPLOY_LIN_VEL_NOISE = float(os.environ.get("PAPER_DEPLOY_LIN_VEL_NOISE", 0.125))
+# Per-episode constant offset, m/s. Final7 used 0.05. Estimator drift is not zero-mean within an
+# episode, which is what makes a policy stop trusting the channel step to step.
+DEPLOY_LIN_VEL_BIAS = float(os.environ.get("PAPER_DEPLOY_LIN_VEL_BIAS", 0.05))
+# Actuator command latency, in PHYSICS steps (sim.dt = 5 ms, so 5 = 25 ms). The robot's control
+# loop measures ~29 ms per step, and the policy that shook had trained with none.
+DEPLOY_MIN_DELAY = int(os.environ.get("PAPER_DEPLOY_MIN_DELAY", 0))
+DEPLOY_MAX_DELAY = int(os.environ.get("PAPER_DEPLOY_MAX_DELAY", 5))
+# Added to the nominal gains at every reset. Final7: +-5 on Kp 25, +-0.2 on Kd 0.5.
+DEPLOY_KP_RANGE = (-float(os.environ.get("PAPER_DEPLOY_KP", 5.0)), float(os.environ.get("PAPER_DEPLOY_KP", 5.0)))
+DEPLOY_KD_RANGE = (-float(os.environ.get("PAPER_DEPLOY_KD", 0.2)), float(os.environ.get("PAPER_DEPLOY_KD", 0.2)))
+
+
+def _apply_estimator_noise(cfg) -> None:
+    """Replace the actor's exact base_lin_vel with an estimate: white noise plus episode drift.
+
+    Reassigning the attribute keeps its slot in the group's declaration order, so the 48-wide
+    deployment layout is unchanged and Controller/policy_runner.py still feeds this policy.
+    """
+    cfg.observations.policy.base_lin_vel = ObsTerm(
+        func=mdp.base_lin_vel_estimate,
+        clip=(-100, 100),
+        params={"bias": DEPLOY_LIN_VEL_BIAS},
+        noise=Unoise(n_min=-DEPLOY_LIN_VEL_NOISE, n_max=DEPLOY_LIN_VEL_NOISE) if DEPLOY_LIN_VEL_NOISE else None,
+    )
+    print(
+        f"[PaperArm] base_lin_vel is an estimate: Unoise +-{DEPLOY_LIN_VEL_NOISE} m/s,"
+        f" per-episode bias +-{DEPLOY_LIN_VEL_BIAS} m/s"
+    )
+
+
+def _apply_actuator_delay(cfg) -> None:
+    """Lag the joint command by 0-N physics steps, resampled per episode.
+
+    UnitreeActuatorCfg already derives from DelayedPDActuatorCfg, so this is only its delay
+    bounds. Replaced rather than mutated: the actuator cfgs are shared with the module-level
+    UNITREE_GO2_CFG, and mutating them would leak into any other cfg built in this process.
+    """
+    cfg.scene.robot = cfg.scene.robot.replace(
+        actuators={
+            name: actuator.replace(min_delay=DEPLOY_MIN_DELAY, max_delay=DEPLOY_MAX_DELAY)
+            for name, actuator in cfg.scene.robot.actuators.items()
+        }
+    )
+    print(f"[PaperArm] actuator delay {DEPLOY_MIN_DELAY}-{DEPLOY_MAX_DELAY} physics steps")
+
+
+def _apply_gain_randomization(cfg) -> None:
+    cfg.events.randomize_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "stiffness_distribution_params": DEPLOY_KP_RANGE,
+            "damping_distribution_params": DEPLOY_KD_RANGE,
+            "operation": "add",
+        },
+    )
+    print(f"[PaperArm] PD gains randomized per reset: Kp {DEPLOY_KP_RANGE}, Kd {DEPLOY_KD_RANGE}")
+
+
+@configclass
+class RobotSigmaVelFootRoughDeployEnvCfg(RobotSigmaVelFootRoughEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_estimator_noise(self)
+        _apply_actuator_delay(self)
+        _apply_gain_randomization(self)
+
+
+@configclass
+class RobotSigmaVelFootRoughDeployPlayEnvCfg(RobotSigmaVelFootRoughDeployEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
