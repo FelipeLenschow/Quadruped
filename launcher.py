@@ -353,6 +353,23 @@ def find_highest_step_checkpoint(run_dir):
         
     return os.path.abspath(all_pts[0]) if all_pts else None
 
+def unitree_tasks(module_path):
+    """Go2 task ids registered by unitree_rl_lab, read from source so Isaac Lab is not imported."""
+    init = os.path.join(module_path, "source", "unitree_rl_lab", "unitree_rl_lab", "tasks",
+                        "locomotion", "robots", "go2", "__init__.py")
+    try:
+        with open(init) as f:
+            found = re.findall(r'"(Unitree-Go2-[\w-]+)"', f.read())
+    except OSError:
+        found = []
+    return found or ["Unitree-Go2-Velocity-Sigma-Vel-Foot-Rough"]
+
+
+def unitree_experiment(task):
+    """rsl_rl's log folder for a task (cli_args.update_rsl_rl_cfg)."""
+    return task.lower().replace("-", "_")
+
+
 def prompt_auto_eval():
     """Offer to evaluate checkpoints in MuJoCo while training runs, but only where that can
     actually happen: eval_mujoco.py needs rclpy, which the Isaac venv does not have, so
@@ -633,12 +650,12 @@ def run_cli_menu():
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         # unitree_rl_lab lives here so its logs sit alongside the others (the eval viewer and the
         # checkpoint list both read it in place), but it is a separate upstream repo with its own
-        # train/play scripts and no Quadruped task package -- train and play here would fail on
-        # the missing source/Quadruped tree. Offer it only for the actions that load the
-        # checkpoint through Controller/policy_runner.py, which reads rsl_rl archives directly.
+        # rsl_rl scripts and no Quadruped task package. Train goes through its own
+        # scripts/rsl_rl/train.py; the rest load the checkpoint through
+        # Controller/policy_runner.py, which reads rsl_rl archives directly.
         # Deploy is one of them: its run's params/deploy.yaml (kp 25, kd 0.5, 50 Hz, action
         # scale 0.25, default pose) matches what real_driver.py and robot_defaults.py apply.
-        if "unitree_rl_lab" in modules and action not in ("eval_policy", "mujoco", "mujoco_twin", "real_deploy", "teleop_sweep"):
+        if "unitree_rl_lab" in modules and action not in ("train", "eval_policy", "mujoco", "mujoco_twin", "real_deploy", "teleop_sweep"):
             modules.remove("unitree_rl_lab")
         
         if not modules:
@@ -808,8 +825,29 @@ def run_cli_menu():
                 headless = input("Headless Mode? [Y/n] (default Y): ").lower().strip() != "n"
             else:
                 headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
-        
-        if action == "train":
+
+        if action == "train" and selected_module_name == "unitree_rl_lab":
+            robot_cfg = "UNITREE_GO2_CFG"
+            tasks = unitree_tasks(selected_module_path)
+            default_task = "Unitree-Go2-Velocity-Sigma-Vel-Foot-Rough"
+            if selected_ckpt:
+                exp = os.path.basename(os.path.dirname(os.path.dirname(selected_ckpt)))
+                default_task = next((t for t in tasks if unitree_experiment(t) == exp), default_task)
+            default_idx = tasks.index(default_task) + 1 if default_task in tasks else 1
+            print("Select Task:")
+            for i, t in enumerate(tasks):
+                print(f"  [{i+1}] {t}")
+            choice = input(f"Enter choice [1-{len(tasks)}] (default {default_idx}): ").strip() or str(default_idx)
+            try:
+                task = tasks[int(choice) - 1]
+            except (ValueError, IndexError):
+                task = tasks[default_idx - 1]
+            iters = input("Max iterations (default 3000): ").strip()
+            sweep_opts = {"task": task, "max_iterations": iters if iters.isdigit() else "3000"}
+            run_name = input("Enter Run Name (optional): ").strip()
+            auto_eval = prompt_auto_eval()
+
+        if action == "train" and selected_module_name != "unitree_rl_lab":
             # Dynamically extract phases from training_phases.yaml if available
             available_phases = ["phase1", "phase2", "phase3"] # fallback
             default_phase_idx = "3"
@@ -1156,7 +1194,32 @@ def main():
 
     robot_key = get_robot_key(robot_cfg)
 
-    if action == "train":
+    if action == "train" and module_name == "unitree_rl_lab":
+        task = (sweep_opts or {}).get("task") or "Unitree-Go2-Velocity-Sigma-Vel-Foot-Rough"
+        log_root = os.path.join(module_path, "logs", "rsl_rl", unitree_experiment(task))
+        cmd = [sys.executable, os.path.join("scripts", "rsl_rl", "train.py"), f"--task={task}"]
+        if num_envs:
+            cmd.append(f"--num_envs={num_envs}")
+        cmd.append(f"--max_iterations={(sweep_opts or {}).get('max_iterations') or 3000}")
+        if abs_ckpt:
+            cmd += ["--resume", f"--checkpoint={abs_ckpt}"]
+        if run_name:
+            cmd.append(f"--run_name={run_name}")
+        if headless:
+            cmd.append("--headless")
+        source_path = os.path.abspath(os.path.join(module_path, "source", "unitree_rl_lab"))
+        env["PYTHONPATH"] = f"{source_path}:{env['PYTHONPATH']}" if env.get("PYTHONPATH") else source_path
+        start_ts = time.time()
+        watcher = start_auto_eval_watcher(log_root, start_ts, robot_key, auto_eval, env) if auto_eval else None
+        try:
+            subprocess.run(cmd, env=env, cwd=module_path)
+        except KeyboardInterrupt:
+            print("\n[Launcher] Training interrupted by user.")
+            stop_auto_eval_watcher(watcher)
+        if watcher and watcher.poll() is None:
+            print("[Launcher] Background evaluation continues until pending checkpoints are done.")
+
+    elif action == "train":
         script_path = os.path.join("scripts", "skrl", "train.py")
         log_root = os.path.join(module_path, "logs", "skrl", "quadruped_direct")
         

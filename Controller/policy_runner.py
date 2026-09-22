@@ -213,6 +213,20 @@ class PolicyRunner:
             print(f"[PolicyRunner] Could not infer JIT obs_dim ({e}); falling back to 49.")
         return 49
 
+    @staticmethod
+    def _legacy_rsl_rl_archive(data):
+        """rsl_rl >= 4 saves actor_state_dict with mlp.* / obs_normalizer.* keys. Rename to the
+        model_state_dict layout (actor.*, actor_obs_normalizer.*) the loaders below read."""
+        if "actor_state_dict" not in data or "model_state_dict" in data:
+            return data
+        model_state = {}
+        for k, v in data["actor_state_dict"].items():
+            if k.startswith("mlp."):
+                model_state["actor." + k[4:]] = v
+            elif k.startswith("obs_normalizer."):
+                model_state["actor_obs_normalizer." + k[len("obs_normalizer."):].lstrip("_")] = v
+        return {**data, "model_state_dict": model_state}
+
     def _inspect_checkpoint(self, path):
         """Detect obs_dim and layer sizes from checkpoint keys and shapes."""
         self._ckpt_format = "skrl"
@@ -220,7 +234,7 @@ class PolicyRunner:
         obs_dim = 236
         layers = [512, 256, 128]  # Default fallback
         try:
-            data = torch.load(path, map_location="cpu")
+            data = self._legacy_rsl_rl_archive(torch.load(path, map_location="cpu"))
 
             # rsl_rl (unitree_rl_lab, and Isaac Lab's rsl_rl workflow) writes a different
             # archive than skrl: model_state_dict / optimizer_state_dict / iter / infos, with
@@ -495,7 +509,7 @@ class PolicyRunner:
 
     def _load_checkpoint(self, path):
         print(f"[PolicyRunner] Loading checkpoint weights from {path}")
-        data = torch.load(path, map_location=self.device)
+        data = self._legacy_rsl_rl_archive(torch.load(path, map_location=self.device))
         print(f"[PolicyRunner] Checkpoint keys: {list(data.keys())}")
 
         if getattr(self, "_ckpt_format", "skrl") == "rsl_rl":
