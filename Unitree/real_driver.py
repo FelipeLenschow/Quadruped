@@ -26,8 +26,8 @@ from pipeline import LocomotionPipeline
 # trained at 20 ms. It used to be every 4th tick of a 5 ms timer, and rclpy skips a timer's
 # missed periods instead of catching up -- so any tick that overran cost a whole 5 ms slot,
 # and the robot stepped at 25/30/35 ms (~34 Hz measured on 2026-09-22). The whole pipeline
-# step is ~1.6 ms on a desktop and a few ms on the Jetson -- far inside 20 ms, so on its own
-# timer it does not overrun (Tools/profile_control_loop.py measures it).
+# step is ~1.3 ms on a desktop and ~6 ms of compute on the Go2's Orin Nano -- inside 20 ms,
+# so on its own timer it does not overrun (Tools/profile_control_loop.py measures it).
 #
 # LOWCMD_DT only keeps the command stream to the motors fresh. The motors run the PD on the
 # last q/kp/kd they received, so resending the same targets changes no control; Unitree's
@@ -35,12 +35,19 @@ from pipeline import LocomotionPipeline
 POLICY_DT = 0.02
 LOWCMD_DT = 0.005
 
+# No LowState sample for this long means the stream has stalled (it normally arrives every 2 ms).
+LOWSTATE_STALE_S = 0.1
+
 # SDK2 Imports
 from unitree_sdk2py.core.channel import (
     ChannelPublisher,
-    ChannelSubscriber,
     ChannelFactoryInitialize,
 )
+from cyclonedds.core import Policy, Qos
+from cyclonedds.domain import DomainParticipant
+from cyclonedds.internal import InvalidSample
+from cyclonedds.sub import DataReader
+from cyclonedds.topic import Topic
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.utils.crc import CRC
@@ -57,8 +64,7 @@ class RealDriver(Node):
         # 1. SDK2 Initialization
         self.lowcmd_publisher = ChannelPublisher("rt/lowcmd", LowCmd_)
         self.lowcmd_publisher.Init()
-        self.lowstate_subscriber = ChannelSubscriber("rt/lowstate", LowState_)
-        self.lowstate_subscriber.Init(self.low_state_handler, 10)
+        self._init_lowstate_reader("rt/lowstate")
 
         self.low_state = None
         self.low_cmd = unitree_go_msg_dds__LowCmd_()
@@ -222,8 +228,50 @@ class RealDriver(Node):
             self.low_cmd.motor_cmd[i].kd = 0
             self.low_cmd.motor_cmd[i].tau = 0
 
-    def low_state_handler(self, msg: LowState_):
-        self.low_state = msg
+    def _init_lowstate_reader(self, topic):
+        """Reader for the robot's LowState, taken on demand once per policy step.
+
+        The SDK's ChannelSubscriber with a handler deserialises every sample in Python -- 500 a
+        second -- on a listener plus a reader thread, and only the last one before each policy
+        step was ever used. On the Go2's Orin Nano that background decoding cost ~5 ms per
+        policy step, mostly by holding the GIL while inference and the CRC waited for it.
+
+        KeepLast(1) keeps only the newest sample, so a take at the policy step returns the state
+        as it is now, and decodes it once. The estimator sees exactly what it did before: one
+        sample per step, the latest. The SDK wrapper only exposes a blocking take_one, hence a
+        plain cyclonedds reader; its participant joins the domain ChannelFactoryInitialize
+        configured (same id, same network interface).
+        """
+        participant = DomainParticipant(0)
+        self.lowstate_reader = DataReader(
+            participant,
+            Topic(participant, topic, LowState_),
+            qos=Qos(Policy.History.KeepLast(1)),
+        )
+        self._lowstate_participant = participant  # keep it alive with the reader
+        self._lowstate_time = None
+        self._lowstate_stale = False
+
+    def _read_low_state(self):
+        """Take the newest LowState if one arrived since the last step; never blocks.
+
+        No new sample keeps the previous one, as the old handler path silently did -- but a
+        stall longer than LOWSTATE_STALE_S is now reported, once, and so is its recovery.
+        """
+        samples = self.lowstate_reader.take(1)
+        now = time.monotonic()
+        if samples and not isinstance(samples[0], InvalidSample):
+            self.low_state = samples[0]
+            self._lowstate_time = now
+            if self._lowstate_stale:
+                self._lowstate_stale = False
+                self.get_logger().info("[RealDriver] LowState stream resumed.")
+        elif (self._lowstate_time is not None and not self._lowstate_stale
+              and now - self._lowstate_time > LOWSTATE_STALE_S):
+            self._lowstate_stale = True
+            self.get_logger().error(
+                f"[RealDriver] No LowState for {1000 * LOWSTATE_STALE_S:.0f} ms - the policy "
+                "is running on the last sample received.")
 
     def teleop_cb(self, msg):
         self.cmds_vel = np.array([msg.linear.x, msg.linear.y, msg.angular.z, 0.0])
@@ -317,7 +365,8 @@ class RealDriver(Node):
         self._publish_contact_calibration()
 
     def control_loop(self):
-        """One policy step (50 Hz): state -> pipeline -> targets, sent straight away."""
+        """One policy step (50 Hz): newest state -> pipeline -> targets to the motors -> telemetry."""
+        self._read_low_state()
         if self.low_state is None:
             return
 
@@ -335,15 +384,18 @@ class RealDriver(Node):
 
         raw_data = self._get_raw_sensor_data()
 
-        cmds = self.pipeline.step(
+        # The pipeline calls _send_targets as soon as the targets exist, ahead of its ROS
+        # publishing. Telemetry-only mode (no policy loaded) never writes to the motors.
+        self.pipeline.step(
             raw_state_kwargs=raw_data,
             cmd_vel=self.cmds_vel,
-            sim_time=time.time()
+            sim_time=time.time(),
+            send_cb=self._send_targets if "main" in self.pipeline.policy_manager.policies else None,
         )
 
-        if "main" in self.pipeline.policy_manager.policies:
-            self._last_targets = np.array(cmds, dtype=np.float32)
-            self.send_to_sdk(self._last_targets)
+    def _send_targets(self, targets):
+        self._last_targets = np.array(targets, dtype=np.float32)
+        self.send_to_sdk(self._last_targets)
 
     def lowcmd_loop(self):
         """Resend the latest targets (200 Hz) so the motors keep a fresh command stream.

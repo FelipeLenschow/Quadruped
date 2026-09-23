@@ -1537,8 +1537,8 @@ def main():
                 if ros_args:
                     reward_cmd.extend(["--ros-args"] + ros_args)
 
-            print("[Launcher] Starting Background Reward Estimator Node...")
-            reward_proc = subprocess.Popen(reward_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            # print("[Launcher] Starting Background Reward Estimator Node...")
+            # reward_proc = subprocess.Popen(reward_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
             time.sleep(0.5)
 
         if record_session:

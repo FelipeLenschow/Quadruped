@@ -150,7 +150,7 @@ class LocomotionPipeline:
             self.node.get_logger().warn(
                 f"[Pipeline] Unknown mode '{new_mode}'. Use 'pose' or 'policy'.")
 
-    def step(self, raw_state_kwargs, cmd_vel, sim_time):
+    def step(self, raw_state_kwargs, cmd_vel, sim_time, send_cb=None):
         """
         Executes one step of the pipeline.
 
@@ -158,6 +158,10 @@ class LocomotionPipeline:
             raw_state_kwargs: dict containing q, dq, quat, gyro, accel, pos, vel, contact, etc.
             cmd_vel: list/array of velocity commands [vx, vy, wz, unused]
             sim_time: current simulation or physical time
+            send_cb: optional callable(targets), run on a policy step the moment the final
+                targets exist -- before /commands/joint_commands and the telemetry are
+                published. The real driver writes to the motors here, so ROS publishing
+                (~2 ms on the Jetson) no longer sits between the state read and the command.
 
         Returns:
             latest_targets (np.ndarray): The target joint positions to send to the motors.
@@ -300,7 +304,7 @@ class LocomotionPipeline:
                     self.mode_transition_start_time = None
 
             self.latest_targets = final_targets
-            self.distributor.send(final_targets, max_torque)
+            self.distributor.send(final_targets, max_torque, send_to_robot_cb=send_cb)
 
         # 3. Telemetry Publishing
         if is_policy_step:
