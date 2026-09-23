@@ -13,26 +13,37 @@ Do not run it while real_driver.py is running on the same machine -- not for saf
 because the two would compete for the CPU and the numbers would mean nothing.
 
 Modes:
-  --mode tight   control_loop back-to-back: pure compute cost of each stage, no scheduling.
+  --mode suite   (default) the three phases below, one after the other, then a summary:
+                   1. tight loop -- pure compute cost of each stage, nothing else running
+                   2. the driver's timers, no LowState stream
+                   3. the driver's timers + a 500 Hz LowState stream, as on the robot
+  --mode tight   phase 1 only.
   --mode timer   the driver's own timers under rclpy.spin, exactly as deployed: reports the
                  policy-step period (target 20 ms) and the LowCmd write interval (target 5 ms).
 Options:
-  --lowstate_hz N    also stream LowState_ over SDK DDS into a ChannelSubscriber, like the
-                     robot's 500 Hz stream, to include its deserialisation cost.
+  --lowstate_hz N    (--mode timer) stream LowState_ at N Hz into a ChannelSubscriber, like the
+                     robot's 500 Hz rt/lowstate. The stream comes from a SEPARATE process, as
+                     the firmware's does on the robot, so only the receiving side -- the SDK
+                     subscriber deserialising every sample in Python -- competes with the loop,
+                     exactly as in real_driver.py.
   --torch_threads N  run the policy with N intra-op threads (sets QUADRUPED_TORCH_THREADS);
                      0 keeps PolicyRunner's default of 1. Use the core count (6 on the Go2's
                      Orin Nano) to reproduce the old multithreaded behaviour.
 
 Examples (inside the robot's Docker image, from the repo root):
-  python3 Tools/profile_control_loop.py --mode tight
+  python3 Tools/profile_control_loop.py
   python3 Tools/profile_control_loop.py --mode timer --seconds 20 --lowstate_hz 500
-  python3 Tools/profile_control_loop.py --mode timer --lowstate_hz 500 --torch_threads 6
+  OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python3 Tools/profile_control_loop.py --mode tight
 """
 import argparse
 import collections
+import contextlib
+import glob
+import io
 import os
+import re
+import subprocess
 import sys
-import threading
 import time
 
 import numpy as np
@@ -47,19 +58,21 @@ DEFAULT_CKPT = os.path.join(
     "IsaacLab_Tasks", "unitree_rl_lab", "logs", "rsl_rl",
     "unitree_go2_velocity_sigma_vel_foot_rough_deploy", "Noises", "model_2999.pt",
 )
+LOWSTATE_TOPIC = "rt/lowstate_profile_only"
+ROBOT_LOWSTATE_HZ = 500
+# SDK motor order (FR, FL, RR, RL x hip, thigh, calf), standing.
+STANCE_SDK = [-0.1, 0.8, -1.5, 0.1, 0.8, -1.5, -0.1, 1.0, -1.5, 0.1, 1.0, -1.5]
 
 ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-ap.add_argument("--mode", default="tight", choices=["tight", "timer"])
+ap.add_argument("--mode", default="suite", choices=["suite", "tight", "timer"])
 ap.add_argument("--pipeline_mode", default="policy", choices=["pose", "policy"])
-ap.add_argument("--seconds", type=float, default=15.0, help="duration of --mode timer")
-ap.add_argument("--steps", type=int, default=1000, help="policy steps in --mode tight")
+ap.add_argument("--seconds", type=float, default=15.0, help="duration of each timer phase")
+ap.add_argument("--steps", type=int, default=1000, help="policy steps in the tight phase")
 ap.add_argument("--lowstate_hz", type=float, default=0.0)
 ap.add_argument("--torch_threads", type=int, default=0)
 ap.add_argument("--ckpt", default=DEFAULT_CKPT, help="policy checkpoint (any format PolicyRunner loads)")
+ap.add_argument("--_lowstate_publisher", type=float, default=0.0, help=argparse.SUPPRESS)
 args = ap.parse_args()
-
-if args.torch_threads > 0:
-    os.environ["QUADRUPED_TORCH_THREADS"] = str(args.torch_threads)
 
 os.environ.pop("CYCLONEDDS_URI", None)
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber, ChannelFactoryInitialize
@@ -68,6 +81,31 @@ from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowCmd_, LowState_
 from unitree_sdk2py.utils.crc import CRC
 
 ChannelFactoryInitialize(0, "lo")
+
+
+def synthetic_low_state():
+    msg = unitree_go_msg_dds__LowState_()
+    for i, q in enumerate(STANCE_SDK):
+        msg.motor_state[i].q = q
+    msg.imu_state.quaternion = [1.0, 0.0, 0.0, 0.0]
+    msg.imu_state.accelerometer = [0.0, 0.0, 9.81]
+    msg.foot_force = [30, 30, 30, 30]  # above the gate on all four feet: 4 LKF updates/step
+    return msg
+
+
+if args._lowstate_publisher:
+    # Child process standing in for the robot firmware's rt/lowstate. Runs until killed.
+    pub = ChannelPublisher(LOWSTATE_TOPIC, LowState_)
+    pub.Init()
+    msg = synthetic_low_state()
+    period, nxt = 1.0 / args._lowstate_publisher, time.perf_counter()
+    while True:
+        pub.Write(msg)
+        nxt += period
+        time.sleep(max(0.0, nxt - time.perf_counter()))
+
+if args.torch_threads > 0:
+    os.environ["QUADRUPED_TORCH_THREADS"] = str(args.torch_threads)
 
 os.environ["ROS_DOMAIN_ID"] = "77"
 import rclpy
@@ -105,6 +143,7 @@ class ProfDriver(rd.RealDriver):
 
     def __init__(self):
         Node.__init__(self, "real_driver_profile")
+        self.get_logger().set_level(rclpy.logging.LoggingSeverity.WARN)
         self.robot_type = "go2"
         self.lowcmd_publisher = ChannelPublisher("rt/lowcmd_profile_only", LowCmd_)
         self.lowcmd_publisher.Init()
@@ -129,19 +168,17 @@ class ProfDriver(rd.RealDriver):
         self._last_targets = None
 
 
-drv = ProfDriver()
+build_log = io.StringIO()
+with contextlib.redirect_stdout(build_log):
+    drv = ProfDriver()
 if "main" not in drv.pipeline.policy_manager.policies:
-    sys.exit(f"Policy failed to load from {args.ckpt} -- see the PolicyManager error above.")
+    print(build_log.getvalue())
+    sys.exit(f"Policy failed to load from {args.ckpt} -- see the log above.")
+for line in build_log.getvalue().splitlines():
+    if "layout" in line and "Using" not in line or "WARNING" in line:
+        print(line)
 
-# Synthetic standing LowState_, SDK motor order (FR, FL, RR, RL x hip, thigh, calf).
-low_state = unitree_go_msg_dds__LowState_()
-STANCE_SDK = [-0.1, 0.8, -1.5, 0.1, 0.8, -1.5, -0.1, 1.0, -1.5, 0.1, 1.0, -1.5]
-for i, q in enumerate(STANCE_SDK):
-    low_state.motor_state[i].q = q
-low_state.imu_state.quaternion = [1.0, 0.0, 0.0, 0.0]
-low_state.imu_state.accelerometer = [0.0, 0.0, 9.81]
-low_state.foot_force = [30, 30, 30, 30]  # above the gate on all four feet: 4 LKF updates/step
-drv.low_state = low_state
+drv.low_state = synthetic_low_state()
 rng = np.random.default_rng(0)
 
 # Fake console: heartbeat always fresh, 55 % torque, chosen pipeline mode.
@@ -204,72 +241,155 @@ def lowcmd_loop():
 
 drv.control_loop, drv.lowcmd_loop = control_loop, lowcmd_loop
 
-# Optional LowState stream, like the robot's 500 Hz rt/lowstate, into an SDK subscriber.
-stop = threading.Event()
-received = [0]
-if args.lowstate_hz > 0:
-    ls_pub = ChannelPublisher("rt/lowstate_profile_only", LowState_)
-    ls_pub.Init()
-    ls_sub = ChannelSubscriber("rt/lowstate_profile_only", LowState_)
-    ls_sub.Init(lambda msg: received.__setitem__(0, received[0] + 1), 10)
 
-    def stream():
-        period, nxt = 1.0 / args.lowstate_hz, time.perf_counter()
-        while not stop.is_set():
-            ls_pub.Write(low_state)
-            nxt += period
-            time.sleep(max(0.0, nxt - time.perf_counter()))
+# --------------------------------------------------------------------------- environment
+def process_threads():
+    with open("/proc/self/status") as f:
+        return int(re.search(r"Threads:\s+(\d+)", f.read()).group(1))
 
-    # In-process, so the publisher's serialisation also costs this process GIL time -- a
-    # little pessimistic next to the robot, where the firmware publishes.
-    threading.Thread(target=stream, daemon=True).start()
 
-print(f"\ntorch intra-op threads: {torch.get_num_threads()} | mode={args.mode} "
-      f"pipeline={args.pipeline_mode} lowstate_hz={args.lowstate_hz:g} | usable cpus={len(os.sched_getaffinity(0))}")
+def environment_report():
+    cfg = torch.__config__.show()
+    blas = re.search(r"BLAS_INFO=(\w+)", cfg)
+    print(f"torch {torch.__version__} | BLAS {blas.group(1) if blas else '?'} | "
+          f"OpenMP {'on' if 'USE_OPENMP=ON' in cfg else 'off'} | "
+          f"intra-op threads {torch.get_num_threads()} | "
+          f"OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS', '-')} "
+          f"OPENBLAS_NUM_THREADS={os.environ.get('OPENBLAS_NUM_THREADS', '-')}")
+    try:
+        cpus = sorted(glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq"))
+        govs = {open(f"{c}/scaling_governor").read().strip() for c in cpus}
+        cur = [int(open(f"{c}/scaling_cur_freq").read()) / 1000 for c in cpus]
+        mx = [int(open(f"{c}/scaling_max_freq").read()) / 1000 for c in cpus]
+        print(f"CPU: {len(os.sched_getaffinity(0))} usable | governor {','.join(sorted(govs))} | "
+              f"now {min(cur):.0f}-{max(cur):.0f} MHz of max {max(mx):.0f} MHz")
+    except (OSError, ValueError):
+        print(f"CPU: {len(os.sched_getaffinity(0))} usable | frequency not readable here")
 
-# --------------------------------------------------------------------------- run
-if args.mode == "tight":
-    for _ in range(50):
-        drv.control_loop()
-    T.clear()
-    policy_stamps.clear()
-    write_stamps.clear()
-    for _ in range(args.steps):
+
+# --------------------------------------------------------------------------- phases
+def run_tight(steps):
+    for _ in range(steps):
         drv.control_loop()
         for _ in range(round(rd.POLICY_DT / rd.LOWCMD_DT) - 1):
             drv.lowcmd_loop()
-else:
-    drv.create_timer(rd.POLICY_DT, drv.control_loop)
-    drv.create_timer(rd.LOWCMD_DT, drv.lowcmd_loop)
-    t_end = time.time() + args.seconds
+
+
+def run_timer(seconds):
+    timers = [drv.create_timer(rd.POLICY_DT, drv.control_loop),
+              drv.create_timer(rd.LOWCMD_DT, drv.lowcmd_loop)]
+    t_end = time.time() + seconds
     while time.time() < t_end:
         rclpy.spin_once(drv, timeout_sec=0.1)
-stop.set()
+    for timer in timers:
+        drv.destroy_timer(timer)
 
-# --------------------------------------------------------------------------- report
-print(f"\n{'stage':28s} {'loop':8s} {'n':>6s} {'mean ms':>8s} {'p50':>7s} {'p95':>7s} {'p99':>7s} {'max':>7s}")
-ORDER = ["TOTAL", "raw sensor read", "process_state (incl. LKF)", "  LKF update", "policy / pose step",
-         "  build_obs", "  inference", "safety.process", "distributor.send", "telemetry.publish",
-         "send_to_sdk", "  CRC pack + crc", "  DDS write"]
-for stage in ORDER:
-    for loop in ("control", "lowcmd"):
-        x = T.get((stage, loop))
-        if not x:
-            continue
-        x = 1000 * np.asarray(x)
-        print(f"{stage:28s} {loop:8s} {len(x):6d} {x.mean():8.3f} {np.median(x):7.3f} "
-              f"{np.percentile(x, 95):7.3f} {np.percentile(x, 99):7.3f} {x.max():7.2f}")
 
-if args.mode == "timer" and len(policy_stamps) > 10:
-    d = 1000 * np.diff(policy_stamps)
-    print(f"\npolicy step period : median {np.median(d):.2f} ms, mean {d.mean():.2f} ms "
-          f"-> {1000 / d.mean():.1f} Hz (target {1000 * rd.POLICY_DT:.0f} ms)")
-    print(f"  late steps       : >22 ms {np.sum(d > 22)}, >25 ms {np.sum(d > 25)}, max {d.max():.1f} ms "
-          f"of {len(d)}")
-    w = 1000 * np.diff(write_stamps)
-    print(f"LowCmd write gap   : median {np.median(w):.2f} ms, p99 {np.percentile(w, 99):.2f} ms, "
-          f"max {w.max():.2f} ms -> {len(write_stamps) / args.seconds:.0f} writes/s "
-          f"(Unitree asks for a write every 1-10 ms)")
-    print(f"  gaps > 10 ms     : {np.sum(w > 10)} of {len(w)}")
-if args.lowstate_hz > 0:
-    print(f"LowState samples delivered: {received[0]}")
+def start_lowstate_stream(hz):
+    """Publisher in a child process, subscriber (with a handler, as real_driver has) here."""
+    child = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--_lowstate_publisher", str(hz)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    received = [0]
+    sub = ChannelSubscriber(LOWSTATE_TOPIC, LowState_)
+    sub.Init(lambda msg: received.__setitem__(0, received[0] + 1), 10)
+    t_end = time.time() + 30.0
+    while received[0] < 100 and time.time() < t_end:
+        time.sleep(0.1)
+    if received[0] < 100:
+        print("WARNING: the LowState stream did not start; this phase runs without it.")
+    return child, sub, received
+
+
+def reset_stats():
+    T.clear()
+    policy_stamps.clear()
+    write_stamps.clear()
+
+
+def report(title, seconds=None):
+    """Per-stage table; returns the numbers the suite summary needs."""
+    print(f"\n=== {title}")
+    print(f"{'stage':28s} {'loop':8s} {'n':>6s} {'mean ms':>8s} {'p50':>7s} {'p95':>7s} {'p99':>7s} {'max':>7s}")
+    order = ["TOTAL", "raw sensor read", "process_state (incl. LKF)", "  LKF update", "policy / pose step",
+             "  build_obs", "  inference", "safety.process", "distributor.send", "telemetry.publish",
+             "send_to_sdk", "  CRC pack + crc", "  DDS write"]
+    for stage in order:
+        for loop in ("control", "lowcmd"):
+            x = T.get((stage, loop))
+            if not x:
+                continue
+            x = 1000 * np.asarray(x)
+            print(f"{stage:28s} {loop:8s} {len(x):6d} {x.mean():8.3f} {np.median(x):7.3f} "
+                  f"{np.percentile(x, 95):7.3f} {np.percentile(x, 99):7.3f} {x.max():7.2f}")
+
+    def ms(key):
+        x = 1000 * np.asarray(T.get(key) or [np.nan])
+        return x.mean(), np.percentile(x, 99)
+
+    out = {"step": ms(("TOTAL", "control")), "inference": ms(("  inference", "control")),
+           "lkf": ms(("  LKF update", "control")), "hz": np.nan, "late": np.nan,
+           "gap_max": np.nan, "gaps10": np.nan}
+    if seconds and len(policy_stamps) > 10:
+        d = 1000 * np.diff(policy_stamps)
+        w = 1000 * np.diff(write_stamps)
+        out.update(hz=1000 / d.mean(), late=int(np.sum(d > 22)), gap_max=w.max(), gaps10=int(np.sum(w > 10)))
+        print(f"policy step period : median {np.median(d):.2f} ms, mean {d.mean():.2f} ms "
+              f"-> {out['hz']:.1f} Hz (target {1000 * rd.POLICY_DT:.0f} ms)")
+        print(f"  late steps       : >22 ms {out['late']}, >25 ms {np.sum(d > 25)}, max {d.max():.1f} ms "
+              f"of {len(d)}")
+        print(f"LowCmd write gap   : median {np.median(w):.2f} ms, p99 {np.percentile(w, 99):.2f} ms, "
+              f"max {w.max():.2f} ms -> {len(write_stamps) / seconds:.0f} writes/s "
+              f"(Unitree asks for a write every 1-10 ms)")
+        print(f"  gaps > 10 ms     : {out['gaps10']} of {len(w)}")
+    return out
+
+
+# --------------------------------------------------------------------------- run
+environment_report()
+threads_before = process_threads()
+for _ in range(50):  # warm-up: first inference, lazy thread pools, caches
+    drv.control_loop()
+print(f"process threads: {threads_before} before the first inference, {process_threads()} after "
+      f"(a jump means torch/BLAS started its own worker pool)")
+print(f"mode={args.mode} pipeline={args.pipeline_mode}")
+reset_stats()
+
+children = []
+try:
+    if args.mode == "tight":
+        run_tight(args.steps)
+        report(f"tight loop, {args.steps} policy steps")
+    elif args.mode == "timer":
+        if args.lowstate_hz > 0:
+            child, _sub, received = start_lowstate_stream(args.lowstate_hz)
+            children.append(child)
+            reset_stats()
+        run_timer(args.seconds)
+        report(f"driver timers, {args.seconds:g} s, LowState stream {args.lowstate_hz:g} Hz", args.seconds)
+    else:
+        summary = []
+        run_tight(args.steps)
+        summary.append(("1 tight loop", report(f"1/3 tight loop, {args.steps} policy steps")))
+        reset_stats()
+        run_timer(args.seconds)
+        summary.append(("2 timers", report(f"2/3 driver timers, {args.seconds:g} s, no LowState stream",
+                                           args.seconds)))
+        child, _sub, received = start_lowstate_stream(ROBOT_LOWSTATE_HZ)
+        children.append(child)
+        reset_stats()
+        n0 = received[0]
+        run_timer(args.seconds)
+        summary.append(("3 timers+LowState", report(
+            f"3/3 driver timers, {args.seconds:g} s, {ROBOT_LOWSTATE_HZ} Hz LowState from another process "
+            f"({(received[0] - n0) / args.seconds:.0f} samples/s received)", args.seconds)))
+
+        print(f"\n=== summary (ms: mean / p99)")
+        print(f"{'phase':20s} {'control step':>15s} {'inference':>15s} {'LKF':>7s} {'policy Hz':>10s} "
+              f"{'late >22ms':>11s} {'LowCmd max gap':>15s} {'gaps >10ms':>11s}")
+        for name, s in summary:
+            print(f"{name:20s} {s['step'][0]:7.2f} /{s['step'][1]:6.2f} {s['inference'][0]:7.2f} /{s['inference'][1]:6.2f} "
+                  f"{s['lkf'][0]:7.2f} {s['hz']:10.1f} {s['late']:11} {s['gap_max']:15.2f} {s['gaps10']:11}")
+finally:
+    for child in children:
+        child.terminate()
+        child.wait(timeout=5)
