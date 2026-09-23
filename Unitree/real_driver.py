@@ -20,6 +20,21 @@ sys.path.append(
 
 from pipeline import LocomotionPipeline
 
+# Two clocks, deliberately separate.
+#
+# POLICY_DT is the policy step, and the one period that has to hold exactly: every policy is
+# trained at 20 ms. It used to be every 4th tick of a 5 ms timer, and rclpy skips a timer's
+# missed periods instead of catching up -- so any tick that overran cost a whole 5 ms slot,
+# and the robot stepped at 25/30/35 ms (~34 Hz measured on 2026-09-22). The whole pipeline
+# step is ~1.6 ms on a desktop and a few ms on the Jetson -- far inside 20 ms, so on its own
+# timer it does not overrun (Tools/profile_control_loop.py measures it).
+#
+# LOWCMD_DT only keeps the command stream to the motors fresh. The motors run the PD on the
+# last q/kp/kd they received, so resending the same targets changes no control; Unitree's
+# low-level example asks for a write every 1-10 ms, and this stays inside that.
+POLICY_DT = 0.02
+LOWCMD_DT = 0.005
+
 # SDK2 Imports
 from unitree_sdk2py.core.channel import (
     ChannelPublisher,
@@ -81,7 +96,7 @@ class RealDriver(Node):
                 checkpoint=internal_policy,
                 obs_dim=obs_dim,
                 use_estimator=True,  # Usually True on physical hardware
-                sim_dt=0.005
+                sim_dt=POLICY_DT
             )
         except ImportError:
             self.get_logger().error("[RealDriver] PyTorch not found. Internal policy disabled. Running in TELEMETRY ONLY mode.")
@@ -91,10 +106,13 @@ class RealDriver(Node):
                 checkpoint=None,
                 obs_dim=obs_dim,
                 use_estimator=True,
-                sim_dt=0.005
+                sim_dt=POLICY_DT
             )
-        self.pipeline.decimation = 4  # 200 Hz loop / 4 = 50 Hz policy
-        self.pipeline.policy_dt = self.pipeline.decimation * self.pipeline.sim_dt
+        # Every control_loop call is a policy step. The simulators still step the pipeline once
+        # per physics step with a decimation; here nothing between policy steps needs the
+        # pipeline -- the motors run the PD themselves -- so it gets its own 50 Hz timer.
+        self.pipeline.decimation = 1
+        self.pipeline.policy_dt = POLICY_DT
 
         # 4. Teleop Subscription
         self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
@@ -150,7 +168,7 @@ class RealDriver(Node):
         # for all four so contact still works from the first tick.
         self.fsr_offset = np.full(4, _fsr_bias, dtype=np.float64)
         self._calib_samples = []
-        self._calib_n = max(0, int(round(self._calib_time / 0.005)))  # 200 Hz loop
+        self._calib_n = max(0, int(round(self._calib_time / POLICY_DT)))  # one sample per control_loop
         self._calib_done = self._calib_n == 0
         self.get_logger().info(
             f"[RealDriver] Contact threshold: {self.contact_threshold:.0f} counts "
@@ -166,7 +184,6 @@ class RealDriver(Node):
         # guessing: watch /sensors/foot_force while loading each foot.
         self.foot_force_pub = self.create_publisher(
             Float32MultiArray, "/sensors/foot_force", 10)
-        self._ff_tick = 0
 
         # The gate itself - [threshold, offset x4] - broadcast at 1 Hz. The twin
         # viewer runs on the operator's laptop, off a DIFFERENT Configs/config.yaml
@@ -184,9 +201,11 @@ class RealDriver(Node):
 
         # 5. Initialization logic for SDK
         self._init_low_cmd()
+        self._last_targets = None  # latest joint targets, resent by lowcmd_loop
 
-        # 6. Control Loop (200Hz to match simulation)
-        self.create_timer(0.005, self.control_loop)
+        # 6. Control loops -- see POLICY_DT / LOWCMD_DT at the top of the file.
+        self.create_timer(POLICY_DT, self.control_loop)
+        self.create_timer(LOWCMD_DT, self.lowcmd_loop)
         self.get_logger().info(
             f"[RealDriver] Initialized for {robot}. Ready for deployment."
         )
@@ -241,14 +260,12 @@ class RealDriver(Node):
             if not self._calib_done:
                 self._collect_fsr_sample(fsr)
 
-            # 200 Hz loop -> publish at 50 Hz. Raw, uncorrected: the offsets go
+            # Published every policy step (50 Hz). Raw, uncorrected: the offsets go
             # out on /sensors/foot_force_calibration, so a recording keeps what
             # the sensor said and stays comparable with the simulated FSR.
-            self._ff_tick += 1
-            if self._ff_tick % 4 == 0:
-                msg = Float32MultiArray()
-                msg.data = [float(v) for v in fsr]
-                self.foot_force_pub.publish(msg)
+            msg = Float32MultiArray()
+            msg.data = [float(v) for v in fsr]
+            self.foot_force_pub.publish(msg)
 
             contact = [float(m) for m in (fsr - self.fsr_offset > self.contact_threshold)]
         # print(q)
@@ -300,7 +317,7 @@ class RealDriver(Node):
         self._publish_contact_calibration()
 
     def control_loop(self):
-        """Internal inference logic."""
+        """One policy step (50 Hz): state -> pipeline -> targets, sent straight away."""
         if self.low_state is None:
             return
 
@@ -309,7 +326,7 @@ class RealDriver(Node):
             if not hasattr(self, "_startup_ticks"):
                 self._startup_ticks = 0
             self._startup_ticks += 1
-            if self._startup_ticks >= 20: # 100ms at 200Hz
+            if self._startup_ticks >= round(0.1 / POLICY_DT):  # 100 ms
                 self._startup_console_check = False
                 if self.count_publishers("/safety/heartbeat") > 0:
                     self.get_logger().error("[Safety] Console was detected running before driver! Exiting driver for safety.")
@@ -323,9 +340,20 @@ class RealDriver(Node):
             cmd_vel=self.cmds_vel,
             sim_time=time.time()
         )
-        
+
         if "main" in self.pipeline.policy_manager.policies:
-            self.send_to_sdk(cmds)
+            self._last_targets = np.array(cmds, dtype=np.float32)
+            self.send_to_sdk(self._last_targets)
+
+    def lowcmd_loop(self):
+        """Resend the latest targets (200 Hz) so the motors keep a fresh command stream.
+
+        Goes through send_to_sdk, so kp/kd vs emergency damping is decided on every write:
+        an E-stop latched between policy steps reaches the motors within LOWCMD_DT.
+        """
+        if self._last_targets is None:
+            return
+        self.send_to_sdk(self._last_targets)
 
     def send_to_sdk(self, joint_targets):
         """Map ROS Type-Grouped targets to SDK2 motor commands."""
@@ -373,7 +401,7 @@ class RealDriver(Node):
 
         if desired_brightness != self._current_brightness:
             self._current_brightness = desired_brightness
-            # Run in a background thread to avoid blocking the 200Hz loop
+            # Run in a background thread to avoid blocking the control loops
             threading.Thread(target=self.vui.SetBrightness, args=(desired_brightness,), daemon=True).start()
 
         self.low_cmd.crc = self.crc.Crc(self.low_cmd)

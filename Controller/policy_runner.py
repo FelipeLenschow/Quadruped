@@ -72,6 +72,15 @@ class PolicyRunner:
         decimation=4,
     ):
         print(f"[PolicyRunner] __init__ called for {checkpoint_path}")
+
+        # One intra-op thread. torch defaults to one per core, and splitting a batch-1 MLP
+        # across all of them costs far more in thread wake-ups than the matmuls themselves:
+        # 2.5 ms mean / 17 ms max per forward against 0.1 ms single-threaded. The drivers
+        # clock the policy off a 5 ms timer, and every tick that overruns drops a whole
+        # slot, which is how the real robot ended up stepping at ~34 Hz instead of 50.
+        # Process-wide on purpose: nothing else in a driver process uses torch.
+        torch.set_num_threads(int(os.environ.get("QUADRUPED_TORCH_THREADS", 1)))
+
         self.verbose = verbose
         self.device = device
         self.checkpoint_path = checkpoint_path
