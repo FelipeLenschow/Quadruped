@@ -21,6 +21,10 @@ try:
     from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 except ImportError:
     from isaaclab.utils.noise import UniformNoiseCfg as Unoise
+try:
+    from isaaclab.utils.noise import AdditiveGaussianNoiseCfg as Gnoise
+except ImportError:
+    from isaaclab.utils.noise import GaussianNoiseCfg as Gnoise
 
 from unitree_rl_lab.assets.robots.unitree import UNITREE_GO2_CFG as ROBOT_CFG
 from unitree_rl_lab.tasks.locomotion import mdp
@@ -708,15 +712,30 @@ class RobotSigmaVelFootRoughPlayEnvCfg(RobotSigmaVelFootRoughEnvCfg):
 # trained that way, leans on it hard -- on the robot its thigh targets move 1-2.4 rad per m/s of
 # estimated forward velocity, against 0.1-0.2 rad for Final7 -- and on hardware that input is a
 # Kalman estimate driven by leg odometry, so the policy closes a loop through its own leg motion
-# and oscillates at standstill. This arm trains the same task with the three things Final7 had
-# and this one does not: noise and drift on the velocity estimate, actuator latency, and PD gains
-# that are not exactly the deployed 25 / 0.5.
+# and oscillates at standstill. This arm adds what Final7 had and this one did not: a sensor
+# model with drift, actuator latency, randomized PD gains, and inertia that is not nominal.
+#
+# The defaults are Final7's values as it actually ran, which means its yaml numbers times its
+# observation_noise_scale of 1.25. Its per-channel WHITE noise is not repeated here except on
+# base_lin_vel: unitree's stock policy group already carries more than Final7 did on every other
+# channel (ang_vel +-0.2 against sigma 0.0375, joint_vel +-1.5 against sigma 0.375).
 
-# Unoise half-width, m/s. Final7's effective value was 0.125 (0.10 x observation_noise_scale 1.25).
+# Gaussian sigma, m/s -- Final7 used 0.1 x 1.25. A Unoise half-width of the same number would be
+# 1.7x weaker (sigma = a / sqrt(3)), which is why this one channel is Gaussian.
 DEPLOY_LIN_VEL_NOISE = float(os.environ.get("PAPER_DEPLOY_LIN_VEL_NOISE", 0.125))
-# Per-episode constant offset, m/s. Final7 used 0.05. Estimator drift is not zero-mean within an
-# episode, which is what makes a policy stop trusting the channel step to step.
-DEPLOY_LIN_VEL_BIAS = float(os.environ.get("PAPER_DEPLOY_LIN_VEL_BIAS", 0.05))
+# Per-episode constant offsets, uniform +-value. Estimator drift, gyro bias, IMU mounting tilt,
+# and the Unitree zero-point calibration, which is per joint and the one hardware error a
+# position-controlled policy cannot see at all.
+DEPLOY_LIN_VEL_BIAS = float(os.environ.get("PAPER_DEPLOY_LIN_VEL_BIAS", 0.0625))
+DEPLOY_ANG_VEL_BIAS = float(os.environ.get("PAPER_DEPLOY_ANG_VEL_BIAS", 0.025))
+# Gaussian sigma on the gyro, rad/s. unitree ships +-0.2 uniform (sigma 0.115), which is ~10x a
+# real Go2 IMU and 3x what Final7 used. It costs nothing while the policy only has to hit yaw
+# rates near 1 rad/s, but the deficit is at 0.1-0.3 rad/s, and a policy cannot close a loop on a
+# rate it cannot see. Measured: this does not change what an already-trained policy outputs
+# (0.2 rad/s command, corruption off vs on: 0.040 vs 0.043) -- it is about what can be learned.
+DEPLOY_ANG_VEL_NOISE = float(os.environ.get("PAPER_DEPLOY_ANG_VEL_NOISE", 0.04))
+DEPLOY_GRAVITY_BIAS = float(os.environ.get("PAPER_DEPLOY_GRAVITY_BIAS", 0.025))
+DEPLOY_JOINT_POS_BIAS = float(os.environ.get("PAPER_DEPLOY_JOINT_POS_BIAS", 0.019))
 # Actuator command latency, in PHYSICS steps (sim.dt = 5 ms, so 5 = 25 ms). The robot's control
 # loop measures ~29 ms per step, and the policy that shook had trained with none.
 DEPLOY_MIN_DELAY = int(os.environ.get("PAPER_DEPLOY_MIN_DELAY", 0))
@@ -724,23 +743,57 @@ DEPLOY_MAX_DELAY = int(os.environ.get("PAPER_DEPLOY_MAX_DELAY", 5))
 # Added to the nominal gains at every reset. Final7: +-5 on Kp 25, +-0.2 on Kd 0.5.
 DEPLOY_KP_RANGE = (-float(os.environ.get("PAPER_DEPLOY_KP", 5.0)), float(os.environ.get("PAPER_DEPLOY_KP", 5.0)))
 DEPLOY_KD_RANGE = (-float(os.environ.get("PAPER_DEPLOY_KD", 0.2)), float(os.environ.get("PAPER_DEPLOY_KD", 0.2)))
+# Base centre of mass, m from nominal: fore/aft may legitimately skew, lateral stays centred.
+DEPLOY_COM_X = float(os.environ.get("PAPER_DEPLOY_COM_X", 0.05))
+DEPLOY_COM_Y = float(os.environ.get("PAPER_DEPLOY_COM_Y", 0.03))
+# The Go2 USD has zero armature and zero viscous damping on every joint. The menagerie MuJoCo
+# model carries armature 0.01 and damping 2.0, but eval_mujoco.py zeroes the damping (and sets
+# frictionloss to 0.01) before it runs, so the eval sweep does not see it. Neither number has
+# been identified on the robot; these ranges are there for robustness and include zero. A
+# swing-leg torque/velocity fit against the deployment logs would pin them.
+DEPLOY_ARMATURE = (
+    float(os.environ.get("PAPER_DEPLOY_ARMATURE_LO", 0.005)),
+    float(os.environ.get("PAPER_DEPLOY_ARMATURE_HI", 0.02)),
+)
+DEPLOY_VISCOUS = (
+    float(os.environ.get("PAPER_DEPLOY_VISCOUS_LO", 0.0)),
+    float(os.environ.get("PAPER_DEPLOY_VISCOUS_HI", 1.0)),
+)
+# Added to each joint's friction coefficient. Never negative, so this is a one-sided range.
+DEPLOY_JOINT_FRICTION = (
+    float(os.environ.get("PAPER_DEPLOY_JOINT_FRICTION_LO", 0.03)),
+    float(os.environ.get("PAPER_DEPLOY_JOINT_FRICTION_HI", 0.5)),
+)
 
 
-def _apply_estimator_noise(cfg) -> None:
-    """Replace the actor's exact base_lin_vel with an estimate: white noise plus episode drift.
+def _bias_term(term, bias: float) -> None:
+    """Wrap an observation term in mdp.biased_obs, keeping its noise, scale and clip."""
+    term.params = {"func": term.func, "bias": bias, **term.params}
+    term.func = mdp.biased_obs
 
-    Reassigning the attribute keeps its slot in the group's declaration order, so the 48-wide
-    deployment layout is unchanged and Controller/policy_runner.py still feeds this policy.
+
+def _apply_sensor_model(cfg) -> None:
+    """Turn the actor's exact measurements into estimates: drift on four channels, noise on one.
+
+    Mutating the terms in place keeps their slots in the group's declaration order, so the
+    48-wide deployment layout is unchanged and Controller/policy_runner.py still feeds this
+    policy without knowing any of this happened.
     """
-    cfg.observations.policy.base_lin_vel = ObsTerm(
-        func=mdp.base_lin_vel_estimate,
-        clip=(-100, 100),
-        params={"bias": DEPLOY_LIN_VEL_BIAS},
-        noise=Unoise(n_min=-DEPLOY_LIN_VEL_NOISE, n_max=DEPLOY_LIN_VEL_NOISE) if DEPLOY_LIN_VEL_NOISE else None,
-    )
+    policy = cfg.observations.policy
+    _bias_term(policy.base_lin_vel, DEPLOY_LIN_VEL_BIAS)
+    _bias_term(policy.base_ang_vel, DEPLOY_ANG_VEL_BIAS)
+    _bias_term(policy.projected_gravity, DEPLOY_GRAVITY_BIAS)
+    _bias_term(policy.joint_pos_rel, DEPLOY_JOINT_POS_BIAS)
+    policy.base_lin_vel.noise = Gnoise(std=DEPLOY_LIN_VEL_NOISE) if DEPLOY_LIN_VEL_NOISE else None
+    policy.base_ang_vel.noise = Gnoise(std=DEPLOY_ANG_VEL_NOISE) if DEPLOY_ANG_VEL_NOISE else None
     print(
-        f"[PaperArm] base_lin_vel is an estimate: Unoise +-{DEPLOY_LIN_VEL_NOISE} m/s,"
+        f"[PaperArm] base_lin_vel is an estimate: Gaussian sigma {DEPLOY_LIN_VEL_NOISE} m/s,"
         f" per-episode bias +-{DEPLOY_LIN_VEL_BIAS} m/s"
+    )
+    print(f"[PaperArm] gyro noise: Gaussian sigma {DEPLOY_ANG_VEL_NOISE} rad/s")
+    print(
+        f"[PaperArm] per-episode bias: ang_vel +-{DEPLOY_ANG_VEL_BIAS} rad/s,"
+        f" gravity +-{DEPLOY_GRAVITY_BIAS}, joint_pos +-{DEPLOY_JOINT_POS_BIAS} rad per joint"
     )
 
 
@@ -774,13 +827,227 @@ def _apply_gain_randomization(cfg) -> None:
     print(f"[PaperArm] PD gains randomized per reset: Kp {DEPLOY_KP_RANGE}, Kd {DEPLOY_KD_RANGE}")
 
 
+# Foot spin friction, as a PhysX contact-patch radius in metres. A point contact resists no
+# rotation about its own normal at all, so in sim the feet are free to spin in place and the
+# policy learns a yaw that the real rubber foot, with a centimetre-wide patch under load, does
+# not give it back. torsional_patch_radius scales with penetration; min_torsional_patch_radius
+# is the floor that applies regardless, and on near-rigid feet it is the one that bites.
+DEPLOY_FOOT_TORSION = float(os.environ.get("PAPER_DEPLOY_FOOT_TORSION", 0.02))
+DEPLOY_FOOT_TORSION_MIN = float(os.environ.get("PAPER_DEPLOY_FOOT_TORSION_MIN", 0.01))
+
+
+# Tolerance exponent for the YAW tracking kernel only: denominator = std^2 * |wz_cmd|^exp.
+# The shipped exponent of 1 makes a small yaw command cheap to ignore -- at a 0.2 rad/s command
+# the arm that turns at 0.06 rad/s (30% of what was asked) still collects 68% of the yaw reward.
+# At exponent 2 the kernel is scale-invariant, the same 30% collects 14%, and the tolerance at
+# 1 rad/s is untouched (0.94 either way), which is where tracking is already physics-limited.
+DEPLOY_ANG_SIGMA_EXP = float(os.environ.get("PAPER_DEPLOY_ANG_SIGMA_EXP", 2.0))
+DEPLOY_ANG_STD = float(os.environ.get("PAPER_DEPLOY_ANG_STD", math.sqrt(0.25)))
+
+
+def _apply_yaw_tracking(cfg) -> None:
+    cfg.rewards.track_ang_vel_z.params = {
+        "command_name": "base_velocity",
+        "std": DEPLOY_ANG_STD,
+        "sigma_exp": DEPLOY_ANG_SIGMA_EXP,
+    }
+    print(f"[PaperArm] yaw tracking kernel: std {DEPLOY_ANG_STD}, sigma_exp {DEPLOY_ANG_SIGMA_EXP}")
+
+
+# Share of commands reduced to one axis. The MuJoCo sweep and a joystick both ask for pure
+# yaw; a uniform command box essentially never does, and the arm trained with foot torsion
+# shows the consequence -- 0.24 rad/s of a 0.3 rad/s yaw command while walking at 0.5 m/s,
+# 0.18 rad/s of the same command in place.
+DEPLOY_X_ONLY = float(os.environ.get("PAPER_DEPLOY_X_ONLY", 0.0))
+DEPLOY_Y_ONLY = float(os.environ.get("PAPER_DEPLOY_Y_ONLY", 0.0))
+DEPLOY_YAW_ONLY = float(os.environ.get("PAPER_DEPLOY_YAW_ONLY", 0.15))
+
+
+def _apply_axis_only_coverage(cfg) -> None:
+    cfg.commands.base_velocity.x_only_command_fraction = DEPLOY_X_ONLY
+    cfg.commands.base_velocity.y_only_command_fraction = DEPLOY_Y_ONLY
+    cfg.commands.base_velocity.yaw_only_command_fraction = DEPLOY_YAW_ONLY
+    print(
+        f"[PaperArm] single-axis command share: x {DEPLOY_X_ONLY}, y {DEPLOY_Y_ONLY},"
+        f" yaw {DEPLOY_YAW_ONLY}"
+    )
+
+
+# Episode starts. A share of episodes begin lying on folded legs, a share dropped from above
+# standing height with some tilt, and every episode holds a zero command for a few seconds before
+# the sampled one is revealed. Without this the policy only ever meets a standstill-to-command
+# transition when a 10%-standing env happens to resample, and never has to get up at all.
+DEPLOY_LYING_FRACTION = float(os.environ.get("PAPER_DEPLOY_LYING_FRACTION", 0.2))
+DEPLOY_DROP_FRACTION = float(os.environ.get("PAPER_DEPLOY_DROP_FRACTION", 0.2))
+DEPLOY_DROP_HEIGHT = (
+    float(os.environ.get("PAPER_DEPLOY_DROP_HEIGHT_LO", 0.1)),
+    float(os.environ.get("PAPER_DEPLOY_DROP_HEIGHT_HI", 0.3)),
+)
+DEPLOY_STANDBY = (
+    float(os.environ.get("PAPER_DEPLOY_STANDBY_LO", 1.0)),
+    float(os.environ.get("PAPER_DEPLOY_STANDBY_HI", 3.0)),
+)
+# Base contact does not terminate for this long; defaults to the longest standby, so a robot that
+# starts on its belly or lands a drop on it has the whole standby to get up.
+DEPLOY_CONTACT_GRACE = float(os.environ.get("PAPER_DEPLOY_CONTACT_GRACE", DEPLOY_STANDBY[1]))
+# Go2 lying on folded legs, inside the 0.9 soft joint limits (the calf soft limit is about -2.63).
+LYING_JOINT_POS = {
+    ".*L_hip_joint": 0.1,
+    ".*R_hip_joint": -0.1,
+    ".*_thigh_joint": 1.3,
+    ".*_calf_joint": -2.55,
+}
+
+
+# unitree's Go2 config gives every joint the hip motor's torque-speed curve, but the calf sits
+# behind an extra 1.92:1 knee reduction: 45 N*m and 15.65 rad/s at the joint, not 23.4 and 30.
+# Isaac Lab 3.0 fixed this in its own Go2 config; this asset is unitree's and never got it.
+# Measured on the fresh run: the knee sits at the old limit 0.9% of the time in the first 1.5 s
+# (standing up, landing) and 0.13% overall, so this corrects the plant more than it changes gaits.
+DEPLOY_CALF_REDUCTION = os.environ.get("PAPER_DEPLOY_CALF_REDUCTION", "1") == "1"
+
+
+def _apply_calf_reduction(cfg) -> None:
+    """Scale the calf's torque-speed curve by the knee ratio, per joint within the one group.
+
+    One group rather than a second calf group: the split measured ~10% slower per iteration
+    (1.24 -> 1.36 s at 2048 envs), for the same physics.
+    """
+    if not DEPLOY_CALF_REDUCTION:
+        print("[PaperArm] calf uses the hip motor curve (knee reduction off)")
+        return
+    from unitree_rl_lab.assets.robots.unitree_actuators import GO2_KNEE_RATIO
+
+    legs = cfg.scene.robot.actuators["GO2HV"]
+
+    def per_joint(value, calf_scale):
+        return {".*_hip_joint": value, ".*_thigh_joint": value, ".*_calf_joint": value * calf_scale}
+
+    cfg.scene.robot = cfg.scene.robot.replace(
+        actuators={
+            "GO2HV": legs.replace(
+                Y1=per_joint(legs.Y1, GO2_KNEE_RATIO),
+                Y2=per_joint(legs.Y2, GO2_KNEE_RATIO),
+                X1=per_joint(legs.X1, 1.0 / GO2_KNEE_RATIO),
+                X2=per_joint(legs.X2, 1.0 / GO2_KNEE_RATIO),
+            )
+        }
+    )
+    print(
+        f"[PaperArm] calf knee reduction {GO2_KNEE_RATIO:.2f}: Y1/Y2 {legs.Y1 * GO2_KNEE_RATIO:.1f}/"
+        f"{legs.Y2 * GO2_KNEE_RATIO:.1f} N*m, X1/X2 {legs.X1 / GO2_KNEE_RATIO:.2f}/{legs.X2 / GO2_KNEE_RATIO:.2f} rad/s"
+    )
+
+
+def _apply_start_states(cfg) -> None:
+    cfg.events.reset_start_pose = EventTerm(
+        func=mdp.reset_start_pose,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "lying_fraction": DEPLOY_LYING_FRACTION,
+            "lying_joint_pos": LYING_JOINT_POS,
+            "drop_fraction": DEPLOY_DROP_FRACTION,
+            "drop_height_range": DEPLOY_DROP_HEIGHT,
+        },
+    )
+    cfg.commands.base_velocity.standby_duration_range = DEPLOY_STANDBY
+    cfg.terminations.base_contact = DoneTerm(
+        func=mdp.illegal_contact_after,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"),
+            "threshold": 1.0,
+            "grace_s": DEPLOY_CONTACT_GRACE,
+        },
+    )
+    print(
+        f"[PaperArm] starts: lying {DEPLOY_LYING_FRACTION}, dropped {DEPLOY_DROP_FRACTION}"
+        f" (+{DEPLOY_DROP_HEIGHT} m); standby {DEPLOY_STANDBY} s at zero command;"
+        f" base contact allowed for the first {DEPLOY_CONTACT_GRACE} s"
+    )
+
+
+def _apply_foot_torsion(cfg) -> None:
+    """Give every robot collider a torsional contact patch.
+
+    Authored on the whole articulation, not just the feet: the patch only produces torque where
+    there is a contact, and nothing but the feet is meant to touch the ground. make_uninstanceable
+    is what makes it stick -- the Go2 USD ships its collision meshes as instance proxies, which are
+    read-only, and the schema writer skips them with a warning that is easy to miss.
+    """
+    if DEPLOY_FOOT_TORSION <= 0.0 and DEPLOY_FOOT_TORSION_MIN <= 0.0:
+        print("[PaperArm] foot torsional friction off")
+        return
+    from isaaclab_physx.sim.schemas import PhysxCollisionPropertiesCfg
+
+    cfg.scene.robot = cfg.scene.robot.replace(
+        spawn=cfg.scene.robot.spawn.replace(
+            make_uninstanceable=True,
+            collision_props=PhysxCollisionPropertiesCfg(
+                torsional_patch_radius=DEPLOY_FOOT_TORSION,
+                min_torsional_patch_radius=DEPLOY_FOOT_TORSION_MIN,
+            ),
+        )
+    )
+    print(
+        f"[PaperArm] foot torsional patch radius {DEPLOY_FOOT_TORSION} m,"
+        f" minimum {DEPLOY_FOOT_TORSION_MIN} m"
+    )
+
+
+def _apply_inertia_randomization(cfg) -> None:
+    """Off-nominal base CoM and joint friction, drawn once per environment.
+
+    Startup rather than reset, unlike Final7: both write through CPU tensors, which Isaac Lab
+    warns against doing every episode, and 4096 environments already give the population the
+    same spread. The payload mass this sits next to is randomized at startup for the same reason.
+    """
+    cfg.events.randomize_com = EventTerm(
+        func=mdp.randomize_rigid_body_com,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+            "com_range": {"x": (-DEPLOY_COM_X, DEPLOY_COM_X), "y": (-DEPLOY_COM_Y, DEPLOY_COM_Y)},
+        },
+    )
+    cfg.events.randomize_joint_friction = EventTerm(
+        func=mdp.randomize_joint_parameters,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "friction_distribution_params": DEPLOY_JOINT_FRICTION,
+            "operation": "add",
+        },
+    )
+    cfg.events.randomize_joint_plant = EventTerm(
+        func=mdp.randomize_joint_plant,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "armature_range": DEPLOY_ARMATURE,
+            "viscous_friction_range": DEPLOY_VISCOUS,
+        },
+    )
+    print(
+        f"[PaperArm] base CoM +-{DEPLOY_COM_X} m fore/aft, +-{DEPLOY_COM_Y} m lateral;"
+        f" joint friction +{DEPLOY_JOINT_FRICTION}, armature {DEPLOY_ARMATURE},"
+        f" viscous damping {DEPLOY_VISCOUS}"
+    )
+
+
 @configclass
 class RobotSigmaVelFootRoughDeployEnvCfg(RobotSigmaVelFootRoughEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        _apply_estimator_noise(self)
+        _apply_calf_reduction(self)
+        _apply_sensor_model(self)
         _apply_actuator_delay(self)
         _apply_gain_randomization(self)
+        _apply_inertia_randomization(self)
+        _apply_foot_torsion(self)
+        _apply_axis_only_coverage(self)
+        _apply_yaw_tracking(self)
+        _apply_start_states(self)
 
 
 @configclass

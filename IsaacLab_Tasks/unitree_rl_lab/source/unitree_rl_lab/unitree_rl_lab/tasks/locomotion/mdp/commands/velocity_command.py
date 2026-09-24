@@ -36,9 +36,83 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
 
     cfg: UniformLevelVelocityCommandCfg
 
+    def __init__(self, cfg: UniformLevelVelocityCommandCfg, env):
+        super().__init__(cfg, env)
+        self._standby = torch.zeros(self.num_envs, device=self.device)
+
+    @property
+    def command(self) -> torch.Tensor:
+        """The sampled command, held at zero until this episode's standby has elapsed.
+
+        The sampled command itself is left alone in vel_command_b, so resampling, the slow and
+        axis-only shares and the standing envs all behave exactly as before; only what the
+        observation, the rewards and the metrics read is masked.
+        """
+        if self.cfg.standby_duration_range[1] <= 0.0:
+            return self.vel_command_b
+        waiting = self._env.episode_length_buf * self._env.step_dt < self._standby
+        return self.vel_command_b * (~waiting).unsqueeze(1).float()
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        extras = super().reset(env_ids)
+        low, high = self.cfg.standby_duration_range
+        if high > 0.0:
+            ids = slice(None) if env_ids is None else env_ids
+            self._standby[ids] = torch.empty_like(self._standby[ids]).uniform_(low, high)
+        return extras
+
+    def _update_metrics(self):
+        command = self.command
+        self._error_xy_sum += torch.linalg.norm(
+            command[:, :2] - self.robot.data.root_lin_vel_b.torch[:, :2], dim=-1
+        )
+        self._error_yaw_sum += torch.abs(command[:, 2] - self.robot.data.root_ang_vel_b.torch[:, 2])
+        self._step_count += 1.0
+
     def _resample_command(self, env_ids: Sequence[int]):
         super()._resample_command(env_ids)
 
+        ids = torch.as_tensor(env_ids, device=self.device).reshape(-1)
+        if ids.numel() == 0:
+            return
+        self._apply_axis_only(ids)
+        self._apply_slow(ids)
+
+    def _apply_axis_only(self, ids: torch.Tensor):
+        """Zero the other two components for a share of the draws.
+
+        A uniform box almost never produces a command that is ONE axis: asking for yaw with no
+        forward motion has probability ~0 under independent draws, and the whole sweep the
+        MuJoCo evaluation runs is made of exactly those commands. Measured on the arm that
+        trained with foot torsion: at a 0.3 rad/s yaw command it turns at 0.24 rad/s while also
+        walking at 0.5 m/s, and at 0.18 rad/s in place. Turning on the spot is a corner of the
+        command space, and it is the corner an operator with a joystick spends time in.
+
+        Applied before the slow rescale, which preserves direction, so the two compose: a draw
+        can be both axis-only and slow.
+        """
+        fractions = (
+            float(getattr(self.cfg, "x_only_command_fraction", 0.0)),
+            float(getattr(self.cfg, "y_only_command_fraction", 0.0)),
+            float(getattr(self.cfg, "yaw_only_command_fraction", 0.0)),
+        )
+        if sum(fractions) <= 0.0:
+            return
+        draw = torch.rand(ids.numel(), device=self.device)
+        lower = 0.0
+        for axis, fraction in enumerate(fractions):
+            if fraction <= 0.0:
+                continue
+            upper = lower + fraction
+            selected = (draw >= lower) & (draw < upper) & ~self.is_standing_env[ids]
+            lower = upper
+            if not bool(selected.any()):
+                continue
+            axis_ids = ids[selected]
+            others = [i for i in range(3) if i != axis]
+            self.vel_command_b[axis_ids[:, None], torch.tensor(others, device=self.device)] = 0.0
+
+    def _apply_slow(self, ids: torch.Tensor):
         fraction = getattr(self.cfg, "slow_command_fraction", 0.0)
         if fraction <= 0.0:
             return
@@ -48,10 +122,6 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
             if not getattr(self, "_slow_announced", False):
                 self._slow_announced = True
                 print(f"[Command] level curriculum at full range; slow-command share {fraction} now active.")
-
-        ids = torch.as_tensor(env_ids, device=self.device).reshape(-1)
-        if ids.numel() == 0:
-            return
 
         draw = torch.rand(ids.numel(), device=self.device)
         # Exclude the standing envs, so the two modes stay disjoint and each stays interpretable.
@@ -78,5 +148,15 @@ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
     # slow_command_range. 0.0 reproduces upstream sampling exactly.
     slow_command_fraction: float = 0.0
     slow_command_range: tuple[float, float] = (0.05, 0.3)
+
+    # Share of each resample reduced to a single axis, the other two zeroed. Disjoint shares,
+    # taken in the order x, y, yaw. 0.0 reproduces upstream sampling exactly.
+    x_only_command_fraction: float = 0.0
+    y_only_command_fraction: float = 0.0
+    yaw_only_command_fraction: float = 0.0
+
+    # Seconds at zero command at the start of every episode, drawn per episode. The sampled
+    # command is revealed when it runs out. (0, 0) disables.
+    standby_duration_range: tuple[float, float] = (0.0, 0.0)
     # Hold the slow share off until the level curriculum has widened lin_vel_x to its limit.
     slow_after_full_range: bool = False

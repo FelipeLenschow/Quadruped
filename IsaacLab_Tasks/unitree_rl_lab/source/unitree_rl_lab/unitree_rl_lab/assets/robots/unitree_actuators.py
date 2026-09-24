@@ -156,6 +156,12 @@ class UnitreeActuatorCfg_Go2HV(UnitreeActuatorCfg):
     Y2 = 23.4
 
 
+# Go2 knee: the same motor as the hip and thigh behind an extra reduction, 45.43 / 23.7 = 1.92:1 at
+# the joint (the ratio go2.usd and Isaac Lab 3.0's own Go2 config use). Joint-side torque scales up
+# by it and speed down by it: 45 N*m peak, zero torque at 15.65 rad/s.
+GO2_KNEE_RATIO = 45.43 / 23.7
+
+
 @configclass
 class UnitreeActuatorCfg_N7520_14p3(UnitreeActuatorCfg):
     # Decimal point cannot be used as variable name, use `p` instead

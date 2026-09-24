@@ -22,19 +22,22 @@ def gait_phase(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
     return phase
 
 
-class base_lin_vel_estimate(ManagerTermBase):
-    """Root linear velocity with a per-episode constant offset.
+class biased_obs(ManagerTermBase):
+    """Another observation term plus a per-episode constant offset, resampled at reset.
 
-    On hardware this channel is a Kalman estimate, not a measurement: its error is dominated by
-    a slowly-varying offset, not by the zero-mean sample noise a Unoise term adds. The offset is
-    resampled at every reset and held for the episode; white noise stays on the ObsTerm.
+    Sensor error on hardware is not zero-mean within an episode: the velocity estimate drifts,
+    the IMU sits at whatever mounting tilt it was bolted at, the joint encoders keep the zero
+    they were last calibrated to. A Unoise term cannot stand in for any of that -- it draws
+    again every step, so a policy can average it away. This holds one draw for the episode.
     """
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
-        self._bias = torch.zeros(env.num_envs, 3, device=env.device)
+        self._bias = None
 
     def reset(self, env_ids: torch.Tensor | None = None) -> dict:
+        if self._bias is None:
+            return {}
         bias = float(self.cfg.params.get("bias", 0.0))
         ids = slice(None) if env_ids is None else env_ids
         self._bias[ids] = torch.empty_like(self._bias[ids]).uniform_(-bias, bias)
@@ -43,8 +46,26 @@ class base_lin_vel_estimate(ManagerTermBase):
     def __call__(
         self,
         env: ManagerBasedRLEnv,
+        func,
         bias: float = 0.0,
         asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     ) -> torch.Tensor:
-        vel = env.scene[asset_cfg.name].data.root_lin_vel_b
-        return (vel.torch if hasattr(vel, "torch") else vel) + self._bias
+        obs = func(env, asset_cfg=asset_cfg)
+        if self._bias is None:
+            self._bias = torch.zeros_like(obs)
+            self.reset()
+        return obs + self._bias
+
+
+class base_lin_vel_estimate(biased_obs):
+    """Kept for the Noises run, whose params/env.yaml names this term. Superseded by biased_obs."""
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        bias: float = 0.0,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        from isaaclab.envs.mdp import base_lin_vel
+
+        return super().__call__(env, func=base_lin_vel, bias=bias, asset_cfg=asset_cfg)
