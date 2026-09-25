@@ -122,6 +122,44 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
+class DecimatedWriter:
+    """Pass add_scalar through on every Nth call per tag; everything else goes straight to the writer.
+
+    rsl_rl writes ~60 scalars every iteration, which puts a 30k-iteration run's TensorBoard file
+    past GitHub's 50 MB warning. Every 10th iteration keeps the curves and cuts the file tenfold.
+    """
+
+    def __init__(self, writer, every: int):
+        self._writer = writer
+        self._every = every
+        self._calls = {}
+
+    def add_scalar(self, tag, *args, **kwargs):
+        n = self._calls.get(tag, 0)
+        self._calls[tag] = n + 1
+        if n % self._every == 0:
+            self._writer.add_scalar(tag, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._writer, name)
+
+
+def decimate_tensorboard(runner) -> None:
+    """Wrap the runner's log writer once rsl_rl creates it. TB_LOG_EVERY sets N (1 logs everything)."""
+    every = int(os.environ.get("TB_LOG_EVERY", 10))
+    if every <= 1:
+        return
+    logger = runner.logger
+    create = logger.init_logging_writer
+
+    def init_logging_writer():
+        create()
+        if logger.writer is not None:
+            logger.writer = DecimatedWriter(logger.writer, every)
+            print(f"[TensorBoard] writing scalars every {every} iterations (TB_LOG_EVERY)")
+
+    logger.init_logging_writer = init_logging_writer
+
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
@@ -193,6 +231,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg = cli_args.migrate_rsl_rl_cfg(agent_cfg)
     runner_cfg = cli_args.runner_cfg_for_installed_rsl_rl(agent_cfg)
     runner = OnPolicyRunner(env, runner_cfg, log_dir=log_dir, device=agent_cfg.device)
+    decimate_tensorboard(runner)
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint
