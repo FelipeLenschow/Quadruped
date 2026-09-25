@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools", "wheel", "toml"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "walk_these_ways"
+version = "0.2.1"
+description = "Walk These Ways locomotion for the Go2."
+dependencies = [
+    "argcomplete",
+]
+requires-python = ">=3.10"
+license = { text = "Apache 2.0" }
+authors = [
+    { name = "Felipe Lenschow" }
+]
+maintainers = [
+    { name = "Felipe Lenschow" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux"
+]
+dynamic = []

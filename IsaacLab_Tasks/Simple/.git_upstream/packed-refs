@@ -1,0 +1,10 @@
+# pack-refs with: peeled fully-peeled sorted 
+6bedb43fdd4616bbdf13b83ecacdce46f0d90c32 refs/remotes/origin/devel-newton
+161c8a6fd143dd3764680ee4574bc1a2e78e32fd refs/remotes/origin/isaaclab3.0
+81cce4fd3bd6fef920720ada737fbc455c3333ea refs/remotes/origin/lab21
+4960b84732b0c2ec593dccbfe963fda1bcd7b1e3 refs/remotes/origin/main
+e1b41ec2727c2f3cbb31374f161857c8250923de refs/remotes/origin/sim2sim
+9b18e68c350b3ee561ec09986ac5a1b4154ff55c refs/tags/0.2.0
+dff4f5018af3e0d1e012f1713885f58d2fd901ad refs/tags/0.2.1
+^a005685cd1912ce6196afa2bbdd3e4f40258c21d
+1330cb0d4236c4abd6bf1efec05a4fce7ad79678 refs/tags/1.0.1

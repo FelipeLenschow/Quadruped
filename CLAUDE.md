@@ -63,6 +63,8 @@ Each subfolder is a fully independent copy of the Isaac Lab task package (own `s
 - **`Walk_GO2/`** — a Go2-only simplification made when a possible internship lab also had a Go2; that plan changed and work went back to `Walk` (3 robots). Likely stale.
 - **`Stairs/`** — experiment adding a terrain/height-scan sensor for stair climbing.
 - **`Handstand/`** — handstand task.
+- **`Simple/`** — unitree_rl_lab cut down to the Go2 (package `simple`, manager-based, rsl_rl): the Sigma-Vel-Foot-Rough and Deploy tasks. Trains through its own `scripts/rsl_rl/train.py`.
+- **`WalkTheseWays/`** — Walk These Ways for the Go2 (package `walk_these_ways`), cut from Simple to the single `Unitree-Go2-Velocity-WTW` task. Same rsl_rl layout as Simple.
 
 ## Reward/training config pattern (Walk)
 

@@ -353,16 +353,30 @@ def find_highest_step_checkpoint(run_dir):
         
     return os.path.abspath(all_pts[0]) if all_pts else None
 
+def is_rsl_rl_module(module_path):
+    """Modules cut from unitree_rl_lab (Simple, WalkTheseWays) train with their own rsl_rl scripts."""
+    return os.path.exists(os.path.join(module_path, "scripts", "rsl_rl", "train.py"))
+
+
+def rsl_rl_package(module_path):
+    """The python package under source/, e.g. source/walk_these_ways."""
+    source = os.path.join(module_path, "source")
+    pkgs = sorted(d for d in os.listdir(source) if os.path.isdir(os.path.join(source, d, d)))
+    return pkgs[0]
+
+
 def unitree_tasks(module_path):
-    """Go2 task ids registered by unitree_rl_lab, read from source so Isaac Lab is not imported."""
-    init = os.path.join(module_path, "source", "unitree_rl_lab", "unitree_rl_lab", "tasks",
-                        "locomotion", "robots", "go2", "__init__.py")
-    try:
-        with open(init) as f:
-            found = re.findall(r'"(Unitree-Go2-[\w-]+)"', f.read())
-    except OSError:
-        found = []
-    return found or ["Unitree-Go2-Velocity-Sigma-Vel-Foot-Rough"]
+    """Task ids an rsl_rl module registers, read from source so Isaac Lab is not imported."""
+    pkg = rsl_rl_package(module_path)
+    found = []
+    for init in sorted(glob.glob(os.path.join(module_path, "source", pkg, pkg, "tasks", "**", "__init__.py"),
+                                 recursive=True)):
+        try:
+            with open(init) as f:
+                found += re.findall(r'id="([\w-]+)"', f.read())
+        except OSError:
+            pass
+    return found
 
 
 def unitree_experiment(task):
@@ -648,15 +662,15 @@ def run_cli_menu():
     # only to file the report under it later. sweep_report reads that back from the recording.
     if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
-        # unitree_rl_lab lives here so its logs sit alongside the others (the eval viewer and the
-        # checkpoint list both read it in place), but it is a separate upstream repo with its own
-        # rsl_rl scripts and no Quadruped task package. Train goes through its own
+        # Simple and WalkTheseWays (cut from unitree_rl_lab) live here so their logs sit alongside
+        # the others (the eval viewer and the checkpoint list both read them in place), but they
+        # carry their own rsl_rl scripts and no Quadruped task package. Train goes through its own
         # scripts/rsl_rl/train.py; the rest load the checkpoint through
         # Controller/policy_runner.py, which reads rsl_rl archives directly.
         # Deploy is one of them: its run's params/deploy.yaml (kp 25, kd 0.5, 50 Hz, action
         # scale 0.25, default pose) matches what real_driver.py and robot_defaults.py apply.
-        if "unitree_rl_lab" in modules and action not in ("train", "eval_policy", "mujoco", "mujoco_twin", "real_deploy", "teleop_sweep"):
-            modules.remove("unitree_rl_lab")
+        if action not in ("train", "eval_policy", "mujoco", "mujoco_twin", "real_deploy", "teleop_sweep"):
+            modules = [m for m in modules if not is_rsl_rl_module(os.path.join(TASKS_DIR, m))]
         
         if not modules:
             print(f"[ERROR] No modules found in {TASKS_DIR}!")
@@ -684,7 +698,7 @@ def run_cli_menu():
     checkpoint_paths += glob.glob(os.path.join(selected_module_path, "checkpoints", "*.pt"))
     
     # skrl writes one best_agent.pt per run, which is what this list is built from. rsl_rl
-    # (IsaacLab_Tasks/unitree_rl_lab) writes model_<iter>.pt instead and has no "best", so those
+    # (IsaacLab_Tasks/Simple, WalkTheseWays) writes model_<iter>.pt instead and has no "best", so those
     # runs used to be invisible here and had to be hand-copied into Walk/logs under the right
     # name. Take the highest-ITERATION checkpoint of each rsl_rl run instead.
     #
@@ -826,10 +840,10 @@ def run_cli_menu():
             else:
                 headless = input("Headless Mode? [y/N]: ").lower().strip() == "y"
 
-        if action == "train" and selected_module_name == "unitree_rl_lab":
+        if action == "train" and is_rsl_rl_module(selected_module_path):
             robot_cfg = "UNITREE_GO2_CFG"
             tasks = unitree_tasks(selected_module_path)
-            default_task = "Unitree-Go2-Velocity-Sigma-Vel-Foot-Rough"
+            default_task = tasks[0]
             if selected_ckpt:
                 exp = os.path.basename(os.path.dirname(os.path.dirname(selected_ckpt)))
                 default_task = next((t for t in tasks if unitree_experiment(t) == exp), default_task)
@@ -847,7 +861,7 @@ def run_cli_menu():
             run_name = input("Enter Run Name (optional): ").strip()
             auto_eval = prompt_auto_eval()
 
-        if action == "train" and selected_module_name != "unitree_rl_lab":
+        if action == "train" and not is_rsl_rl_module(selected_module_path):
             # Dynamically extract phases from training_phases.yaml if available
             available_phases = ["phase1", "phase2", "phase3"] # fallback
             default_phase_idx = "3"
@@ -1194,8 +1208,8 @@ def main():
 
     robot_key = get_robot_key(robot_cfg)
 
-    if action == "train" and module_name == "unitree_rl_lab":
-        task = (sweep_opts or {}).get("task") or "Unitree-Go2-Velocity-Sigma-Vel-Foot-Rough"
+    if action == "train" and is_rsl_rl_module(module_path):
+        task = (sweep_opts or {}).get("task") or unitree_tasks(module_path)[0]
         log_root = os.path.join(module_path, "logs", "rsl_rl", unitree_experiment(task))
         cmd = [sys.executable, os.path.join("scripts", "rsl_rl", "train.py"), f"--task={task}"]
         if num_envs:
@@ -1207,7 +1221,7 @@ def main():
             cmd.append(f"--run_name={run_name}")
         if headless:
             cmd.append("--headless")
-        source_path = os.path.abspath(os.path.join(module_path, "source", "unitree_rl_lab"))
+        source_path = os.path.abspath(os.path.join(module_path, "source", rsl_rl_package(module_path)))
         env["PYTHONPATH"] = f"{source_path}:{env['PYTHONPATH']}" if env.get("PYTHONPATH") else source_path
         start_ts = time.time()
         watcher = start_auto_eval_watcher(log_root, start_ts, robot_key, auto_eval, env) if auto_eval else None
@@ -1510,7 +1524,13 @@ def main():
                 joy_cmd += ["--ros-args", "--params-file", joy_cfg]
             print("[Launcher] Starting joy_node for the eval sweep...")
             joy_proc = subprocess.Popen(joy_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        
+        elif action == "teleop_joy":
+            # Walk These Ways gait commands from the right stick's up/down axis and the D-pad;
+            # a policy without a gait input ignores /gait_command.
+            gait_script = os.path.abspath(os.path.join("Operator", "gait_teleop.py"))
+            print("[Launcher] Starting gait teleop (right stick up/down: pitch, D-pad: gait / step frequency)...")
+            joy_proc = subprocess.Popen([sys_python, gait_script], env=env)
+
         # Start Reward Estimator automatically for deployments
         if action in ["isaac_sim", "mujoco", "mujoco_twin", "real_deploy", "eval_mujoco"]:
             reward_script = os.path.abspath(os.path.join("Controller", "reward_estimator_node.py"))

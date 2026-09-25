@@ -9,6 +9,8 @@ from pathlib import Path
 
 import time
 import threading
+import hashlib
+import pickle
 
 try:
     import yaml
@@ -53,7 +55,7 @@ def _load_yaml(path):
         return {}
 
 
-# rsl_rl (unitree_rl_lab) logs under its own names. Map them onto what Walk's skrl runs log, so
+# rsl_rl (Simple, WalkTheseWays) logs under its own names. Map them onto what Walk's skrl runs log, so
 # both chart on the same panels.
 _RSL_TAGS = {
     "Train/mean_reward": "Reward / Total reward (mean)",
@@ -167,7 +169,7 @@ def _find_report_files():
     """Every sweep report under the module, from either simulator.
 
     Two writers produce these now: Mujoco/eval_mujoco.py -> mujoco_eval_report_<ckpt>.json and
-    unitree_rl_lab/scripts/rsl_rl/sweep.py -> isaac_eval_report_<ckpt>.json. The Isaac ones are
+    Simple/scripts/rsl_rl/sweep.py -> isaac_eval_report_<ckpt>.json. The Isaac ones are
     the primary measurement for any policy whose actor has no base_lin_vel input -- it runs open
     loop on velocity, so its MuJoCo numbers understate it badly (a 1.0 m/s command reads 0.74 in
     MuJoCo and 0.96 in Isaac for the same checkpoint). Match both and let the sidebar say which.
@@ -213,17 +215,36 @@ def _read_scalars(events_path):
         hit = _scalar_cache.get(events_path)
         if hit and hit[0] == key:
             return hit[1]
-    if not HAS_TB:
-        return {}
+    rel = os.path.relpath(events_path, BASE_DIR)
+    disk = os.path.join(CACHE_DIR, hashlib.sha1(rel.encode()).hexdigest() + ".pkl")
+    raw = None
     try:
-        ea = EventAccumulator(events_path, size_guidance={"scalars": 0})
-        ea.Reload()
-        data = {_canon_tag(t): [[e.step, e.wall_time, float(e.value)] for e in ea.Scalars(t)]
-                for t in ea.Tags()["scalars"]}
-        data = _canon_rsl_rl(data, os.path.dirname(events_path))
-    except Exception as e:
-        print(f"[viewer] failed reading {events_path}: {e}")
-        data = {}
+        with open(disk, "rb") as f:
+            k, cached = pickle.load(f)
+        if k == key:
+            raw = cached
+    except Exception:
+        pass
+    if raw is None:
+        if not HAS_TB:
+            return {}
+        try:
+            ea = EventAccumulator(events_path, size_guidance={"scalars": 0})
+            ea.Reload()
+            raw = {_canon_tag(t): [[e.step, e.wall_time, float(e.value)] for e in ea.Scalars(t)]
+                   for t in ea.Tags()["scalars"]}
+        except Exception as e:
+            print(f"[viewer] failed reading {events_path}: {e}")
+            raw = {}
+        if raw:
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(disk + ".tmp", "wb") as f:
+                    pickle.dump((key, raw), f, protocol=pickle.HIGHEST_PROTOCOL)
+                os.replace(disk + ".tmp", disk)
+            except OSError as e:
+                print(f"[viewer] could not write cache {disk}: {e}")
+    data = _canon_rsl_rl(raw, os.path.dirname(events_path))
     with _cache_lock:
         _scalar_cache[events_path] = (key, data)
     return data
@@ -280,6 +301,7 @@ def _run_index():
 PORT = int(os.environ.get("VIEWER_PORT", "8000"))
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 FRONTEND_DIR = os.path.join(BASE_DIR, "Tools", "viewer_frontend")
+CACHE_DIR = os.path.join(BASE_DIR, "Tools", ".viewer_cache")
 
 # Index only this task module. Each IsaacLab_Tasks/<module> is an independent copy of the task with
 # its own rewards and its own logs, so indexing all of them charts unrelated reward functions on
@@ -294,7 +316,7 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "Tools", "viewer_frontend")
 # the old single-module behaviour.
 VIEWER_MODULES = [
     m.strip()
-    for m in os.environ.get("VIEWER_MODULES", os.environ.get("VIEWER_MODULE", "Walk,unitree_rl_lab")).split(",")
+    for m in os.environ.get("VIEWER_MODULES", os.environ.get("VIEWER_MODULE", "Walk,Simple,WalkTheseWays")).split(",")
     if m.strip()
 ]
 MODULE_DIRS = [os.path.join(BASE_DIR, "IsaacLab_Tasks", m) for m in VIEWER_MODULES]
@@ -500,10 +522,11 @@ def main():
     
     server_address = ('', PORT)
     # Threading, not the plain HTTPServer. /api/runs parses every tfevents file under every
-    # indexed module -- 27 of them once unitree_rl_lab is included -- and on a single-threaded
+    # indexed module -- 27 of them once the rsl_rl modules are included -- and on a single-threaded
     # server that blocks the page's own static assets behind it, so the browser gives up
     # mid-response and the log fills with BrokenPipeError tracebacks.
     httpd = ThreadingHTTPServer(server_address, EvalReportHandler)
+    threading.Thread(target=lambda: [_read_scalars(r["events"]) for r in _run_index()], daemon=True).start()
     
     print("="*60)
     print(f"🚀 Quadruped training / evaluation dashboard running!")

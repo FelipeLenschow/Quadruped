@@ -55,7 +55,7 @@ sys.path.insert(0, os.path.join(REPO, "Unitree", "unitree_sdk2_python"))
 os.chdir(REPO)  # real_driver and the pipeline read Configs/ relative to the repo root
 
 DEFAULT_CKPT = os.path.join(
-    "IsaacLab_Tasks", "unitree_rl_lab", "logs", "rsl_rl",
+    "IsaacLab_Tasks", "Simple", "logs", "rsl_rl",
     "unitree_go2_velocity_sigma_vel_foot_rough_deploy", "Noises", "model_2999.pt",
 )
 LOWSTATE_TOPIC = "rt/lowstate_profile_only"

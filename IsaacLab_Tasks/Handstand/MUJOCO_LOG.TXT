@@ -1,3 +1,0 @@
-Fri Apr 10 23:02:08 2026
-ERROR: mjv_updateCamera: track body id is outside valid range
-

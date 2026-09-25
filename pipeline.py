@@ -1,6 +1,6 @@
 import os
 import numpy as np
-from std_msgs.msg import String
+from std_msgs.msg import Float32MultiArray, String
 from Telemetry.telemetry import TelemetryManager
 from Controller.policy_manager import PolicyManager
 from Controller.robot_defaults import DEFAULT_STANCE_QPOS
@@ -71,6 +71,10 @@ class LocomotionPipeline:
         self.mode = "pose"
         self.node.create_subscription(
             String, "/pipeline/mode", self._mode_cb, 10)
+        # Walk These Ways gait commands (Operator/gait_teleop.py): the 8 values of
+        # PolicyRunner.gait_command. Policies without a gait input ignore it.
+        self.node.create_subscription(
+            Float32MultiArray, "/gait_command", self._gait_cb, 10)
 
         # Nominal standing pose (default fallback)
         self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
@@ -102,6 +106,13 @@ class LocomotionPipeline:
         self.mode_transition_active = False
         self.mode_transition_start_time = None
         self.mode_transition_start_targets = self.desired_qpos.copy()
+
+    def _gait_cb(self, msg: Float32MultiArray):
+        if len(msg.data) != 8:
+            return
+        for runner in self.policy_manager.policies.values():
+            if getattr(runner, "_obs_layout", None) == "wtw":
+                runner.set_gait_vector(msg.data)
 
     def _mode_cb(self, msg: String):
         """Handle pipeline mode switch commands from the Console."""
