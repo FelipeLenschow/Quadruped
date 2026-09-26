@@ -1063,10 +1063,16 @@ class RobotSigmaVelFootRoughDeployPlayEnvCfg(RobotSigmaVelFootRoughDeployEnvCfg)
 # terms are replaced by Walk These Ways' contact schedule and dense swing-height terms. The actor
 # gets sin and cos of each foot's phase, 48 + 8 inputs.
 CLOCK_FEET = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
-CLOCK_STRIDE_MIN = float(os.environ.get("PAPER_CLOCK_STRIDE_MIN", 0.10))
-CLOCK_STRIDE_GAIN = float(os.environ.get("PAPER_CLOCK_STRIDE_GAIN", 0.3))
+CLOCK_GAIT = os.environ.get("PAPER_CLOCK_GAIT", "walk")
+_WALK = CLOCK_GAIT == "walk"
+# A walk keeps three feet down: duty >= 0.75, so f <= 0.25 / swing_time = 1.25 Hz, reached at 0.4 m/s.
+CLOCK_STRIDE_MIN = float(os.environ.get("PAPER_CLOCK_STRIDE_MIN", 0.12 if _WALK else 0.10))
+CLOCK_STRIDE_GAIN = float(os.environ.get("PAPER_CLOCK_STRIDE_GAIN", 0.5 if _WALK else 0.3))
 CLOCK_SWING_TIME = float(os.environ.get("PAPER_CLOCK_SWING_TIME", 0.2))
-CLOCK_MAX_FREQUENCY = float(os.environ.get("PAPER_CLOCK_MAX_FREQUENCY", 3.0))
+CLOCK_MAX_FREQUENCY = float(os.environ.get("PAPER_CLOCK_MAX_FREQUENCY", 1.25 if _WALK else 3.0))
+CLOCK_MAX_SPEED = float(os.environ.get("PAPER_CLOCK_MAX_SPEED", 0.4 if _WALK else 1.0))
+# Turning in place at 0.4 m/s over a 0.24 m foot radius; the foot speed cap binds before this does.
+CLOCK_MAX_YAW = float(os.environ.get("PAPER_CLOCK_MAX_YAW", 1.6 if _WALK else 1.0))
 CLOCK_SWING_HEIGHT = float(os.environ.get("PAPER_CLOCK_SWING_HEIGHT", 0.08))
 CLOCK_W_FORCE = float(os.environ.get("PAPER_CLOCK_W_FORCE", 2.0))
 CLOCK_W_VEL = float(os.environ.get("PAPER_CLOCK_W_VEL", 0.5))
@@ -1075,16 +1081,28 @@ CLOCK_W_SWING = float(os.environ.get("PAPER_CLOCK_W_SWING", -150.0))
 # Standing height of the Go2 in its default pose; walking without this term rose to 0.37-0.38 m.
 CLOCK_BASE_HEIGHT = float(os.environ.get("PAPER_CLOCK_BASE_HEIGHT", 0.32))
 CLOCK_W_HEIGHT = float(os.environ.get("PAPER_CLOCK_W_HEIGHT", -40.0))
+# Lying in the start pose costs about 0.16 per step in the stand-still pose penalty, so a walk run
+# learned to roll over within 0.3 s instead of getting up. Weight x step_dt is the cost of a fall.
+CLOCK_W_TERMINATION = float(os.environ.get("PAPER_CLOCK_W_TERMINATION", -1000.0))
 
 
 def _apply_clock(cfg) -> None:
     cfg.commands.clock = mdp.SpeedClockCommandCfg(
         foot_names=tuple(CLOCK_FEET),
+        foot_offsets=mdp.GAIT_OFFSETS[CLOCK_GAIT],
         stride_min=CLOCK_STRIDE_MIN,
         stride_gain=CLOCK_STRIDE_GAIN,
         swing_time=CLOCK_SWING_TIME,
         max_frequency=CLOCK_MAX_FREQUENCY,
     )
+    cfg.commands.base_velocity.max_foot_speed = CLOCK_MAX_SPEED
+    limits = cfg.commands.base_velocity.limit_ranges
+    limits.lin_vel_x = (-CLOCK_MAX_SPEED, CLOCK_MAX_SPEED)
+    limits.lin_vel_y = (max(limits.lin_vel_y[0], -CLOCK_MAX_SPEED), min(limits.lin_vel_y[1], CLOCK_MAX_SPEED))
+    limits.ang_vel_z = (-CLOCK_MAX_YAW, CLOCK_MAX_YAW)
+    ranges = cfg.commands.base_velocity.ranges
+    ranges.lin_vel_x = tuple(max(-CLOCK_MAX_SPEED, min(CLOCK_MAX_SPEED, x)) for x in ranges.lin_vel_x)
+    ranges.ang_vel_z = tuple(max(-CLOCK_MAX_YAW, min(CLOCK_MAX_YAW, x)) for x in ranges.ang_vel_z)
     cfg.observations.policy.clock = ObsTerm(func=mdp.speed_clock, params={"command_name": "clock"})
     cfg.observations.critic.clock = ObsTerm(func=mdp.speed_clock, params={"command_name": "clock"})
     cfg.observations.critic.clock_contact = ObsTerm(func=mdp.speed_clock_contact, params={"command_name": "clock"})
@@ -1112,7 +1130,10 @@ def _apply_clock(cfg) -> None:
         weight=CLOCK_W_HEIGHT,
         params={"target_height": CLOCK_BASE_HEIGHT, "sensor_cfg": scanner},
     )
+    r.termination = RewTerm(func=mdp.is_terminated, weight=CLOCK_W_TERMINATION)
+    print(f"[Clock] fall penalty weight {CLOCK_W_TERMINATION}")
     print(f"[Clock] base height {CLOCK_BASE_HEIGHT} m above the scan, weight {CLOCK_W_HEIGHT}, critic only")
+    print(f"[Clock] {CLOCK_GAIT}, fastest foot <= {CLOCK_MAX_SPEED} m/s, commands x +-{CLOCK_MAX_SPEED}, y {limits.lin_vel_y}, yaw +-{CLOCK_MAX_YAW}")
     print(
         f"[Clock] stride {CLOCK_STRIDE_MIN} + {CLOCK_STRIDE_GAIN} v m, swing {CLOCK_SWING_TIME} s,"
         f" f <= {CLOCK_MAX_FREQUENCY} Hz, swing height {CLOCK_SWING_HEIGHT} m,"

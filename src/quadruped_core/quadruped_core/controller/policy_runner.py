@@ -454,6 +454,8 @@ class PolicyRunner:
         """Settings of the speed-following trot clock (SpeedClockCommand), from the run's env.yaml."""
         env_cfg = self._run_params(path, "env.yaml") or {}
         self._clock_cfg = ((env_cfg.get("commands") or {}).get("clock")) or {}
+        velocity_cfg = ((env_cfg.get("commands") or {}).get("base_velocity")) or {}
+        self._max_foot_speed = float(velocity_cfg.get("max_foot_speed") or 0.0)
         if not self._clock_cfg:
             raise ValueError("[PolicyRunner] Clock policy without commands.clock in params/env.yaml.")
         self._obs_dim_single = self.obs_dim
@@ -465,24 +467,42 @@ class PolicyRunner:
         c = getattr(self, "_clock_cfg", None)
         if not c:
             return
+        self._clock_offsets = np.array(c.get("foot_offsets") or (0.5, 0.0, 0.0, 0.5), dtype=np.float64)
         self._clock_speed = 0.0
         duty = 1.0 - c["swing_time"] * c["min_frequency"]
-        self._clock_index = (duty - 0.5) % 1.0
+        self._clock_index = (duty - self._clock_offsets.max()) % 1.0
+
+    def _foot_sweep(self, velocity):
+        """Fastest stance foot speed under (vx, vy, wz), as foot_sweep_speed in training. Runs from
+        before that existed used |v| + |wz| * yaw_radius."""
+        c = self._clock_cfg
+        if "foot_x" not in c:
+            return float(np.hypot(velocity[0], velocity[1]) + abs(velocity[2]) * c["yaw_radius"])
+        rx = np.array([1.0, 1.0, -1.0, -1.0]) * c["foot_x"]
+        ry = np.array([1.0, -1.0, 1.0, -1.0]) * c["foot_y"]
+        return float(np.hypot(velocity[0] - velocity[2] * ry, velocity[1] + velocity[2] * rx).max())
+
+    def _limit_foot_speed(self, velocity):
+        """Scale the command down until its fastest stance foot is at max_foot_speed, as in training."""
+        if self._max_foot_speed <= 0.0:
+            return velocity
+        sweep = self._foot_sweep(velocity)
+        return velocity * min(1.0, self._max_foot_speed / max(sweep, 1e-6))
 
     def _speed_clock(self, velocity):
         """Advance the clock one policy step as SpeedClockCommand does; returns sin and cos of each foot's phase."""
         c = self._clock_cfg
         dt = self._policy_dt
-        sweep = float(np.hypot(velocity[0], velocity[1]) + abs(velocity[2]) * c["yaw_radius"])
+        sweep = self._foot_sweep(velocity)
         self._clock_speed += min(dt / c["filter_time"], 1.0) * (sweep - self._clock_speed)
         stride = c["stride_min"] + c["stride_gain"] * self._clock_speed
         f = float(np.clip(self._clock_speed / stride, c["min_frequency"], c["max_frequency"]))
         d = float(np.clip(1.0 - c["swing_time"] * f, c["min_duty"], c["max_duty"]))
         if np.linalg.norm(velocity[:3]) < c["stand_threshold"]:
-            self._clock_index = (d - 0.5) % 1.0
+            self._clock_index = (d - self._clock_offsets.max()) % 1.0
         else:
             self._clock_index = (self._clock_index + dt * f) % 1.0
-        raw = np.remainder(self._clock_index + np.array([0.5, 0.0, 0.0, 0.5]), 1.0)
+        raw = np.remainder(self._clock_index + self._clock_offsets, 1.0)
         foot = np.where(raw < d, raw * (0.5 / d), 0.5 + (raw - d) * (0.5 / (1.0 - d)))
         angle = 2.0 * np.pi * foot
         return np.concatenate([np.sin(angle), np.cos(angle)]).astype(np.float32)
@@ -818,15 +838,16 @@ class PolicyRunner:
                 self._wtw_clock(),
             ]
         elif self._obs_layout == "unitree_clock":
+            velocity = self._limit_foot_speed(np.asarray(cmd[:3], dtype=np.float32))
             obs_parts = [
                 lin_vel_b,
                 np.asarray(ang_vel_b, dtype=np.float32) * UNITREE_ANG_VEL_SCALE,
                 proj_grav,
-                cmd[:3],
+                velocity,
                 jpos_isaac - desired_qpos,
                 np.asarray(jvel_isaac, dtype=np.float32) * UNITREE_JOINT_VEL_SCALE,
                 last_actions,
-                self._speed_clock(np.asarray(cmd[:3], dtype=np.float32)),
+                self._speed_clock(velocity),
             ]
         elif self._obs_layout == "unitree_vel":
             # unitree_rl_lab with base_lin_vel added to the actor. Same per-term scales as

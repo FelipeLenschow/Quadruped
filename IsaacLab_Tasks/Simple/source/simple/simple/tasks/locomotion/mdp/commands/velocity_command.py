@@ -8,6 +8,15 @@ from isaaclab.envs.mdp import UniformVelocityCommand, UniformVelocityCommandCfg
 from isaaclab.utils import configclass
 
 
+def foot_sweep_speed(velocity: torch.Tensor, foot_x: float, foot_y: float) -> torch.Tensor:
+    """Speed of the fastest stance foot under a body twist (vx, vy, wz): max over feet of |v + w x r|,
+    feet at (+-foot_x, +-foot_y) from the base."""
+    vx, vy, wz = velocity[:, 0:1], velocity[:, 1:2], velocity[:, 2:3]
+    rx = torch.tensor([foot_x, foot_x, -foot_x, -foot_x], device=velocity.device)
+    ry = torch.tensor([foot_y, -foot_y, foot_y, -foot_y], device=velocity.device)
+    return torch.hypot(vx - wz * ry, vy + wz * rx).amax(dim=1)
+
+
 class UniformLevelVelocityCommand(UniformVelocityCommand):
     """Uniform velocity command with an explicit slow-command quota.
 
@@ -77,6 +86,16 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
             return
         self._apply_axis_only(ids)
         self._apply_slow(ids)
+        self._apply_foot_speed_limit(ids)
+
+    def _apply_foot_speed_limit(self, ids: torch.Tensor):
+        """Scale a command down until its fastest stance foot moves at max_foot_speed."""
+        limit = self.cfg.max_foot_speed
+        if limit <= 0.0:
+            return
+        sweep = foot_sweep_speed(self.vel_command_b[ids], self.cfg.foot_x, self.cfg.foot_y)
+        scale = (limit / sweep.clamp(min=1e-6)).clamp(max=1.0)
+        self.vel_command_b[ids] *= scale.unsqueeze(1)
 
     def _apply_axis_only(self, ids: torch.Tensor):
         """Zero the other two components for a share of the draws.
@@ -160,3 +179,8 @@ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
     standby_duration_range: tuple[float, float] = (0.0, 0.0)
     # Hold the slow share off until the level curriculum has widened lin_vel_x to its limit.
     slow_after_full_range: bool = False
+
+    # Cap on the fastest stance foot's speed, turning included (see foot_sweep_speed). 0 disables.
+    max_foot_speed: float = 0.0
+    foot_x: float = 0.19
+    foot_y: float = 0.14

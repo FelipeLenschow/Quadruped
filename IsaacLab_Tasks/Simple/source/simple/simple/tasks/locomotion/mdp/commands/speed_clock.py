@@ -7,15 +7,25 @@ from collections.abc import Sequence
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.utils import configclass
 
+from .velocity_command import foot_sweep_speed
+
+
+GAIT_OFFSETS = {
+    "trot": (0.5, 0.0, 0.0, 0.5),
+    # Lateral-sequence walk, one foot at a time: RL, FL, RR, FR a quarter cycle apart.
+    "walk": (0.25, 0.75, 0.5, 0.0),
+}
+
 
 class SpeedClockCommand(CommandTerm):
-    """Trot clock whose rate follows the velocity command.
+    """Gait clock whose rate follows the velocity command.
 
     Stride grows with speed, L = stride_min + stride_gain * v, so the frequency is v / L. Swing
-    time is fixed, so duty = 1 - swing_time * f. v is the stance-foot sweep speed of a low-passed
-    velocity command. Each foot gets a phase in [0, 1): stance in [0, 0.5), swing in [0.5, 1).
-    Below stand_threshold every foot is a stance foot and the clock waits with the FL/RR pair at
-    lift-off, so the first step comes as soon as a command does.
+    time is fixed, so duty = 1 - swing_time * f. v is the sweep speed of the fastest stance foot
+    under a low-passed velocity command, turning included. Each foot gets a phase in [0, 1):
+    stance in [0, 0.5), swing in [0.5, 1).
+    Below stand_threshold every foot is a stance foot and the clock waits with the first foot to
+    swing at lift-off, so the first step comes as soon as a command does.
     """
 
     cfg: SpeedClockCommandCfg
@@ -26,10 +36,11 @@ class SpeedClockCommand(CommandTerm):
         self.speed = torch.zeros(n, device=self.device)
         self.frequency = torch.full((n,), cfg.min_frequency, device=self.device)
         self.duty = 1.0 - cfg.swing_time * self.frequency
-        self.gait_index = torch.remainder(self.duty - 0.5, 1.0)
+        self._offsets = torch.tensor(cfg.foot_offsets, device=self.device)
+        self._lead = max(cfg.foot_offsets)
+        self.gait_index = torch.remainder(self.duty - self._lead, 1.0)
         self.foot_phase = torch.zeros(n, 4, device=self.device)
         self.desired_contact = torch.ones(n, 4, device=self.device)
-        self._offsets = torch.tensor([0.5, 0.0, 0.0, 0.5], device=self.device)
         self.metrics["contact_match"] = torch.zeros(n, device=self.device)
         self.metrics["frequency"] = torch.zeros(n, device=self.device)
         self._match_steps = torch.zeros(n, device=self.device)
@@ -60,7 +71,7 @@ class SpeedClockCommand(CommandTerm):
         self.speed[ids] = 0.0
         self.frequency[ids] = self.cfg.min_frequency
         self.duty[ids] = 1.0 - self.cfg.swing_time * self.cfg.min_frequency
-        self.gait_index[ids] = torch.remainder(self.duty[ids] - 0.5, 1.0)
+        self.gait_index[ids] = torch.remainder(self.duty[ids] - self._lead, 1.0)
         return extras
 
     def _resample_command(self, env_ids: Sequence[int]):
@@ -70,14 +81,14 @@ class SpeedClockCommand(CommandTerm):
         cfg = self.cfg
         dt = self._env.step_dt
         vel = self._env.command_manager.get_command(cfg.velocity_command_name)
-        sweep = torch.norm(vel[:, :2], dim=1) + vel[:, 2].abs() * cfg.yaw_radius
+        sweep = foot_sweep_speed(vel, cfg.foot_x, cfg.foot_y)
         self.speed += min(dt / cfg.filter_time, 1.0) * (sweep - self.speed)
         stride = cfg.stride_min + cfg.stride_gain * self.speed
         self.frequency = (self.speed / stride).clamp(cfg.min_frequency, cfg.max_frequency)
         self.duty = (1.0 - cfg.swing_time * self.frequency).clamp(cfg.min_duty, cfg.max_duty)
         standing = torch.norm(vel, dim=1) < cfg.stand_threshold
         running = torch.remainder(self.gait_index + dt * self.frequency, 1.0)
-        self.gait_index = torch.where(standing, torch.remainder(self.duty - 0.5, 1.0), running)
+        self.gait_index = torch.where(standing, torch.remainder(self.duty - self._lead, 1.0), running)
 
         raw = torch.remainder(self.gait_index.unsqueeze(1) + self._offsets, 1.0)
         duty = self.duty.unsqueeze(1)
@@ -96,6 +107,7 @@ class SpeedClockCommandCfg(CommandTermCfg):
     velocity_command_name: str = "base_velocity"
     sensor_name: str = "contact_forces"
     foot_names: tuple[str, ...] = ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
+    foot_offsets: tuple[float, float, float, float] = GAIT_OFFSETS["trot"]
 
     stride_min: float = 0.10
     stride_gain: float = 0.3
@@ -105,6 +117,7 @@ class SpeedClockCommandCfg(CommandTermCfg):
     min_duty: float = 0.35
     max_duty: float = 0.95
     filter_time: float = 0.25
-    yaw_radius: float = 0.3
+    foot_x: float = 0.19
+    foot_y: float = 0.14
     stand_threshold: float = 0.02
     contact_smoothing: float = 0.07
