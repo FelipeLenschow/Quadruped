@@ -267,7 +267,7 @@ def gait_raibert(
     xy position in the yaw frame to its nominal stance point, shifted along the swing by velocity."""
     from isaaclab.utils.math import yaw_quat
 
-    from .commands.gait_command import FREQ, WIDTH
+    from .commands.gait_command import DUTY, FREQ, WIDTH
 
     asset: Articulation = env.scene[asset_cfg.name]
     term = env.command_manager.get_term(command_name)
@@ -281,11 +281,11 @@ def gait_raibert(
     ys = torch.cat([half_w, -half_w, half_w, -half_w], dim=1)
     xs = torch.tensor([1.0, 1.0, -1.0, -1.0], device=env.device).expand_as(ys) * (stance_length / 2)
     phases = torch.abs(1.0 - term.foot_phase * 2.0) - 0.5
-    half_period = 0.5 / cmd[:, FREQ:FREQ + 1]
+    stance_time = cmd[:, DUTY:DUTY + 1] / cmd[:, FREQ:FREQ + 1]
     front = torch.tensor([1.0, 1.0, -1.0, -1.0], device=env.device)
     y_vel = vel[:, 1:2] + vel[:, 2:3] * (stance_length / 2) * front
-    xs = xs + phases * vel[:, 0:1] * half_period
-    ys = ys + phases * y_vel * half_period
+    xs = xs + phases * vel[:, 0:1] * stance_time
+    ys = ys + phases * y_vel * stance_time
     return torch.sum(torch.square(xs - feet_b[..., 0]) + torch.square(ys - feet_b[..., 1]), dim=1)
 
 

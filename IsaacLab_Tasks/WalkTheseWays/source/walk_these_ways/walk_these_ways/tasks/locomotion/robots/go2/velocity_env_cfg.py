@@ -1061,12 +1061,15 @@ WTW_STANCE_LENGTH = float(os.environ.get("WTW_STANCE_LENGTH", 0.45))
 WTW_STANCE_WIDTH = float(os.environ.get("WTW_STANCE_WIDTH", 0.34))
 WTW_RANGES = dict(
     body_height=_wtw_env_range("HEIGHT", -0.08, 0.05),
-    frequency=_wtw_env_range("FREQ", 2.0, 4.0),
+    frequency=_wtw_env_range("FREQ", 0.5, 4.0),
     swing_height=_wtw_env_range("SWING", 0.03, 0.20),
     body_pitch=_wtw_env_range("PITCH", -0.3, 0.3),
     stance_width=_wtw_env_range("WIDTH", 0.25, 0.42),
+    duty=_wtw_env_range("DUTY", 0.35, 0.75),
 )
-WTW_GAIT_PROBS = tuple(float(p) for p in os.environ.get("WTW_GAIT_PROBS", "0.4,0.2,0.2,0.2").split(","))
+WTW_MAX_STRIDE = float(os.environ.get("WTW_MAX_STRIDE", 0.3))
+# Shares of trot, pace, bound, pronk, walk.
+WTW_GAIT_PROBS = tuple(float(p) for p in os.environ.get("WTW_GAIT_PROBS", "0.3,0.15,0.15,0.15,0.25").split(","))
 WTW_NOMINAL_FRACTION = float(os.environ.get("WTW_NOMINAL_FRACTION", 0.2))
 WTW_VEL_RESAMPLE = _wtw_env_range("VEL_RESAMPLE", 5.0, 10.0)
 WTW_CURRICULUM = os.environ.get("WTW_CURRICULUM", "1") == "1"
@@ -1117,8 +1120,10 @@ def _apply_wtw_commands(cfg) -> None:
         gait_probs=WTW_GAIT_PROBS,
         nominal_fraction=WTW_NOMINAL_FRACTION,
         nominal_stance_width=WTW_STANCE_WIDTH,
+        max_stride=WTW_MAX_STRIDE,
     )
     print(f"[WTW] ranges {WTW_RANGES}, gait probs {WTW_GAIT_PROBS}, nominal share {WTW_NOMINAL_FRACTION}")
+    print(f"[WTW] speed held to {WTW_MAX_STRIDE} m stride x frequency / duty")
     print(f"[WTW] velocity resample every {WTW_VEL_RESAMPLE} s")
     if WTW_CURRICULUM:
         print(f"[WTW] per-gait (vx, yaw) curriculum, starting at |vx| <= {WTW_CURRICULUM_INIT[0]}, |yaw| <= {WTW_CURRICULUM_INIT[1]}")

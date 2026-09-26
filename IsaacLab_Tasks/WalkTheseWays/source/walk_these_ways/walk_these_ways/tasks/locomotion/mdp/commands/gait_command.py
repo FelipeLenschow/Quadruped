@@ -14,18 +14,26 @@ GAITS = {
     "pace": (0.0, 0.0, 0.5),
     "bound": (0.0, 0.5, 0.0),
     "pronk": (0.0, 0.0, 0.0),
+    # Lateral-sequence walk, one foot at a time: RL, FL, RR, FR a quarter cycle apart.
+    "walk": (0.0, 0.75, 0.5),
 }
 
 # Columns of GaitCommand.command.
-HEIGHT, FREQ, PHASE, OFFSET, BOUND, SWING, PITCH, WIDTH = range(8)
+HEIGHT, FREQ, PHASE, OFFSET, BOUND, SWING, PITCH, WIDTH, DUTY = range(9)
 
 
 class GaitCommand(CommandTerm):
     """Walk These Ways behaviour command and gait clock.
 
     The command is [body height offset, step frequency, phase, offset, bound, swing height,
-    body pitch, stance width]. The clock advances at the commanded frequency and gives each foot
-    a phase in [0, 1): stance in [0, 0.5), swing in [0.5, 1). When the velocity command is zero
+    body pitch, stance width, duty]. The clock advances at the commanded frequency and gives each
+    foot a phase in [0, 1): stance in [0, 0.5), swing in [0.5, 1), with stance taking the duty
+    share of the step's time.
+
+    A stance foot can sweep at most ``max_stride``, so the velocity command is held to
+    max_stride * frequency / duty: slow steps only ever come with slow commands. With the
+    curriculum the frequency is drawn above what the sampled command needs; the per-step clamp
+    covers everything else (play, no curriculum). When the velocity command is zero
     every foot is a stance foot, so the robot stands instead of marching in place. During the
     velocity command's standby the posture commands read nominal.
 
@@ -40,14 +48,22 @@ class GaitCommand(CommandTerm):
     def __init__(self, cfg: GaitCommandCfg, env):
         super().__init__(cfg, env)
         n = self.num_envs
-        self._command = torch.zeros(n, 8, device=self.device)
+        self._command = torch.zeros(n, 9, device=self.device)
         self.gait_index = torch.zeros(n, device=self.device)
         self.foot_phase = torch.zeros(n, 4, device=self.device)
         self.desired_contact = torch.ones(n, 4, device=self.device)
         self._gait_table = torch.tensor([GAITS[g] for g in cfg.gait_names], device=self.device)
         self._gait_probs = torch.tensor(cfg.gait_probs, device=self.device)
         self._nominal = torch.tensor(
-            [0.0, cfg.nominal_frequency, *GAITS["trot"], cfg.nominal_swing_height, 0.0, cfg.nominal_stance_width],
+            [
+                0.0,
+                cfg.nominal_frequency,
+                *GAITS["trot"],
+                cfg.nominal_swing_height,
+                0.0,
+                cfg.nominal_stance_width,
+                cfg.nominal_duty,
+            ],
             device=self.device,
         )
         self.metrics["contact_match"] = torch.zeros(n, device=self.device)
@@ -71,6 +87,10 @@ class GaitCommand(CommandTerm):
     @property
     def clock(self) -> torch.Tensor:
         return torch.sin(2.0 * math.pi * self.foot_phase)
+
+    def _sweep_speed(self, velocity: torch.Tensor) -> torch.Tensor:
+        """How fast a stance foot moves relative to the body for a (vx, vy, yaw) command."""
+        return torch.norm(velocity[:, :2], dim=1) + velocity[:, 2].abs() * self.cfg.yaw_radius
 
     def _init_curriculum(self):
         velocity = self._env.command_manager.get_term(self.cfg.velocity_command_name)
@@ -168,7 +188,7 @@ class GaitCommand(CommandTerm):
         def uniform(bounds):
             return torch.empty(k, device=self.device).uniform_(*bounds)
 
-        cmd = torch.empty(k, 8, device=self.device)
+        cmd = torch.empty(k, 9, device=self.device)
         cmd[:, HEIGHT] = uniform(self.cfg.ranges.body_height)
         cmd[:, FREQ] = uniform(self.cfg.ranges.frequency)
         gait = torch.multinomial(self._gait_probs, k, replacement=True)
@@ -176,6 +196,7 @@ class GaitCommand(CommandTerm):
         cmd[:, SWING] = uniform(self.cfg.ranges.swing_height)
         cmd[:, PITCH] = uniform(self.cfg.ranges.body_pitch)
         cmd[:, WIDTH] = uniform(self.cfg.ranges.stance_width)
+        cmd[:, DUTY] = uniform(self.cfg.ranges.duty)
         nominal = torch.rand(k, device=self.device) < self.cfg.nominal_fraction
         cmd[nominal] = self._nominal
         self._command[ids] = cmd
@@ -185,15 +206,25 @@ class GaitCommand(CommandTerm):
             self._grade(ids)
             gait = torch.where(nominal, self.cfg.gait_names.index("trot"), gait)
             self._sample_velocity(ids, gait)
+            velocity = self._env.command_manager.get_term(self.cfg.velocity_command_name)
+            low, high = self.cfg.ranges.frequency
+            needed = self._sweep_speed(velocity.vel_command_b[ids]) * cmd[:, DUTY] / self.cfg.max_stride
+            floor = needed.clamp(low, high)
+            freq = floor + torch.rand(k, device=self.device) * (high - floor)
+            self._command[ids, FREQ] = torch.where(nominal, cmd[:, FREQ], freq)
 
     def _update_command(self):
+        velocity = self._env.command_manager.get_term(self.cfg.velocity_command_name)
+        limit = self.cfg.max_stride * self._command[:, FREQ] / self._command[:, DUTY]
+        scale = (limit / self._sweep_speed(velocity.vel_command_b).clamp(min=1e-6)).clamp(max=1.0)
+        velocity.vel_command_b[:] *= scale.unsqueeze(1)
         cmd = self.command
         self.gait_index = torch.remainder(self.gait_index + self._env.step_dt * cmd[:, FREQ], 1.0)
         g = self.gait_index
         phase, offset, bound = cmd[:, PHASE], cmd[:, OFFSET], cmd[:, BOUND]
         raw = torch.stack([g + phase + offset + bound, g + offset, g + bound, g + phase], dim=1)
         raw = torch.remainder(raw, 1.0)
-        duration = self.cfg.stance_duration
+        duration = cmd[:, DUTY:DUTY + 1]
         stance = raw < duration
         self.foot_phase = torch.where(
             stance, raw * (0.5 / duration), 0.5 + (raw - duration) * (0.5 / (1.0 - duration))
@@ -219,16 +250,20 @@ class GaitCommandCfg(CommandTermCfg):
         swing_height: tuple[float, float] = MISSING
         body_pitch: tuple[float, float] = MISSING
         stance_width: tuple[float, float] = MISSING
+        duty: tuple[float, float] = MISSING
 
     ranges: Ranges = MISSING
-    gait_names: tuple[str, ...] = ("trot", "pace", "bound", "pronk")
-    gait_probs: tuple[float, ...] = (0.4, 0.2, 0.2, 0.2)
+    gait_names: tuple[str, ...] = ("trot", "pace", "bound", "pronk", "walk")
+    gait_probs: tuple[float, ...] = (0.3, 0.15, 0.15, 0.15, 0.25)
     # Share of resamples held at the nominal trot and posture, so the default gait stays good.
     nominal_fraction: float = 0.2
     nominal_frequency: float = 3.0
     nominal_swing_height: float = 0.08
     nominal_stance_width: float = 0.3
-    stance_duration: float = 0.5
+    nominal_duty: float = 0.5
+    # Longest stance sweep a foot can make, m, and the lever arm that turns yaw rate into it.
+    max_stride: float = 0.3
+    yaw_radius: float = 0.3
     contact_smoothing: float = 0.07
     stand_threshold: float = 0.01
 

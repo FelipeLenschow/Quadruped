@@ -26,6 +26,7 @@ except ImportError:
 LIVE_WINDOW_S = 180           # a run whose tfevents was touched this recently counts as live
 _scalar_cache = {}            # events_path -> (mtime, size, {tag: [[step, wall, value], ...]})
 _cache_lock = threading.Lock()
+_parse_locks = {}
 
 
 class _LooseLoader(yaml.SafeLoader if yaml else object):
@@ -215,8 +216,18 @@ def _read_scalars(events_path):
         hit = _scalar_cache.get(events_path)
         if hit and hit[0] == key:
             return hit[1]
-    rel = os.path.relpath(events_path, BASE_DIR)
-    disk = os.path.join(CACHE_DIR, hashlib.sha1(rel.encode()).hexdigest() + ".pkl")
+    with _cache_lock:
+        file_lock = _parse_locks.setdefault(events_path, threading.Lock())
+    with file_lock:
+        return _read_scalars_locked(events_path, key)
+
+
+def _read_scalars_locked(events_path, key):
+    with _cache_lock:
+        hit = _scalar_cache.get(events_path)
+        if hit and hit[0] == key:
+            return hit[1]
+    disk = os.path.join(CACHE_DIR, hashlib.sha1(os.path.basename(events_path).encode()).hexdigest() + ".pkl")
     raw = None
     try:
         with open(disk, "rb") as f:

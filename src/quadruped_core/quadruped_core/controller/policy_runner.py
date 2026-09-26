@@ -16,16 +16,20 @@ UNITREE_JOINT_VEL_SCALE = 0.05
 
 # Walk These Ways (IsaacLab_Tasks/WalkTheseWays, Go2-WTW). Gait command columns are
 # [body height offset, step frequency, phase, offset, bound, swing height, body pitch, stance
-# width]; phase / offset / bound per gait, feet in FL, FR, RL, RR order. Mirrors
+# width, duty]; runs trained before duty was a command have the first 8 and a fixed duty.
+# phase / offset / bound per gait, feet in FL, FR, RL, RR order. Mirrors
 # walk_these_ways mdp/commands/gait_command.py.
 WTW_GAITS = {
     "trot": (0.5, 0.0, 0.0),
     "pace": (0.0, 0.0, 0.5),
     "bound": (0.0, 0.5, 0.0),
     "pronk": (0.0, 0.0, 0.0),
+    "walk": (0.0, 0.75, 0.5),
 }
-# Per-step block widths of the WTW actor observation, in the order the task declares them.
-WTW_BLOCKS = (3, 3, 3, 3, 12, 12, 12, 8, 4)
+# Per-step block widths of the WTW actor observation ahead of the gait command, in the order the
+# task declares them; the gait command and the 4-wide clock follow.
+WTW_FIXED_BLOCKS = (3, 3, 3, 3, 12, 12, 12)
+WTW_CLOCK = 4
 
 
 # Rotation helper
@@ -142,8 +146,9 @@ class PolicyRunner:
         self._obs_dim_single = int(os.environ.get("QUADRUPED_OBS_DIM_SINGLE", 49))
         self._obs_layout = os.environ.get("QUADRUPED_OBS_LAYOUT") or self._detect_obs_layout(checkpoint_path)
         if self._obs_layout == "wtw":
-            self._obs_dim_single = sum(WTW_BLOCKS)
             self._init_wtw(checkpoint_path)
+        elif self._obs_layout == "unitree_clock":
+            self._init_speed_clock(checkpoint_path)
         elif self.obs_dim % self._obs_dim_single != 0:
             # A checkpoint whose obs_dim is not a multiple of the assumed single-step width
             # but is itself small enough to BE one step is a policy with no observation
@@ -372,6 +377,8 @@ class PolicyRunner:
             scaled = any(v.get("scale") for v in terms.values())
             if "gait_command" in terms:
                 layout = "wtw"
+            elif "clock" in terms:
+                layout = "unitree_clock"
             elif scaled:
                 layout = "unitree_vel" if "base_lin_vel" in terms else "unitree"
             else:
@@ -391,29 +398,43 @@ class PolicyRunner:
         """Gait command, gait clock and history order for a Walk These Ways policy.
 
         The nominal gait comes from the run's params/env.yaml so it matches training. Override
-        with QUADRUPED_GAIT=trot|pace|bound|pronk and QUADRUPED_GAIT_CMD="h,f,phase,offset,
-        bound,swing,pitch,width" (any field left empty keeps its value), or set_gait() at runtime.
+        with QUADRUPED_GAIT=trot|pace|bound|pronk|walk and QUADRUPED_GAIT_CMD="h,f,phase,offset,
+        bound,swing,pitch,width,duty" (any field left empty keeps its value), or set_gait() at runtime.
         """
-        gait_cfg = (((self._run_params(path, "env.yaml") or {}).get("commands") or {}).get("gait")) or {}
+        env_cfg = self._run_params(path, "env.yaml") or {}
+        gait_cfg = ((env_cfg.get("commands") or {}).get("gait")) or {}
+        history = int((((env_cfg.get("observations") or {}).get("policy")) or {}).get("history_length") or 1)
+        self._obs_dim_single = self.obs_dim // history
+        gait_width = self._obs_dim_single - sum(WTW_FIXED_BLOCKS) - WTW_CLOCK
+        if history * self._obs_dim_single != self.obs_dim or gait_width not in (8, 9):
+            raise ValueError(
+                f"[PolicyRunner] WTW policy input {self.obs_dim} does not split into {history} steps "
+                f"with an 8- or 9-wide gait command."
+            )
+        self._wtw_blocks = WTW_FIXED_BLOCKS + (gait_width, WTW_CLOCK)
+        self._gait_trained = [g for g in (gait_cfg.get("gait_names") or ("trot", "pace", "bound", "pronk")) if g in WTW_GAITS]
+        self._gait_presets = np.array([WTW_GAITS[g] for g in self._gait_trained], dtype=np.float32)
         self._gait_stance = float(gait_cfg.get("stance_duration", 0.5))
-        self.gait_command = np.array(
-            [
-                0.0,
-                float(gait_cfg.get("nominal_frequency", 3.0)),
-                *WTW_GAITS["trot"],
-                float(gait_cfg.get("nominal_swing_height", 0.08)),
-                0.0,
-                float(gait_cfg.get("nominal_stance_width", 0.34)),
-            ],
-            dtype=np.float32,
-        )
+        nominal = [
+            0.0,
+            float(gait_cfg.get("nominal_frequency", 3.0)),
+            *WTW_GAITS["trot"],
+            float(gait_cfg.get("nominal_swing_height", 0.08)),
+            0.0,
+            float(gait_cfg.get("nominal_stance_width", 0.34)),
+            float(gait_cfg.get("nominal_duty", 0.5)),
+        ]
+        self.gait_command = np.array(nominal[:gait_width], dtype=np.float32)
         ranges = gait_cfg.get("ranges") or {}
         self._gait_limits = {
             column: tuple(float(x) for x in ranges[name])
             for column, name in ((0, "body_height"), (1, "frequency"), (5, "swing_height"),
-                                 (6, "body_pitch"), (7, "stance_width"))
-            if name in ranges
+                                 (6, "body_pitch"), (7, "stance_width"), (8, "duty"))
+            if name in ranges and column < gait_width
         }
+        # Runs with a duty command also hold the velocity command to what the step can carry.
+        self._max_stride = gait_cfg.get("max_stride")
+        self._yaw_radius = float(gait_cfg.get("yaw_radius", 0.3))
         if os.environ.get("QUADRUPED_GAIT"):
             self.set_gait(gait=os.environ["QUADRUPED_GAIT"])
         if os.environ.get("QUADRUPED_GAIT_CMD"):
@@ -424,34 +445,72 @@ class PolicyRunner:
             self.set_gait_vector(command)
         self._gait_index = 0.0
         self._policy_dt = 0.02
-        history = self.obs_dim // self._obs_dim_single
-        if history * self._obs_dim_single != self.obs_dim:
-            raise ValueError(
-                f"[PolicyRunner] WTW policy input {self.obs_dim} is not a whole number of "
-                f"{self._obs_dim_single}-wide steps."
-            )
         print(
             f"[PolicyRunner] Walk These Ways layout: {self._obs_dim_single} per step x {history} steps, "
             f"stacked term by term, oldest first. Gait command {self.gait_command.round(3).tolist()}."
         )
 
+    def _init_speed_clock(self, path):
+        """Settings of the speed-following trot clock (SpeedClockCommand), from the run's env.yaml."""
+        env_cfg = self._run_params(path, "env.yaml") or {}
+        self._clock_cfg = ((env_cfg.get("commands") or {}).get("clock")) or {}
+        if not self._clock_cfg:
+            raise ValueError("[PolicyRunner] Clock policy without commands.clock in params/env.yaml.")
+        self._obs_dim_single = self.obs_dim
+        self._policy_dt = 0.02
+        self._reset_speed_clock()
+        print(f"[PolicyRunner] Speed clock layout: 48 + 8 clock. Clock settings {self._clock_cfg}.")
+
+    def _reset_speed_clock(self):
+        c = getattr(self, "_clock_cfg", None)
+        if not c:
+            return
+        self._clock_speed = 0.0
+        duty = 1.0 - c["swing_time"] * c["min_frequency"]
+        self._clock_index = (duty - 0.5) % 1.0
+
+    def _speed_clock(self, velocity):
+        """Advance the clock one policy step as SpeedClockCommand does; returns sin and cos of each foot's phase."""
+        c = self._clock_cfg
+        dt = self._policy_dt
+        sweep = float(np.hypot(velocity[0], velocity[1]) + abs(velocity[2]) * c["yaw_radius"])
+        self._clock_speed += min(dt / c["filter_time"], 1.0) * (sweep - self._clock_speed)
+        stride = c["stride_min"] + c["stride_gain"] * self._clock_speed
+        f = float(np.clip(self._clock_speed / stride, c["min_frequency"], c["max_frequency"]))
+        d = float(np.clip(1.0 - c["swing_time"] * f, c["min_duty"], c["max_duty"]))
+        if np.linalg.norm(velocity[:3]) < c["stand_threshold"]:
+            self._clock_index = (d - 0.5) % 1.0
+        else:
+            self._clock_index = (self._clock_index + dt * f) % 1.0
+        raw = np.remainder(self._clock_index + np.array([0.5, 0.0, 0.0, 0.5]), 1.0)
+        foot = np.where(raw < d, raw * (0.5 / d), 0.5 + (raw - d) * (0.5 / (1.0 - d)))
+        angle = 2.0 * np.pi * foot
+        return np.concatenate([np.sin(angle), np.cos(angle)]).astype(np.float32)
+
     def set_gait(self, gait=None, **fields):
-        """Set the WTW gait by name and/or fields: height, frequency, swing, pitch, width."""
+        """Set the WTW gait by name and/or fields: height, frequency, swing, pitch, width, duty."""
         command = self.gait_command.copy()
         if gait is not None:
             command[2:5] = WTW_GAITS[gait]
-        columns = {"height": 0, "frequency": 1, "swing": 5, "pitch": 6, "width": 7}
+        columns = {"height": 0, "frequency": 1, "swing": 5, "pitch": 6, "width": 7, "duty": 8}
         for name, value in fields.items():
             command[columns[name]] = float(value)
         self.set_gait_vector(command)
 
     def set_gait_vector(self, values):
-        """Set all 8 gait commands, clamped to the ranges the run trained on. The phase columns
-        snap to the nearest trained gait, since nothing between them was ever trained."""
-        command = np.asarray(values, dtype=np.float32).copy()
+        """Set the gait commands, clamped to the ranges the run trained on. The phase columns
+        snap to the nearest trained gait, since nothing between them was ever trained, and a named
+        gait the run never trained falls back to trot. A vector
+        shorter than the policy's (8 values for a policy with duty) keeps the remaining ones."""
+        values = np.asarray(values, dtype=np.float32)[: len(self.gait_command)]
+        command = self.gait_command.copy()
+        command[: len(values)] = values
         for column, (low, high) in self._gait_limits.items():
             command[column] = np.clip(command[column], low, high)
-        presets = np.array(list(WTW_GAITS.values()), dtype=np.float32)
+        for name, preset in WTW_GAITS.items():
+            if name not in self._gait_trained and np.allclose(command[2:5], preset, atol=1e-3):
+                command[2:5] = WTW_GAITS["trot"]
+        presets = self._gait_presets
         command[2:5] = presets[np.argmin(np.abs(presets - command[2:5]).sum(axis=1))]
         self.gait_command[:] = command
 
@@ -462,7 +521,7 @@ class PolicyRunner:
         g = self._gait_index
         phase, offset, bound = float(cmd[2]), float(cmd[3]), float(cmd[4])
         raw = np.remainder(np.array([g + phase + offset + bound, g + offset, g + bound, g + phase]), 1.0)
-        d = self._gait_stance
+        d = float(cmd[8]) if len(cmd) > 8 else self._gait_stance
         foot = np.where(raw < d, raw * (0.5 / d), 0.5 + (raw - d) * (0.5 / (1.0 - d)))
         return np.sin(2.0 * np.pi * foot).astype(np.float32)
 
@@ -741,6 +800,24 @@ class PolicyRunner:
         # identical between the two, which is what makes this a one-line difference.
         cmd = np.asarray(commands).ravel()
         if self._obs_layout == "wtw":
+            velocity = np.asarray(cmd[:3], dtype=np.float32)
+            if self._max_stride and len(self.gait_command) > 8:
+                sweep = np.hypot(velocity[0], velocity[1]) + abs(velocity[2]) * self._yaw_radius
+                limit = float(self._max_stride) * self.gait_command[1] / self.gait_command[8]
+                if sweep > limit:
+                    velocity = velocity * (limit / sweep)
+            obs_parts = [
+                lin_vel_b,
+                np.asarray(ang_vel_b, dtype=np.float32) * UNITREE_ANG_VEL_SCALE,
+                proj_grav,
+                velocity,
+                jpos_isaac - desired_qpos,
+                np.asarray(jvel_isaac, dtype=np.float32) * UNITREE_JOINT_VEL_SCALE,
+                last_actions,
+                self.gait_command,
+                self._wtw_clock(),
+            ]
+        elif self._obs_layout == "unitree_clock":
             obs_parts = [
                 lin_vel_b,
                 np.asarray(ang_vel_b, dtype=np.float32) * UNITREE_ANG_VEL_SCALE,
@@ -749,8 +826,7 @@ class PolicyRunner:
                 jpos_isaac - desired_qpos,
                 np.asarray(jvel_isaac, dtype=np.float32) * UNITREE_JOINT_VEL_SCALE,
                 last_actions,
-                self.gait_command,
-                self._wtw_clock(),
+                self._speed_clock(np.asarray(cmd[:3], dtype=np.float32)),
             ]
         elif self._obs_layout == "unitree_vel":
             # unitree_rl_lab with base_lin_vel added to the actor. Same per-term scales as
@@ -850,7 +926,7 @@ class PolicyRunner:
             # Isaac Lab flattens history per term: each term's steps oldest to newest, then the
             # next term. This buffer is step-major with the newest row first.
             oldest_first = self._obs_history[::-1]
-            edges = np.cumsum((0,) + WTW_BLOCKS)
+            edges = np.cumsum((0,) + self._wtw_blocks)
             return np.concatenate(
                 [oldest_first[:, a:b].reshape(-1) for a, b in zip(edges[:-1], edges[1:])]
             ).astype(np.float32)
@@ -911,6 +987,7 @@ class PolicyRunner:
         self.last_actions[:] = 0.0
         self._episode_start = True
         self._gait_index = 0.0
+        self._reset_speed_clock()
 
     def step(self, state, commands, dt=0.02, verbose=None):
         """
