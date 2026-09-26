@@ -1,6 +1,6 @@
 """Evaluate every Nth checkpoint of a training run, while that run is still training.
 
-`Mujoco/eval_mujoco.py` sweeps a checkpoint across commanded velocities and writes
+`quadruped_drivers/eval_mujoco.py` sweeps a checkpoint across commanded velocities and writes
 `mujoco_eval_report_<checkpoint>.json` next to it, which the dashboard then charts. Run by hand
 it is a post-mortem tool: you train for hours, then evaluate. This watches the checkpoints folder
 instead and evaluates each one as it lands, so the sweep for 50k is on screen while 200k is still
@@ -13,7 +13,7 @@ Two things make this a separate process rather than a hook inside training:
     evaluation is spawned through whichever interpreter can `import rclpy` -- see
     `resolve_eval_python`, which also knows how to source /opt/ros/<distro>/setup.bash.
   * Different hardware. The sweep is MuJoCo on CPU with the policy on CPU (see
-    Controller/policy_runner.py), so it does not compete with Isaac Sim for the GPU.
+    quadruped_core/controller/policy_runner.py), so it does not compete with Isaac Sim for the GPU.
 
 Typical use is through `launcher.py` (it answers --log-root/--after/--parent-pid for you), but it
 stands alone:
@@ -41,8 +41,11 @@ except ImportError:                     # only costs the obs_dim auto-detect
     yaml = None
 
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-EVAL_SCRIPT = os.path.join(REPO_DIR, "Mujoco", "eval_mujoco.py")
-SUPERVISOR = os.path.join(REPO_DIR, "Operator", "supervisor.py")
+EVAL_MODULE = "quadruped_drivers.eval_mujoco"
+SUPERVISOR_MODULE = "quadruped_operator.supervisor"
+# Run straight from src/, so a sweep needs no colcon build.
+SRC_PACKAGES = [os.path.join(REPO_DIR, "src", p)
+                for p in ("quadruped_core", "quadruped_drivers", "quadruped_operator", "unitree_sdk2py")]
 CKPT_RE = re.compile(r"^agent_(\d+)\.pt$")
 RSL_CKPT_RE = re.compile(r"^model_(\d+)\.pt$")
 
@@ -64,12 +67,12 @@ def _on_signal(signum, frame):
 def eval_env():
     """os.environ as ROS 2 needs to see it. The watcher is normally started from the Isaac venv,
     whose bin directory comes first on PATH and whose python3 has no rclpy -- sourcing a ROS setup
-    does not undo that, so the venv is stripped here instead. PYTHONPATH goes too: launcher.py puts
+    does not undo that, so the venv is stripped here instead. PYTHONPATH is replaced: launcher.py puts
     the Isaac task package on it, which has no business inside the evaluation process."""
     env = os.environ.copy()
     venv = env.pop("VIRTUAL_ENV", None)
     env.pop("PYTHONHOME", None)
-    env.pop("PYTHONPATH", None)
+    env["PYTHONPATH"] = os.pathsep.join(SRC_PACKAGES)
     if venv:
         bin_dir = os.path.join(venv, "bin")
         env["PATH"] = os.pathsep.join(
@@ -255,11 +258,11 @@ def _looks_dead(report_path):
 
 
 def start_supervisor(prefix, robot):
-    """Operator/supervisor.py broadcasts the safety heartbeat and the torque limit that
+    """quadruped_operator/supervisor.py broadcasts the safety heartbeat and the torque limit that
     CommandSafetyProcessor waits for; until the first heartbeat arrives active_max_torque is 0 and
     the PD loop produces no torque at all, so the sweep measures a limp robot. During a deployment
     the Console plays this role -- with nobody at a console, the watcher has to."""
-    argv = prefix + [SUPERVISOR, f"--robot={robot}"]
+    argv = prefix + ["-m", SUPERVISOR_MODULE, f"--robot={robot}"]
     # Its console output is a 10 Hz status box; in the sweep log that buries everything worth
     # reading. eval_mujoco.py reports whether the heartbeat arrived, which is the part that matters.
     proc = subprocess.Popen(argv, cwd=REPO_DIR, env=eval_env(), stdin=subprocess.DEVNULL,
@@ -270,7 +273,7 @@ def start_supervisor(prefix, robot):
 def evaluate(prefix, ckpt, robot, obs_dim, log_path, extra, supervise=True):
     # -u: the log is meant to be tailed while the sweep runs, and eval_mujoco.py prints its
     # per-speed results with plain print(), which block-buffers into a file.
-    argv = prefix + ["-u", EVAL_SCRIPT, f"--robot={robot}", f"--internal_policy={ckpt}",
+    argv = prefix + ["-u", "-m", EVAL_MODULE, f"--robot={robot}", f"--internal_policy={ckpt}",
                      f"--obs_dim={obs_dim}", "--headless"] + extra
     step = os.path.basename(ckpt)
     _log(f"evaluating {step} (obs_dim={obs_dim}, robot={robot}) -> {os.path.basename(log_path)}")
@@ -354,7 +357,7 @@ def main():
                    help="list what would be evaluated and exit, without running anything")
     p.add_argument("--use-estimator", action="store_true")
     p.add_argument("--no-supervisor", action="store_true",
-                   help="do not run Operator/supervisor.py during each sweep (only when a Console "
+                   help="do not run quadruped_operator/supervisor.py during each sweep (only when a Console "
                         "or supervisor of your own is already broadcasting the heartbeat)")
     args = p.parse_args()
 

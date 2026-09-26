@@ -18,7 +18,7 @@
 #
 # Everything is derived at runtime, so this works from any laptop with no edits.
 
-_cfg="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/Configs/config.yaml"
+_cfg="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/src/quadruped_bringup/config/config.yaml"
 
 _server=$(sed -n 's/^[[:space:]]*discovery_server:[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' "$_cfg" 2>/dev/null | tr -d ' ')
 [ -z "$_server" ] && _server="10.42.0.1:11811"

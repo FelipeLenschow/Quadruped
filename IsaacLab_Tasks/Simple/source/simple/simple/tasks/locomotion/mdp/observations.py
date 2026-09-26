@@ -69,3 +69,19 @@ class base_lin_vel_estimate(biased_obs):
         from isaaclab.envs.mdp import base_lin_vel
 
         return super().__call__(env, func=base_lin_vel, bias=bias, asset_cfg=asset_cfg)
+
+
+def speed_clock(env: ManagerBasedRLEnv, command_name: str = "clock") -> torch.Tensor:
+    return env.command_manager.get_term(command_name).clock
+
+
+def speed_clock_contact(env: ManagerBasedRLEnv, command_name: str = "clock") -> torch.Tensor:
+    return env.command_manager.get_term(command_name).desired_contact
+
+
+def base_height_ground(
+    env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Base height above the mean of the height scan."""
+    ground = env.scene.sensors[sensor_cfg.name].data.ray_hits_w.torch[..., 2].mean(dim=1)
+    return (env.scene[asset_cfg.name].data.root_pos_w.torch[:, 2] - ground).unsqueeze(1)

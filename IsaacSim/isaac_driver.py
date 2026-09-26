@@ -10,8 +10,8 @@ import os
 import os
 import sys
 
-# Ensure absolute path of the repository is in sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Isaac Sim's Python 3.12 cannot load the colcon install, so the library is imported from src/.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", "quadruped_core")))
 
 import time
 import numpy as np
@@ -65,8 +65,8 @@ from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
-from pipeline import LocomotionPipeline
-from Configs.config_loader import load_config
+from quadruped_core.pipeline import LocomotionPipeline
+from quadruped_core.config_loader import load_config
 
 from isaaclab_assets.robots.unitree import (
     UNITREE_A1_CFG,
@@ -372,7 +372,8 @@ def main():
 
     # Cleanup
     node.destroy_node()
-    rclpy.shutdown()
+    if rclpy.ok():
+        rclpy.shutdown()
     simulation_app.close()
 
 

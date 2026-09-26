@@ -47,13 +47,33 @@ Two things that surprise people:
 3. Finds checkpoints under `<module>/logs/**/*.pt` or `<module>/checkpoints/*.pt`.
 4. For `train`, reads `<module>/source/**/training_phases.yaml` to list phases and can auto-chain a curriculum sequence (e.g. phase1 → phase6), feeding each segment's best checkpoint into the next `train.py` invocation.
 5. Dispatches to a subprocess, passing robot/terrain/phase selection as **environment variables** (`QUADRUPED_TRAINING_PHASE`, `QUADRUPED_ROBOT_CFG`, `QUADRUPED_TERRAIN`, `PYTHONPATH=<module>/source/Quadruped`) rather than CLI flags — task code reads these from `os.environ`.
-6. For sim/deploy actions, also starts `Controller/reward_estimator_node.py` in the background.
+   The ROS-side actions run from the ROS 2 packages in `src/` (see below): `ros2 launch quadruped_bringup <mode>.launch.py key:=value ...` for drivers, eval, twins, gamepad teleop, eval sweep, bag record and rviz/plotjuggler/rqt/foxglove; `ros2 run` for the interactive ones that read stdin (console, keyboard teleop, joint tester, MCAP replay). Before those actions the launcher runs `colcon build --symlink-install --base-paths src` when the install is missing or stale, and sources `install/setup.bash`.
+6. For sim/deploy actions, can also start the reward estimator (`reward:=true`; off by default, `START_REWARD_ESTIMATOR` in `launcher.py`).
 7. For `train`, optionally starts `Tools/auto_eval.py` in the background (one watcher per curriculum
    segment, stopped before the run folder is renamed). It watches the run's `checkpoints/` and puts
-   every Nth checkpoint (default 50k) through `Mujoco/eval_mujoco.py`, so the evaluation half of the
+   every Nth checkpoint (default 50k) through `quadruped_drivers.eval_mujoco` (run with `-m` from `src/`, no build needed), so the evaluation half of the
    dashboard fills in while the run is still going. The sweep is spawned through a ROS 2 interpreter
    (sourcing `/opt/ros/<distro>/setup.bash` and stripping the Isaac venv off `PATH`) because
    `eval_mujoco.py` imports `rclpy`, which the Isaac venv does not have.
+
+## ROS 2 packages (`src/`)
+
+Runtime code (everything that is not training) is a colcon workspace; build only `src/`, since `IsaacLab_Tasks/` also contains `setup.py` packages:
+
+    colcon build --symlink-install --base-paths src && source install/setup.bash
+
+In Docker run colcon as `python3 -m colcon ...` from the venv, so node scripts get the venv's Python (torch, mujoco).
+
+- `src/`: the ROS 2 packages (colcon workspace, `colcon build --symlink-install --base-paths src`):
+  - `quadruped_core`: library, no nodes: `pipeline.py`, `controller/` (policy runner, safety processor, pose generator), `telemetry/` (TelemetryManager, LKF estimator, kinematics), `config_loader.py`, `paths.py`.
+  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`).
+  - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool.
+  - `quadruped_description`: MuJoCo menagerie, Gazebo world, Go2/Go1/A1 models, kinematics yaml, bundled policies.
+  - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`).
+  - `unitree_sdk2py`: wraps the `third_party/unitree_sdk2_python` submodule.
+- `IsaacSim/isaac_driver.py`: stays outside the packages (Isaac Sim's Python 3.12); imports `quadruped_core` from `src/`.
+
+Scripts still take command-line flags (not ROS parameters); `rclpy.utilities.remove_ros_args` strips the `--ros-args` that `Node` appends. Data is found through `quadruped_core.paths` (ament share dir, falling back to `src/`), and `config.yaml` lives at `src/quadruped_bringup/config/config.yaml`.
 
 ## `IsaacLab_Tasks/` structure
 

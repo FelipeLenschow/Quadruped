@@ -168,7 +168,7 @@ def _find_event_files():
 def _find_report_files():
     """Every sweep report under the module, from either simulator.
 
-    Two writers produce these now: Mujoco/eval_mujoco.py -> mujoco_eval_report_<ckpt>.json and
+    Two writers produce these now: quadruped_drivers/eval_mujoco.py -> mujoco_eval_report_<ckpt>.json and
     Simple/scripts/rsl_rl/sweep.py -> isaac_eval_report_<ckpt>.json. The Isaac ones are
     the primary measurement for any policy whose actor has no base_lin_vel input -- it runs open
     loop on velocity, so its MuJoCo numbers understate it badly (a 1.0 m/s command reads 0.74 in

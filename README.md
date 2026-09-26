@@ -20,24 +20,26 @@ The framework is built on a **Hardware-Agnostic Core** to ensure zero-gap sim-to
 Each backend (MuJoCo, Gazebo, Isaac Sim, Real Robot) has a dedicated driver that handles physics and policy inference locally. This bypasses ROS 2 network overhead, achieving sub-millisecond control latency.
 
 ## 🧬 Project Structure
-- `Controller/`: The brain of the robot.
-
-  - `policy_runner.py`: The cross-platform inference engine.
-  - `policy_bridge.py`: Contains the `CommandProcessor` for safety and scaling.
-  - `Utils/telemetry.py`: Standardizes data from any source (Sim or Real).
+- `src/`: the ROS 2 packages (colcon workspace, `colcon build --symlink-install --base-paths src`):
+  - `quadruped_core`: library, no nodes: `pipeline.py`, `controller/` (policy runner, safety processor, pose generator), `telemetry/` (TelemetryManager, LKF estimator, kinematics), `config_loader.py`, `paths.py`.
+  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`).
+  - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool.
+  - `quadruped_description`: MuJoCo menagerie, Gazebo world, Go2/Go1/A1 models, kinematics yaml, bundled policies.
+  - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`).
+  - `unitree_sdk2py`: wraps the `third_party/unitree_sdk2_python` submodule.
+- `IsaacSim/isaac_driver.py`: stays outside the packages (Isaac Sim's Python 3.12); imports `quadruped_core` from `src/`.
 - `IsaacLab_Tasks/`: RL task definitions and Isaac Lab configurations. Each subfolder is an independent task package (own source tree, own logs, own `training_phases.yaml`):
   - `Walk/`: the main, actively developed locomotion task (3 robots: Go2/Go1/A1).
   - `Walk_GO2/`: a Go2-only simplification, superseded by going back to `Walk`; likely stale.
   - `Stairs/`: experiment adding a terrain/height-scan sensor for stair climbing.
   - `Handstand/`: handstand task.
-- `Mujoco/`, `Gazebo/`, `IsaacSim/`: Simulator-specific drivers and assets.
 
 ## 🛠️ Typical Workflow
 
 1. **Train Policy**: `python launcher.py` -> Select Task -> **[1] Train Policy**.
 2. **Play Policy**: Verify logic immediately in Isaac Lab via **[2] Play Policy**.
 3. **High-Fidelity Verification**: Use the **MuJoCo** or **Gazebo** drivers to validate physics-dependent behaviors (e.g., foot friction, actuator dynamics).
-4. **Deploy**: The same `Controller/` module used in simulation is deployed directly to the Jetson Orin on the physical robot.
+4. **Deploy**: The same `quadruped_core` package used in simulation is deployed directly to the Jetson Orin on the physical robot.
 
 ## ⚠️ Requirements
 

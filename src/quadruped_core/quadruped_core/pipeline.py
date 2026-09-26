@@ -1,0 +1,325 @@
+import os
+import numpy as np
+from std_msgs.msg import Float32MultiArray, String
+from quadruped_core.telemetry.telemetry import TelemetryManager
+from quadruped_core.controller.policy_manager import PolicyManager
+from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_core.controller.command_safety_processor import CommandSafetyProcessor
+from quadruped_core.controller.distributor import Distributor
+from quadruped_core.config_loader import load_config
+
+
+class LocomotionPipeline:
+    """
+    Centralized pipeline encapsulating Telemetry, Policy Selection/Inference,
+    Safety Arbitration, and Command Distribution.
+
+    Ensures identical execution across MuJoCo, Gazebo, Isaac Sim, and Physical Hardware.
+    """
+    def __init__(self, node, robot_type="go2", checkpoint=None, obs_dim=49,
+                 use_estimator=False, joint_names=None, sim_dt=0.001):
+        self.node = node
+        self.robot_type = robot_type
+
+        self.config = load_config()
+        self.ctrl_cfg = self.config.get("control", {})
+        safety_cfg = self.config.get("safety", {})
+
+        # 1. Telemetry Manager
+        self.telemetry = TelemetryManager(node, joint_names, use_estimator=use_estimator)
+
+        # 2. Policy Manager (Unified registry for policy runners)
+        self.policy_manager = PolicyManager(node, robot_type=robot_type, obs_dim=obs_dim)
+
+        # Register Main Policy (policy under test selected by the launcher)
+        if checkpoint:
+            self.policy_manager.load_policy("main", checkpoint)
+        else:
+            self.node.get_logger().warn(
+                "[LocomotionPipeline] No main policy checkpoint provided. Policy runner disabled.")
+
+        # Register Safety Policy (backup recovery policy configured in config.yaml)
+        safety_policy_path = safety_cfg.get("safety_policy_path", "")
+        if safety_policy_path:
+            loaded = self.policy_manager.load_policy("safety", safety_policy_path)
+            if not loaded:
+                self.node.get_logger().warn(
+                    "[LocomotionPipeline] Safety policy failed to load. "
+                    "Robot will DISABLE directly on safety violations.")
+        else:
+            self.node.get_logger().info(
+                "[LocomotionPipeline] No safety policy configured. "
+                "Robot will DISABLE directly on safety violations.")
+
+        self.mj_to_isaac = list(range(12))  # Standard mapping
+        self.sim_dt = sim_dt
+        self.decimation = self.ctrl_cfg.get("decimation", 4)
+        self.policy_dt = self.decimation * self.sim_dt
+
+        # 3. Command Safety Processor (safety checking + arbitration)
+        self.safety_processor = CommandSafetyProcessor(
+            node, robot_type=robot_type, joint_names=joint_names)
+
+        # 4. Distributor (hardware/ROS command output)
+        self.distributor = Distributor(node, joint_names=joint_names)
+
+        # 5. Pose Generator (registered inside PolicyManager)
+        self.policy_manager.register_pose_generator(node)
+
+        # 6. Pipeline Mode: "pose" (default — robot starts in pose mode)
+        #    or "policy" (NN inference mode)
+        self.mode = "pose"
+        self.node.create_subscription(
+            String, "/pipeline/mode", self._mode_cb, 10)
+        # Walk These Ways gait commands (quadruped_operator/gait_teleop.py): the 8 values of
+        # PolicyRunner.gait_command. Policies without a gait input ignore it.
+        self.node.create_subscription(
+            Float32MultiArray, "/gait_command", self._gait_cb, 10)
+
+        # Nominal standing pose (default fallback)
+        self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
+
+        self.latest_targets = self.desired_qpos.copy()
+        self.step_counter = 0
+        self._pose_heartbeat_was_ok = False  # Track heartbeat lost→alive transitions
+        self._was_estopped = False           # Track e-stop latched→released
+
+        # Mode Transition State
+        self.mode_transition_active = False
+        self.mode_transition_start_time = None
+        self._last_measured_q = None
+        self.mode_transition_duration = 3.0  # Smooth transition duration in seconds
+        self.mode_transition_start_targets = self.desired_qpos.copy()
+
+    def reset(self):
+        """Drop all per-episode state. Call whenever the simulation is reset.
+
+        latest_targets is the important one: step() only recomputes targets on a policy step
+        (every `decimation` calls) and returns this cached array on every other call. So once a
+        NaN lands in it, every later step returns that NaN -- across mj_resetData, across a new
+        eval run, forever -- which is why one unstable test used to abort the whole sweep at
+        t=0.00 with no chance to recover.
+        """
+        self.policy_manager.reset_policy_state()
+        self.latest_targets = self.desired_qpos.copy()
+        self.step_counter = 0
+        self.mode_transition_active = False
+        self.mode_transition_start_time = None
+        self.mode_transition_start_targets = self.desired_qpos.copy()
+
+    def _gait_cb(self, msg: Float32MultiArray):
+        if len(msg.data) != 8:
+            return
+        for runner in self.policy_manager.policies.values():
+            if getattr(runner, "_obs_layout", None) == "wtw":
+                runner.set_gait_vector(msg.data)
+
+    def _mode_cb(self, msg: String):
+        """Handle pipeline mode switch commands from the Console."""
+        new_mode = msg.data.strip().lower()
+
+        # An e-stop is not a pause. Arming the policy while latched would let
+        # it start the instant someone pressed ENTER at the robot, on a robot
+        # still lying on the floor.
+        if new_mode == "policy" and self.safety_processor.is_estopped:
+            self.node.get_logger().warn(
+                "[Pipeline] Refusing policy mode: E-STOP is latched. "
+                "Release it at the robot first.")
+            return
+
+        if new_mode in ("pose", "policy"):
+            if new_mode != self.mode:
+                self.node.get_logger().info(
+                    f"[Pipeline] Mode switched: {self.mode} → {new_mode}")
+                self.mode = new_mode
+
+                # Start smooth transition from current targets
+                self.mode_transition_active = True
+                self.mode_transition_start_time = None
+
+                was_limp = self.safety_processor.active_max_torque <= 0.1
+                if was_limp and self._last_measured_q is not None:
+                    self.mode_transition_start_targets = self._last_measured_q.copy()
+                    self.node.get_logger().info(
+                        "[Pipeline] Torque was off - blending from measured joints.")
+                else:
+                    self.mode_transition_start_targets = self.latest_targets.copy()
+
+                # Clear safety latch when entering pose mode — the pose
+                # generator IS the recovery mechanism for unsafe states.
+                if new_mode == "pose":
+                    self.safety_processor._policy_blocked = False
+                    self.safety_processor._shutdown_logged = False
+                    self.safety_processor._robot_safe = True
+                    # Re-sync pose generator to current desired joint positions
+                    # so it doesn't jump to the old cached targets.
+                    pose_gen = self.policy_manager.policies.get("pose")
+                    if pose_gen:
+                        pose_gen.sync_to_current(
+                            self.mode_transition_start_targets)
+        else:
+            self.node.get_logger().warn(
+                f"[Pipeline] Unknown mode '{new_mode}'. Use 'pose' or 'policy'.")
+
+    def step(self, raw_state_kwargs, cmd_vel, sim_time, send_cb=None):
+        """
+        Executes one step of the pipeline.
+
+        Args:
+            raw_state_kwargs: dict containing q, dq, quat, gyro, accel, pos, vel, contact, etc.
+            cmd_vel: list/array of velocity commands [vx, vy, wz, unused]
+            sim_time: current simulation or physical time
+            send_cb: optional callable(targets), run on a policy step the moment the final
+                targets exist -- before /commands/joint_commands and the telemetry are
+                published. The real driver writes to the motors here, so ROS publishing
+                (~2 ms on the Jetson) no longer sits between the state read and the command.
+
+        Returns:
+            latest_targets (np.ndarray): The target joint positions to send to the motors.
+        """
+        # Determine if this is a policy inference step (e.g., 50Hz)
+        is_policy_step = (self.step_counter % self.decimation) == 0
+        self.step_counter += 1
+
+        # 1. Standardize State
+        raw_state_kwargs['update_estimator'] = is_policy_step
+        state = self.telemetry.process_state(**raw_state_kwargs)
+
+
+        self._last_measured_q = np.array(
+            [state.motorState[i].q for i in range(12)], dtype=np.float32)
+
+        # 2. Policy Inference & Command Processing
+        if is_policy_step:
+
+            # ── E-STOP RELEASE ───────────────────────────────────────
+            # The operator pressed ENTER on the driver. Torque is about to
+            # come back on a robot that has been lying limp on the floor,
+            # and the pose generator is still holding whatever it was told
+            # before the collapse — usually a stand. Handing that back would
+            # snap every joint from the floor to standing at full torque.
+            #
+            # Re-seed from the measured joints instead (sync_to_current with
+            # no argument), which is the honest reading precisely because the
+            # robot was limp: with kp=0 there was no PD error to account for.
+            # The robot then holds exactly where it landed and waits for a
+            # pose command.
+            # ─────────────────────────────────────────────────────────
+            if self._was_estopped and not self.safety_processor.is_estopped:
+                self._was_estopped = False
+                self.mode = "pose"
+                self.mode_transition_active = False
+                pose_gen = self.policy_manager.policies.get("pose")
+                if pose_gen:
+                    pose_gen.sync_to_current()
+                self.node.get_logger().warn(
+                    "[Pipeline] E-STOP released — holding at measured joint "
+                    "positions in POSE mode.")
+
+            if self.mode == "pose":
+                # ── POSE MODE ────────────────────────────────────────
+                # Bypass ROM/tilt safety checks — the whole point of the
+                # pose generator is to escape unsafe states (e.g., lying
+                # on the ground where joints are at their limits).
+                #
+                # We still require the Console heartbeat to be alive
+                # (watchdog) and apply soft joint clipping.
+                # ─────────────────────────────────────────────────────
+                import time as _time
+                sp = self.safety_processor
+                heartbeat_ok = (
+                    sp.has_received_heartbeat and
+                    (_time.time() - sp.last_heartbeat_time) <= sp.watchdog_timeout
+                )
+
+                # Detect heartbeat lost→alive transition (Console restart)
+                # and re-sync pose generator to actual joint positions.
+                if heartbeat_ok and not self._pose_heartbeat_was_ok:
+                    pose_gen = self.policy_manager.policies.get("pose")
+                    if pose_gen:
+                        pose_gen.sync_to_current()
+                        self.node.get_logger().info(
+                            "[Pipeline] Heartbeat restored in pose mode — "
+                            "synced to current joint positions.")
+                self._pose_heartbeat_was_ok = heartbeat_ok
+
+                if heartbeat_ok and "pose" in self.policy_manager.policies:
+                    targets = self.policy_manager.step_single(
+                        "pose", state, cmd_vel, self.mj_to_isaac,
+                        current_time=sim_time,
+                        dt=self.policy_dt
+                    )
+                    # Soft-clip to joint limits (still enforced)
+                    final_targets = np.clip(targets, sp.soft_min, sp.soft_max)
+                    max_torque = sp.global_max_torque
+                    # Update the safety processor's active torque so the
+                    # driver's PD loop (which reads it directly) applies force.
+                    sp.active_max_torque = max_torque
+                else:
+                    # No heartbeat → zero torque (same fail-safe as policy mode)
+                    final_targets = self.desired_qpos.copy()
+                    max_torque = 0.0
+                    sp.active_max_torque = 0.0
+
+            else:
+                # ── POLICY MODE ──────────────────────────────────────
+                # Full safety evaluation: ROM, tilt, and heartbeat checks.
+                # ─────────────────────────────────────────────────────
+                is_safe, _ = self.safety_processor.evaluate_safety(state)
+
+                if not is_safe:
+                    active_policy = "safety"
+                else:
+                    active_policy = "main"
+
+                proposed_targets = {}
+                if active_policy in self.policy_manager.policies:
+                    targets = self.policy_manager.step_single(
+                        active_policy, state, cmd_vel, self.mj_to_isaac,
+                        current_time=sim_time,
+                        dt=self.policy_dt
+                    )
+                    key = "safety" if active_policy == "safety" else "main"
+                    proposed_targets[key] = targets
+
+                final_targets, max_torque = self.safety_processor.process(
+                    proposed_targets=proposed_targets,
+                    state=state
+                )
+
+            # ── HARD E-STOP OVERRIDE ─────────────────────────────
+            # active_max_torque already reads zero through its property, but
+            # the pose branch computes its own local max_torque and hands that
+            # to the distributor (and on to /commands/joint_commands), so it
+            # has to be cut here too. Targets hold at the last commanded value
+            # rather than snapping to the nominal stance: with kp=0 they do
+            # nothing now, and they avoid a jump if torque is restored.
+            if self.safety_processor.is_estopped:
+                self._was_estopped = True
+                final_targets = self.latest_targets
+                max_torque = 0.0
+                self.mode_transition_active = False
+
+            # ── MODE TRANSITION INTERPOLATION ────────────────────
+            if self.mode_transition_active:
+                if self.mode_transition_start_time is None:
+                    self.mode_transition_start_time = sim_time
+                
+                elapsed = sim_time - self.mode_transition_start_time
+                alpha = np.clip(elapsed / self.mode_transition_duration, 0.0, 1.0)
+                
+                final_targets = (1.0 - alpha) * self.mode_transition_start_targets + alpha * final_targets
+                
+                if alpha >= 1.0:
+                    self.mode_transition_active = False
+                    self.mode_transition_start_time = None
+
+            self.latest_targets = final_targets
+            self.distributor.send(final_targets, max_torque, send_to_robot_cb=send_cb)
+
+        # 3. Telemetry Publishing
+        if is_policy_step:
+            self.telemetry.publish(sim_time=sim_time, state=state)
+
+        return self.latest_targets
+

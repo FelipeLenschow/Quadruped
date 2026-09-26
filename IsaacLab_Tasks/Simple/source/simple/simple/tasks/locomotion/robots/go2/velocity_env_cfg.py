@@ -529,7 +529,7 @@ def _drop_level_curriculum(cfg) -> None:
 
     MEASURED, on the first Both run: the curriculum sat at +-0.1 for 1200 of 3000 iterations
     before widening, against 750 for the unmodified baseline. It widens only when mean
-    track_lin_vel_xy clears 0.8 x weight, and BOTH fixes push that mean down -- the scaled kernel
+    track_lin_vel_xy clears 0.7 x weight, and BOTH fixes push that mean down -- the scaled kernel
     tightens the tolerance, and the slow quota fills the batch with the commands that are hardest
     to score on. So the arm spent half its budget training on +-0.1 alone, and was under-trained
     at wide commands relative to the baseline it exists to be compared against.
@@ -616,7 +616,7 @@ def _apply_air_time_target(cfg) -> None:
 # Final7's slow-command share: 60% of resamples keep their direction but take a speed in
 # 0.05-0.3 m/s. Uniform sampling puts only ~12% there, so the foot terms barely see slow steps.
 # It switches on only once the level curriculum has reached the full x range, so a slow-heavy
-# batch cannot hold mean tracking under the curriculum's 0.8 x weight bar.
+# batch cannot hold mean tracking under the curriculum's 0.7 x weight bar.
 SLOW_FRACTION = float(os.environ.get("PAPER_SLOW_FRACTION", 0.6))
 SLOW_RANGE = (
     float(os.environ.get("PAPER_SLOW_LO", 0.05)),
@@ -1052,6 +1052,83 @@ class RobotSigmaVelFootRoughDeployEnvCfg(RobotSigmaVelFootRoughEnvCfg):
 
 @configclass
 class RobotSigmaVelFootRoughDeployPlayEnvCfg(RobotSigmaVelFootRoughDeployEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+# ── Clock ──────────────────────────────────────────────────────────────────────────────────
+# Deploy plus a trot clock whose rate follows the command (mdp.SpeedClockCommand): stride
+# L = stride_min + stride_gain * v, frequency v / L, fixed swing time. The swing-time and apex
+# terms are replaced by Walk These Ways' contact schedule and dense swing-height terms. The actor
+# gets sin and cos of each foot's phase, 48 + 8 inputs.
+CLOCK_FEET = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
+CLOCK_STRIDE_MIN = float(os.environ.get("PAPER_CLOCK_STRIDE_MIN", 0.10))
+CLOCK_STRIDE_GAIN = float(os.environ.get("PAPER_CLOCK_STRIDE_GAIN", 0.3))
+CLOCK_SWING_TIME = float(os.environ.get("PAPER_CLOCK_SWING_TIME", 0.2))
+CLOCK_MAX_FREQUENCY = float(os.environ.get("PAPER_CLOCK_MAX_FREQUENCY", 3.0))
+CLOCK_SWING_HEIGHT = float(os.environ.get("PAPER_CLOCK_SWING_HEIGHT", 0.08))
+CLOCK_W_FORCE = float(os.environ.get("PAPER_CLOCK_W_FORCE", 2.0))
+CLOCK_W_VEL = float(os.environ.get("PAPER_CLOCK_W_VEL", 0.5))
+# At -20 the term cost 2% of the tracking reward and feet cleared 2-6 cm of the 8 asked.
+CLOCK_W_SWING = float(os.environ.get("PAPER_CLOCK_W_SWING", -150.0))
+# Standing height of the Go2 in its default pose; walking without this term rose to 0.37-0.38 m.
+CLOCK_BASE_HEIGHT = float(os.environ.get("PAPER_CLOCK_BASE_HEIGHT", 0.32))
+CLOCK_W_HEIGHT = float(os.environ.get("PAPER_CLOCK_W_HEIGHT", -40.0))
+
+
+def _apply_clock(cfg) -> None:
+    cfg.commands.clock = mdp.SpeedClockCommandCfg(
+        foot_names=tuple(CLOCK_FEET),
+        stride_min=CLOCK_STRIDE_MIN,
+        stride_gain=CLOCK_STRIDE_GAIN,
+        swing_time=CLOCK_SWING_TIME,
+        max_frequency=CLOCK_MAX_FREQUENCY,
+    )
+    cfg.observations.policy.clock = ObsTerm(func=mdp.speed_clock, params={"command_name": "clock"})
+    cfg.observations.critic.clock = ObsTerm(func=mdp.speed_clock, params={"command_name": "clock"})
+    cfg.observations.critic.clock_contact = ObsTerm(func=mdp.speed_clock_contact, params={"command_name": "clock"})
+    cfg.observations.critic.clock_rate = ObsTerm(func=mdp.generated_commands, params={"command_name": "clock"})
+    if cfg.scene.height_scanner is None:
+        raise ValueError("Clock needs the height scanner for base height; unset PAPER_NO_HEIGHT_SCANNER.")
+    scanner = SceneEntityCfg("height_scanner")
+    cfg.observations.critic.base_height = ObsTerm(func=mdp.base_height_ground, params={"sensor_cfg": scanner})
+
+    r = cfg.rewards
+    r.feet_air_time_dyn = None
+    r.air_time_variance = None
+    r.foot_height = None
+    feet_asset = SceneEntityCfg("robot", body_names=CLOCK_FEET, preserve_order=True)
+    feet_sensor = SceneEntityCfg("contact_forces", body_names=CLOCK_FEET, preserve_order=True)
+    r.clock_contact_force = RewTerm(func=mdp.clock_contact_force, weight=CLOCK_W_FORCE, params={"sensor_cfg": feet_sensor})
+    r.clock_contact_vel = RewTerm(func=mdp.clock_contact_vel, weight=CLOCK_W_VEL, params={"asset_cfg": feet_asset})
+    r.clock_swing_height = RewTerm(
+        func=mdp.clock_swing_height,
+        weight=CLOCK_W_SWING,
+        params={"asset_cfg": feet_asset, "swing_height": CLOCK_SWING_HEIGHT},
+    )
+    r.base_height = RewTerm(
+        func=mdp.base_height_moving,
+        weight=CLOCK_W_HEIGHT,
+        params={"target_height": CLOCK_BASE_HEIGHT, "sensor_cfg": scanner},
+    )
+    print(f"[Clock] base height {CLOCK_BASE_HEIGHT} m above the scan, weight {CLOCK_W_HEIGHT}, critic only")
+    print(
+        f"[Clock] stride {CLOCK_STRIDE_MIN} + {CLOCK_STRIDE_GAIN} v m, swing {CLOCK_SWING_TIME} s,"
+        f" f <= {CLOCK_MAX_FREQUENCY} Hz, swing height {CLOCK_SWING_HEIGHT} m,"
+        f" weights force {CLOCK_W_FORCE} vel {CLOCK_W_VEL} swing {CLOCK_W_SWING}"
+    )
+
+
+@configclass
+class RobotClockEnvCfg(RobotSigmaVelFootRoughDeployEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_clock(self)
+
+
+@configclass
+class RobotClockPlayEnvCfg(RobotClockEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         _apply_play_overrides(self)

@@ -14,7 +14,12 @@ from datetime import datetime
 
 TASKS_DIR = "IsaacLab_Tasks"
 LAST_COMMAND_FILE = ".launcher_last_command.json"
-CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Configs", "config.yaml"))
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+# Off since c26be44 (control-loop performance); flip to run it beside the driver again.
+START_REWARD_ESTIMATOR = False
+RECORDING_LAUNCH_FILES = {"real.launch.py", "mujoco.launch.py", "gazebo.launch.py", "isaac_sim.launch.py",
+                          "eval.launch.py", "sweep.launch.py"}
+CONFIG_PATH = os.path.join(REPO_DIR, "src", "quadruped_bringup", "config", "config.yaml")
 
 # Global Environment Detection
 IS_DOCKER = os.path.exists("/.dockerenv")
@@ -353,6 +358,73 @@ def find_highest_step_checkpoint(run_dir):
         
     return os.path.abspath(all_pts[0]) if all_pts else None
 
+def ros2_launch(name, **launch_args):
+    def value(v):
+        return str(v).lower() if isinstance(v, bool) else str(v)
+    return ["ros2", "launch", "quadruped_bringup", name] + [f"{k}:={value(v)}" for k, v in launch_args.items()]
+
+
+def ros2_run(package, executable, *args):
+    return ["ros2", "run", package, executable, *args]
+
+
+def records_itself(cmd):
+    return cmd[:2] == ["ros2", "launch"] and cmd[3] in RECORDING_LAUNCH_FILES
+
+
+def _workspace_stale(stamp, signature):
+    """True when the colcon install is missing, was built elsewhere (host vs Docker: other repo path
+    or interpreter), or is older than a package manifest or a data folder. Symlink-install links
+    each file, so editing a file needs no rebuild; adding one does."""
+    try:
+        with open(stamp) as f:
+            if f.read() != signature:
+                return True
+    except OSError:
+        return True
+    built = os.path.getmtime(stamp)
+    for root, dirs, files in os.walk(os.path.join(REPO_DIR, "src")):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        if os.path.getmtime(root) > built:
+            return True
+        for f in ("package.xml", "setup.py", "setup.cfg"):
+            if f in files and os.path.getmtime(os.path.join(root, f)) > built:
+                return True
+    return False
+
+
+def workspace_env(env):
+    """Build the ROS 2 packages under src/ if needed and return env with install/setup.bash sourced.
+    colcon runs under the ROS 2 interpreter so the node scripts get its shebang (the Docker venv)."""
+    stamp = os.path.join(REPO_DIR, "install", ".launcher_build_stamp")
+    python = sys.executable if sys.version_info[:2] == (3, 10) else "/usr/bin/python3"
+    signature = f"{REPO_DIR}\n{python}\n"
+    if _workspace_stale(stamp, signature):
+        print("[Launcher] Building ROS 2 packages (colcon build --symlink-install)...")
+        subprocess.run([python, "-m", "colcon", "build", "--symlink-install", "--base-paths", "src"],
+                       cwd=REPO_DIR, env=env, check=True)
+        with open(stamp, "w") as f:
+            f.write(signature)
+    setup = os.path.join(REPO_DIR, "install", "setup.bash")
+    out = subprocess.run(["bash", "-c", f'source "{setup}" && env -0'], env=env,
+                         capture_output=True, check=True).stdout
+    return dict(line.split("=", 1) for line in out.decode().split("\0") if "=" in line)
+
+
+def run_foreground(cmd, env):
+    """Ctrl+C reaches the child too (same process group), so wait for it to shut down on its own
+    instead of killing it; a third Ctrl+C kills it."""
+    proc = subprocess.Popen(cmd, env=env)
+    interrupts = 0
+    while True:
+        try:
+            return proc.wait()
+        except KeyboardInterrupt:
+            interrupts += 1
+            if interrupts >= 3:
+                proc.kill()
+
+
 def is_rsl_rl_module(module_path):
     """Modules cut from unitree_rl_lab (Simple, WalkTheseWays) train with their own rsl_rl scripts."""
     return os.path.exists(os.path.join(module_path, "scripts", "rsl_rl", "train.py"))
@@ -666,7 +738,7 @@ def run_cli_menu():
         # the others (the eval viewer and the checkpoint list both read them in place), but they
         # carry their own rsl_rl scripts and no Quadruped task package. Train goes through its own
         # scripts/rsl_rl/train.py; the rest load the checkpoint through
-        # Controller/policy_runner.py, which reads rsl_rl archives directly.
+        # quadruped_core/controller/policy_runner.py, which reads rsl_rl archives directly.
         # Deploy is one of them: its run's params/deploy.yaml (kp 25, kd 0.5, 50 Hz, action
         # scale 0.25, default pose) matches what real_driver.py and robot_defaults.py apply.
         if action not in ("train", "eval_policy", "mujoco", "mujoco_twin", "real_deploy", "teleop_sweep"):
@@ -820,7 +892,7 @@ def run_cli_menu():
         
         # MuJoCo reads the same QUADRUPED_TERRAIN as training does; "rough"
         # puts it on a randomised heightfield instead of an infinite plane.
-        # Amplitude and patch size live under `terrain:` in Configs/config.yaml.
+        # Amplitude and patch size live under `terrain:` in quadruped_bringup/config/config.yaml.
         if action in ["isaac_lab", "mujoco"]:
             terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
             terrain_cfg = "rough" if terrain_choice == "2" else "flat"
@@ -1319,155 +1391,70 @@ def main():
     elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "discovery_server"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
-        sys_python = sys.executable 
+        sys_python = sys.executable
+        if action not in ("sweep_report", "discovery_server"):
+            env = workspace_env(env)
 
         if action == "eval_policy":
-            bridge_script = os.path.abspath(os.path.join("Mujoco", "eval_mujoco.py"))
-            cmd = [
-                sys_python,
-                bridge_script,
-                f"--robot={robot_key}",
-                f"--internal_policy={abs_ckpt}",
-                f"--obs_dim={obs_dim}",
-            ]
-            if headless:
-                cmd.append("--headless")
-            if use_estimator:
-                cmd.append("--use_estimator")
-
-
-        if action == "isaac_sim":
-            bridge_script = os.path.abspath(os.path.join("IsaacSim", "isaac_driver.py"))
-            cmd = [
-                isaac_python,
-                bridge_script,
-                f"--robot={robot_key}",
-                f"--internal_policy={abs_ckpt}",
-                f"--obs_dim={obs_dim}",
-            ]
-            if use_estimator:
-                cmd.append("--use_estimator")
+            cmd = ros2_launch("eval.launch.py", robot=robot_key, checkpoint=abs_ckpt,
+                              obs_dim=obs_dim, headless=headless, use_estimator=use_estimator)
+        elif action == "isaac_sim":
+            cmd = ros2_launch("isaac_sim.launch.py", python=isaac_python, robot=robot_key, checkpoint=abs_ckpt,
+                              obs_dim=obs_dim, use_estimator=use_estimator)
         elif action == "mujoco":
-            bridge_script = os.path.abspath(os.path.join("Mujoco", "mujoco_driver.py"))
-            cmd = [
-                sys_python,
-                bridge_script,
-                f"--robot={robot_key}",
-                f"--internal_policy={abs_ckpt}",
-                f"--obs_dim={obs_dim}",
-            ]
-            # Automatically enable headless in Docker or if headless flag is set
-            if headless:
-                cmd.append("--headless")
-            if use_estimator:
-                cmd.append("--use_estimator")
+            cmd = ros2_launch("mujoco.launch.py", robot=robot_key, checkpoint=abs_ckpt,
+                              obs_dim=obs_dim, headless=headless, use_estimator=use_estimator,
+                              no_ground_truth=no_ground_truth)
             if no_ground_truth:
-                cmd.append("--no_ground_truth")
                 print("[Launcher] Ground truth withheld: MuJoCo will see what the robot sees.")
-        elif action == "mujoco_twin":
-            bridge_script = os.path.abspath(os.path.join("Operator", "mujoco_twin.py"))
-            cmd = [
-                sys_python,
-                bridge_script,
-                f"--robot={robot_key}",
-            ]
-            if use_estimator:
-                cmd.append("--use_estimator")
-            if not show_ghost:
-                cmd.append("--no_ghost")
-        elif action == "gazebo_twin":
-            bridge_script = os.path.abspath(os.path.join("Operator", "gazebo_twin.py"))
-            cmd = [
-                sys_python,
-                bridge_script,
-                f"--robot={robot_key}",
-            ]
-            if use_estimator:
-                cmd.append("--use_estimator")
+        elif action in ("mujoco_twin", "gazebo_twin"):
+            cmd = ros2_launch("twin.launch.py", robot=robot_key, sim=action.split("_")[0],
+                              use_estimator=use_estimator, ghost=show_ghost)
         elif action == "rviz":
-            cmd = ["ros2", "run", "rviz2", "rviz2"]
+            cmd = ros2_launch("tools.launch.py", tool="rviz")
         elif action == "console":
-            bridge_script = os.path.abspath(os.path.join("Operator", "console.py"))
-            cmd = [
-                sys_python,
-                bridge_script,
-                f"--robot={robot_key}",
-            ]
+            cmd = ros2_run("quadruped_operator", "console", f"--robot={robot_key}")
             if use_estimator:
                 cmd.append("--use_estimator")
         elif action == "gazebo":
-            bridge_script = os.path.abspath(os.path.join("Gazebo", "gazebo_driver.py"))
-            cmd = [
-                sys_python,
-                bridge_script,
-                f"--robot={robot_key}",
-                f"--internal_policy={abs_ckpt}",
-                f"--obs_dim={obs_dim}",
-            ]
-            if use_estimator:
-                cmd.append("--use_estimator")
+            cmd = ros2_launch("gazebo.launch.py", robot=robot_key, checkpoint=abs_ckpt,
+                              obs_dim=obs_dim, use_estimator=use_estimator)
         elif action in ["real_deploy", "real_telemetry"]:
-            bridge_script = os.path.abspath(os.path.join("Unitree", "real_driver.py"))
-            cmd = [
-                sys_python,
-                bridge_script,
-                f"--robot={robot_key}",
-                f"--obs_dim={obs_dim}",
-            ]
             sdk_iface = sdk_network_interface()
             if sdk_iface:
-                cmd.append(f"--interface={sdk_iface}")
                 print(f"[Launcher] Unitree SDK bound to interface: {sdk_iface}")
-            if action == "real_deploy" and abs_ckpt:
-                cmd.append(f"--internal_policy={abs_ckpt}")
+            cmd = ros2_launch("real.launch.py", robot=robot_key, obs_dim=obs_dim,
+                              interface=sdk_iface or "",
+                              checkpoint=abs_ckpt if action == "real_deploy" else "")
 
         elif action == "teleop_keyboard":
-            cmd = ["ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard"]
-            # No robot_key or ckpt needed for this
+            # teleop_twist_keyboard's velocity keys plus the Walk These Ways gait commands.
+            cmd = ros2_run("quadruped_operator", "keyboard_teleop")
             
         elif action == "teleop_joy":
-            # Without config_filepath the launch defaults to joy_config:=ps3,
-            # which puts the deadman on the F710's Logitech button and never maps
-            # linear.y - moving the sticks then does nothing at all.
-            joy_cfg = os.path.abspath(os.path.join("Configs", "joy_f710.config.yaml"))
-            cmd = ["ros2", "launch", "teleop_twist_joy", "teleop-launch.py"]
-            if os.path.exists(joy_cfg):
-                cmd.append(f"config_filepath:={joy_cfg}")
-                print(f"[Launcher] Joystick config: {joy_cfg}")
+            print("[Launcher] Starting gait teleop (right stick up/down: pitch, D-pad: gait / step frequency, LT/RT: duty)...")
+            cmd = ros2_launch("joy.launch.py")
 
         elif action == "teleop_sweep":
-            # joy_node is started below on its own - teleop_twist_joy would be a second /cmd_vel
-            # source, and the sweep node refuses to run beside one.
-            bridge_script = os.path.abspath(os.path.join("Operator", "sweep_teleop.py"))
-            cmd = [
-                sys_python,
-                bridge_script,
-                f"--robot={robot_key}",
-                f"--checkpoint={abs_ckpt}",
-                f"--walk_s={sweep_opts.get('walk_s', '10')}",
-                f"--ramp_s={sweep_opts.get('ramp_s', '0')}",
-                f"--axes={sweep_opts.get('axes', 'x,y,yaw')}",
-                f"--max_lin_speed={sweep_opts.get('max_lin_speed', '0.5')}",
-                f"--max_yaw_rate={sweep_opts.get('max_yaw_rate', '1.0')}",
-                f"--walk_m={sweep_opts.get('walk_m', '0')}",
-            ]
+            cmd = ros2_launch("sweep.launch.py", robot=robot_key, checkpoint=abs_ckpt,
+                              walk_s=sweep_opts.get("walk_s", "10"), ramp_s=sweep_opts.get("ramp_s", "0"),
+                              axes=sweep_opts.get("axes", "x,y,yaw"),
+                              max_lin_speed=sweep_opts.get("max_lin_speed", "0.5"),
+                              max_yaw_rate=sweep_opts.get("max_yaw_rate", "1.0"),
+                              walk_m=sweep_opts.get("walk_m", "0"))
 
         elif action == "sweep_report":
             bridge_script = os.path.abspath(os.path.join("Tools", "sweep_report.py"))
             cmd = [sys_python, bridge_script] + list(sweep_opts.get("recordings", []))
 
         elif action == "test_joints":
-            bridge_script = os.path.abspath(os.path.join("Unitree", "test_joints.py"))
-            cmd = [sys_python, bridge_script]
+            cmd = ros2_run("quadruped_drivers", "test_joints")
             sdk_iface = sdk_network_interface()
             if sdk_iface:
                 cmd.append(f"--interface={sdk_iface}")
         
-        elif action == "plotjuggler":
-            cmd = ["ros2", "run", "plotjuggler", "plotjuggler"]
-            
-        elif action == "foxglove":
-            cmd = ["ros2", "launch", "foxglove_bridge", "foxglove_bridge_launch.xml"]
+        elif action in ("plotjuggler", "foxglove"):
+            cmd = ros2_launch("tools.launch.py", tool=action)
 
         elif action == "discovery_server":
             # Replaces multicast discovery, which the robot's WiFi AP drops.
@@ -1481,67 +1468,29 @@ def main():
                 print("          On the robot this means the WiFi AP is not up yet.\n")
             cmd = ["fast-discovery-server", "-i", "0", "-l", host, "-p", port or "11811"]
 
-        elif action == "rqt_graph":
-            cmd = ["ros2", "run", "rqt_graph", "rqt_graph"]
-
-        elif action == "tf2_tree":
-            cmd = ["ros2", "run", "rqt_tf_tree", "rqt_tf_tree"]
+        elif action in ("rqt_graph", "tf2_tree"):
+            cmd = ros2_launch("tools.launch.py", tool=action)
 
         elif action == "mcap_record":
-            cmd = [
-                "ros2", "bag", "record",
-                "-a",
-                "-s", "mcap",
-                "-o", os.path.abspath(run_name)
-            ]
+            cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name))
         elif action == "mcap_replay_rosbag":
             cmd = [
                 "ros2", "bag", "play",
                 os.path.abspath(run_name)
             ]
         elif action == "mcap_replay_interactive":
-            bridge_script = os.path.abspath(os.path.join("Mcap", "mcap_tool.py"))
-            cmd = [
-                sys_python,
-                bridge_script,
-                "--replay",
-                os.path.abspath(run_name)
-            ]
+            cmd = ros2_run("quadruped_operator", "mcap_tool", "--replay", os.path.abspath(run_name))
 
         # Check if we should auto-record this session
         record_proc = None
-        reward_proc = None
-        joy_proc = None
 
-        if action == "teleop_sweep":
-            # joy_node alone, with the Gamepad teleop's params file for its deadzone and autorepeat
-            # rate (the sweep node reads the stick mapping from the same file). Its output is
-            # silenced because it would tear through the sweep's status line; a missing pad shows
-            # there as "[no /joy]".
-            joy_cfg = os.path.abspath(os.path.join("Configs", "joy_f710.config.yaml"))
-            joy_cmd = ["ros2", "run", "joy", "joy_node"]
-            if os.path.exists(joy_cfg):
-                joy_cmd += ["--ros-args", "--params-file", joy_cfg]
-            print("[Launcher] Starting joy_node for the eval sweep...")
-            joy_proc = subprocess.Popen(joy_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        elif action == "teleop_joy":
-            # Walk These Ways gait commands from the right stick's up/down axis and the D-pad;
-            # a policy without a gait input ignores /gait_command.
-            gait_script = os.path.abspath(os.path.join("Operator", "gait_teleop.py"))
-            print("[Launcher] Starting gait teleop (right stick up/down: pitch, D-pad: gait / step frequency)...")
-            joy_proc = subprocess.Popen([sys_python, gait_script], env=env)
-
-        # Start Reward Estimator automatically for deployments
-        if action in ["isaac_sim", "mujoco", "mujoco_twin", "real_deploy", "eval_mujoco"]:
-            reward_script = os.path.abspath(os.path.join("Controller", "reward_estimator_node.py"))
-            reward_cmd = [sys_python, reward_script]
-            
-            if abs_ckpt:
+        if action in ("isaac_sim", "mujoco", "gazebo", "mujoco_twin", "real_deploy", "eval_policy") and cmd[:2] == ["ros2", "launch"]:
+            cmd.append(f"reward:={str(START_REWARD_ESTIMATOR).lower()}")
+            if START_REWARD_ESTIMATOR and abs_ckpt:
                 ckpt_dir = os.path.dirname(abs_ckpt)
                 config_path = os.path.join(ckpt_dir, "training_phases.yaml")
-                ros_args = []
                 if os.path.exists(config_path):
-                    ros_args.extend(["-p", f"config_path:={config_path}"])
+                    cmd.append(f"reward_config:={config_path}")
 
                 # Also tell it which phase the checkpoint finished under. Without this the node
                 # falls back to its 'phase1' default and scores a phase6 policy against phase1
@@ -1551,15 +1500,8 @@ def main():
                     "QUADRUPED_TRAINING_PHASE", ""
                 )
                 if phase_name:
-                    ros_args.extend(["-p", f"phase:={phase_name}"])
+                    cmd.append(f"reward_phase:={phase_name}")
                     print(f"[Launcher] Reward estimator phase: {phase_name}")
-
-                if ros_args:
-                    reward_cmd.extend(["--ros-args"] + ros_args)
-
-            # print("[Launcher] Starting Background Reward Estimator Node...")
-            # reward_proc = subprocess.Popen(reward_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-            time.sleep(0.5)
 
         if record_session:
             record_dir = "Mcap/Recordings"
@@ -1576,7 +1518,10 @@ def main():
             abs_mcap = os.path.abspath(mcap_filename)
             
             print(f"\n[Launcher] Auto-recording enabled. Saving to: {mcap_filename}")
-            
+
+        if record_session and records_itself(cmd):
+            cmd += ["record:=true", f"record_path:={abs_mcap}"]
+        elif record_session:
             record_cmd = [
                 "ros2", "bag", "record",
                 "-a",
@@ -1588,25 +1533,8 @@ def main():
             time.sleep(0.5)
 
         try:
-            subprocess.run(cmd, env=env)
-        except KeyboardInterrupt:
-            pass
+            run_foreground(cmd, env)
         finally:
-            if reward_proc is not None:
-                print("\n[Launcher] Stopping Background Reward Estimator Node...")
-                reward_proc.terminate()
-                try:
-                    reward_proc.wait(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    reward_proc.kill()
-                    
-            if joy_proc is not None:
-                joy_proc.terminate()
-                try:
-                    joy_proc.wait(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    joy_proc.kill()
-
             if record_proc is not None:
                 print("\n[Launcher] Stopping background MCAP recorder...")
                 record_proc.terminate()

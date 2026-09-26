@@ -64,3 +64,8 @@ collisions.txt
 # duplicated in each run's own logs/**/params/{env,agent}.yaml.
 **/outputs/**
 Tools/.viewer_cache/
+
+# colcon
+/build/
+/install/
+/log/

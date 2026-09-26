@@ -237,7 +237,7 @@ answer `y`. Menu entries that exist only to open a window (RViz, PlotJuggler,
 rqt, the interactive MCAP replayer) will start but never draw anything.
 
 If you drive MuJoCo directly rather than through the launcher, either pass
-`--headless` (`Mujoco/eval_mujoco.py`) or force software rendering so the
+`--headless` (`quadruped_drivers/eval_mujoco.py`) or force software rendering so the
 viewer's GL context does not need a display:
 
 ```bash

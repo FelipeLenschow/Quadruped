@@ -345,3 +345,64 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
         )
     reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
     return reward
+
+
+"""
+Clock rewards. Feet in FL, FR, RL, RR order, the clock's, so the cfgs use preserve_order=True.
+"""
+
+
+def clock_contact_force(
+    env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, sigma: float = 100.0, command_name: str = "clock"
+) -> torch.Tensor:
+    """Walk These Ways' contact force term: force on feet the clock has in swing. Negative."""
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    force = torch.norm(contact_sensor.data.net_forces_w.torch[:, sensor_cfg.body_ids], dim=-1)
+    desired = env.command_manager.get_term(command_name).desired_contact
+    return -torch.mean((1 - desired) * (1 - torch.exp(-torch.square(force) / sigma)), dim=1)
+
+
+def clock_contact_vel(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, sigma: float = 10.0, command_name: str = "clock"
+) -> torch.Tensor:
+    """Walk These Ways' contact velocity term: speed of feet the clock has in stance. Negative."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    speed = torch.norm(asset.data.body_lin_vel_w.torch[:, asset_cfg.body_ids], dim=-1)
+    desired = env.command_manager.get_term(command_name).desired_contact
+    return -torch.mean(desired * (1 - torch.exp(-torch.square(speed) / sigma)), dim=1)
+
+
+def clock_swing_height(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    swing_height: float,
+    foot_radius: float = 0.02,
+    max_error: float = 0.1,
+    command_name: str = "clock",
+) -> torch.Tensor:
+    """Squared error to a swing profile peaking at swing_height mid-swing, above the env origin, clipped to
+    max_error so a fallen robot is not paid to end the episode."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    term = env.command_manager.get_term(command_name)
+    swing = 1 - torch.abs(1.0 - torch.clip(term.foot_phase * 2.0 - 1.0, 0.0, 1.0) * 2.0)
+    target = swing_height * swing + foot_radius
+    foot_z = asset.data.body_pos_w.torch[:, asset_cfg.body_ids, 2] - env.scene.env_origins[:, 2].unsqueeze(1)
+    error = (target - foot_z).clamp(-max_error, max_error)
+    return torch.sum(torch.square(error) * (1 - term.desired_contact), dim=1)
+
+
+def base_height_moving(
+    env: ManagerBasedRLEnv,
+    target_height: float,
+    sensor_cfg: SceneEntityCfg,
+    max_error: float = 0.05,
+    command_name: str = "base_velocity",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Squared base height error above the scan, clipped to max_error and zero while the command is zero,
+    so a robot lying down or getting up is not paid to end the episode instead."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    ground = env.scene.sensors[sensor_cfg.name].data.ray_hits_w.torch[..., 2].mean(dim=1)
+    error = (asset.data.root_pos_w.torch[:, 2] - ground - target_height).clamp(-max_error, max_error)
+    moving = torch.norm(env.command_manager.get_command(command_name), dim=1) > 0.0
+    return torch.square(error) * moving

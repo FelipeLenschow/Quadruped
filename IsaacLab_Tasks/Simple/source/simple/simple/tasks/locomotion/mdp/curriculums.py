@@ -29,7 +29,7 @@ def lin_vel_cmd_levels(
     if env.common_step_counter - state["step"] >= env.max_episode_length and state["n"] > 0:
         reward = (state["sum"] / state["n"]) / env.max_episode_length_s
         state["step"], state["sum"], state["n"] = env.common_step_counter, 0.0, 0
-        if reward > reward_term.weight * 0.8:
+        if reward > reward_term.weight * 0.7:
             delta_command = torch.tensor([-0.1, 0.1], device=env.device)
             ranges.lin_vel_x = torch.clamp(
                 torch.tensor(ranges.lin_vel_x, device=env.device) + delta_command,
@@ -65,7 +65,7 @@ def ang_vel_cmd_levels(
     if env.common_step_counter - state["step"] >= env.max_episode_length and state["n"] > 0:
         reward = (state["sum"] / state["n"]) / env.max_episode_length_s
         state["step"], state["sum"], state["n"] = env.common_step_counter, 0.0, 0
-        if reward > reward_term.weight * 0.8:
+        if reward > reward_term.weight * 0.7:
             delta_command = torch.tensor([-0.1, 0.1], device=env.device)
             ranges.ang_vel_z = torch.clamp(
                 torch.tensor(ranges.ang_vel_z, device=env.device) + delta_command,

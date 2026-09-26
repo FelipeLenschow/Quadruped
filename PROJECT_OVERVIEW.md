@@ -11,13 +11,14 @@ The system utilizes a **decentralized, high-speed control architecture** designe
 
 ## Project Structure
 - `launcher.py`: High-level entry point. Handles environment variables and process orchestration.
-- `Controller/`: The core brain.
-  - `policy_runner.py`: Handles ONNX/PyTorch inference.
-  - `policy_bridge.py`: Contains the `CommandProcessor` for hardware safety.
-  - `config/config.yaml`: Static configuration for the robot.
-  - `Utils/telemetry.py`: Standardizes disparate sensor data into a `StandardState`.
-- `Unitree/`: Hardware-specific SDKs and drivers for the physical robot.
-- `Mujoco/`, `Gazebo/`, `IsaacSim/`: Simulator-specific drivers (autonomous nodes).
+- `src/`: the ROS 2 packages (colcon workspace, `colcon build --symlink-install --base-paths src`):
+  - `quadruped_core`: library, no nodes: `pipeline.py`, `controller/` (policy runner, safety processor, pose generator), `telemetry/` (TelemetryManager, LKF estimator, kinematics), `config_loader.py`, `paths.py`.
+  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`).
+  - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool.
+  - `quadruped_description`: MuJoCo menagerie, Gazebo world, Go2/Go1/A1 models, kinematics yaml, bundled policies.
+  - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`).
+  - `unitree_sdk2py`: wraps the `third_party/unitree_sdk2_python` submodule.
+- `IsaacSim/isaac_driver.py`: stays outside the packages (Isaac Sim's Python 3.12); imports `quadruped_core` from `src/`.
 
 ## Key Architectural Patterns
 

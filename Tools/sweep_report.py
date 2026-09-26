@@ -1,7 +1,7 @@
 """
 Eval sweep report from real-robot recordings.
 
-Operator/sweep_teleop.py paces the Mujoco/eval_mujoco.py speed table by hand on the robot and marks
+quadruped_operator/sweep_teleop.py paces the quadruped_drivers/eval_mujoco.py speed table by hand on the robot and marks
 every segment on /sweep/state; the launcher records that into an MCAP session next to the
 telemetry. This reads one or more of those sessions back, cuts out the walking window of every
 completed segment, and writes real_eval_report_<checkpoint>.json in the same shape as
@@ -30,6 +30,7 @@ What the robot can give, compared with the MuJoCo sweep:
 """
 
 import os
+import sys
 import json
 import glob
 import time
@@ -40,15 +41,16 @@ import numpy as np
 from mcap_ros2.reader import read_ros2_messages
 
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(REPO_DIR, "src", "quadruped_core"))
 
-# By path: importing the Telemetry package runs its __init__, which pulls the estimator in too.
+# By path: importing the telemetry package runs its __init__, which pulls the estimator in too.
 # kinematics.py itself needs only numpy and yaml.
 _spec = importlib.util.spec_from_file_location(
-    "go2_kinematics", os.path.join(REPO_DIR, "Telemetry", "kinematics.py"))
+    "go2_kinematics", os.path.join(REPO_DIR, "src", "quadruped_core", "quadruped_core", "telemetry", "kinematics.py"))
 _kin = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_kin)
 
-# Isaac order, the one Telemetry/kinematics.py indexes as [leg, leg + 4, leg + 8].
+# Isaac order, the one quadruped_core/telemetry/kinematics.py indexes as [leg, leg + 4, leg + 8].
 JOINT_ORDER = [
     "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
     "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
