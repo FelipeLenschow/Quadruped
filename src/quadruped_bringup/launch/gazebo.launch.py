@@ -1,3 +1,5 @@
+import os
+
 from launch import LaunchDescription
 from launch.actions import OpaqueFunction
 
@@ -6,6 +8,7 @@ from quadruped_bringup.launch_common import arg, common_args, flag, get, include
 
 def setup(context):
     checkpoint = get(context, "checkpoint")
+    gz_env = {"GZ_PARTITION": f"quadruped_{os.getpid()}"}
     actions = [node(
         "quadruped_drivers", "gazebo_driver",
         f"--robot={get(context, 'robot')}",
@@ -15,7 +18,10 @@ def setup(context):
         "--use_estimator" if flag(context, "use_estimator") else "",
         "--headless" if flag(context, "headless") else "",
         main=True,
+        additional_env=gz_env,
     )]
+    if get(context, "world") != "scene":
+        actions.append(node("quadruped_drivers", "gazebo_sensors", additional_env=gz_env))
     actions += interface(context)
     if flag(context, "joy"):
         actions.append(include("joy.launch.py"))
@@ -28,7 +34,7 @@ def generate_launch_description():
         *interface_args(),
         arg("checkpoint"),
         arg("obs_dim", "49"),
-        arg("world", "quadruped_world"),
+        arg("world", "scene", "scene (flat) or nav (walls, obstacles, cones, sensors on)"),
         arg("headless", "false", "no Gazebo GUI"),
         arg("use_estimator", "false"),
         arg("joy", "false", "also start the gamepad teleop"),

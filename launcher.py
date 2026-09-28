@@ -906,6 +906,9 @@ def run_cli_menu():
         if action in ["isaac_lab", "mujoco"]:
             terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
             terrain_cfg = "rough" if terrain_choice == "2" else "flat"
+        elif action == "gazebo":
+            world_choice = input("Select World [1: flat, 2: nav (walls, obstacles, cones, lidar + camera)] (default 1): ").strip() or "1"
+            terrain_cfg = "nav" if world_choice == "2" else "flat"
         else:
             terrain_cfg = ""
         
@@ -1431,7 +1434,8 @@ def main():
                 cmd.append("--use_estimator")
         elif action == "gazebo":
             cmd = ros2_launch("gazebo.launch.py", robot=robot_key, checkpoint=abs_ckpt,
-                              obs_dim=obs_dim, use_estimator=use_estimator, headless=headless)
+                              obs_dim=obs_dim, use_estimator=use_estimator, headless=headless,
+                              world="nav" if terrain_cfg == "nav" else "scene")
         elif action in ["real_deploy", "real_telemetry"]:
             sdk_iface = sdk_network_interface()
             if sdk_iface:

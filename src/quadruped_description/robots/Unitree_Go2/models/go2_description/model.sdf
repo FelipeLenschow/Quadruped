@@ -51,6 +51,66 @@
           <ambient>0.839631855 0.86553216 0.967837751 1</ambient>
         </material>
       </visual>
+      <sensor name='lidar' type='gpu_lidar'>
+        <pose>0.28945 0 -0.046825 0 2.8782 0</pose>
+        <topic>lidar</topic>
+        <gz_frame_id>radar</gz_frame_id>
+        <update_rate>10</update_rate>
+        <always_on>1</always_on>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>360</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.14159</min_angle>
+              <max_angle>3.14159</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>18</samples>
+              <resolution>1</resolution>
+              <min_angle>0</min_angle>
+              <max_angle>1.5708</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.05</min>
+            <max>30</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0</mean>
+            <stddev>0.01</stddev>
+          </noise>
+        </lidar>
+      </sensor>
+      <!-- The real Go2 has no depth camera. For depth: type='rgbd_camera', <topic>front_camera</topic>,
+           and the <depth_camera> block below. -->
+      <sensor name='front_camera' type='camera'>
+        <pose>0.32715 0 0.04297 0 0 0</pose>
+        <topic>front_camera/image</topic>
+        <gz_frame_id>front_camera</gz_frame_id>
+        <update_rate>15</update_rate>
+        <always_on>1</always_on>
+        <camera>
+          <horizontal_fov>1.5</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.05</near>
+            <far>30</far>
+          </clip>
+          <!-- <depth_camera>
+            <clip>
+              <near>0.1</near>
+              <far>10</far>
+            </clip>
+          </depth_camera> -->
+        </camera>
+      </sensor>
     </link>
     <joint name='FL_hip_joint' type='revolute'>
       <pose relative_to='base'>0.19339999999999999 0.0465 0 0 0 0</pose>

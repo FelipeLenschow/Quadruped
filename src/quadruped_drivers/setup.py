@@ -36,6 +36,7 @@ setup(
         "mujoco_driver = quadruped_drivers.mujoco_driver:main",
         "eval_mujoco = quadruped_drivers.eval_mujoco:main",
         "gazebo_driver = quadruped_drivers.gazebo_driver:main",
+        "gazebo_sensors = quadruped_drivers.gazebo_sensors:main",
         "mujoco_sim2sim = quadruped_drivers.mujoco_sim2sim:main",
         "gazebo_sim2sim = quadruped_drivers.gazebo_sim2sim:main",
     ]},

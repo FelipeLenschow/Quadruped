@@ -13,9 +13,9 @@ The system utilizes a **decentralized, high-speed control architecture** designe
 - `launcher.py`: High-level entry point. Handles environment variables and process orchestration.
 - `src/`: the ROS 2 packages (colcon workspace, `colcon build --symlink-install --base-paths src`):
   - `quadruped_core`: library, no nodes: `pipeline.py`, `controller/` (policy runner, safety processor, pose generator), `telemetry/` (TelemetryManager, LKF estimator, kinematics), `config_loader.py`, `paths.py`.
-  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`).
+  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`, `gazebo_sensors`: lidar and camera to ROS).
   - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool.
-  - `quadruped_description`: MuJoCo menagerie, Gazebo world, Go2/Go1/A1 models, kinematics yaml, bundled policies.
+  - `quadruped_description`: MuJoCo menagerie, Gazebo worlds (`scene`: flat, `nav`: walls, obstacles, 4 cones), Go2/Go1/A1 models (the Go2 carries an L1-style lidar and a front camera), kinematics yaml, bundled policies.
   - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`).
   - `unitree_sdk2py`: wraps the `third_party/unitree_sdk2_python` submodule.
 - `IsaacSim/isaac_driver.py`: stays outside the packages (Isaac Sim's Python 3.12); imports `quadruped_core` from `src/`.
@@ -45,6 +45,7 @@ The driver launches (`real`, `mujoco`, `gazebo`, `isaac_sim`) also start `twist_
 - **State**: `/robot_state` (`std_msgs/String`, JSON, 10 Hz): mode, posture (`fallen`, `lying`, `sit`, `standing`, `walking`, ...), pose, e-stop and safety flags, tilt, velocity, command, and the WTW gait.
 - **Skills**: the `/skill` service (`quadruped_interfaces/srv/Skill`) blocks until done: `stop`, `stand`, `sit`, `lie`, `walk` (stand, then policy mode), `sniff` (WTW nose-down), `gait_walk|trot|pace|bound|pronk`. Example: `ros2 service call /skill quadruped_interfaces/srv/Skill "{name: walk}"`.
 - `/gait_command/override` lends the WTW gait to a skill; the last `/gait_command` returns 0.5 s after it stops.
+- **Sensors (Gazebo `world:=nav`)**: `/lidar/points` (frame `radar`, 10 Hz), `/camera/image_raw`, `/camera/camera_info` (frame `front_camera_optical`, 15 Hz), static TF from `base`, all stamped with sim time. The lidar sits under the chin as on the real Go2, so it sees the front and the ground but almost nothing behind.
 
 ## Important Constants (Unitree Go2)
 - **Control Frequency**: 50Hz (Policy), 200-500Hz (Actuator Loops).

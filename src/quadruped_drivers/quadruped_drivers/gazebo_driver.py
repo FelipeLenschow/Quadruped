@@ -50,7 +50,7 @@ POLICY_DT = 0.02
 
 
 class Ros2GazeboDriver(Node):
-    def __init__(self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49,
+    def __init__(self, robot_type, world_name="scene", checkpoint=None, obs_dim=49,
                  use_estimator=False, headless=False):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
@@ -103,7 +103,7 @@ class Ros2GazeboDriver(Node):
         self._done = threading.Event()
         self.gui_proc = None
 
-        with open(paths.description("gazebo", "scene.sdf"), "r") as f:
+        with open(paths.description("gazebo", f"{world_name}.sdf"), "r") as f:
             scene_xml = f.read()
         scene_xml = scene_xml.replace("go2_description", f"{self.robot_type}_description")
         scene_xml = scene_xml.replace("<name>go2</name>", f"<name>{self.robot_type}</name>")
@@ -226,10 +226,10 @@ class Ros2GazeboDriver(Node):
             self._done.set()
 
     def _run_physics(self):
-        partition = f"quadruped_sim_{os.getpid() % 100000}"
+        partition = os.environ.get("GZ_PARTITION") or f"quadruped_sim_{os.getpid() % 100000}"
         os.environ["GZ_PARTITION"] = partition
         os.environ["GZ_SIM_RESOURCE_PATH"] = os.pathsep.join(
-            [paths.description("gazebo")]
+            [paths.description("gazebo"), paths.description("gazebo", "models")]
             + [paths.description("robots", r, "models") for r in ("Unitree_Go2", "Unitree_Go1", "Unitree_A1")]
             + [os.environ.get("GZ_SIM_RESOURCE_PATH", "")]
         )
@@ -316,7 +316,7 @@ class Ros2GazeboDriver(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
-    parser.add_argument("--world", type=str, default="quadruped_world")
+    parser.add_argument("--world", type=str, default="scene", help="world file in quadruped_description/gazebo: scene, nav")
     parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint")
     parser.add_argument("--obs_dim", type=int, default=49)
     parser.add_argument("--use_estimator", action="store_true", default=False,
