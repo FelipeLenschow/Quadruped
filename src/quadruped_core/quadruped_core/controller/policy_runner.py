@@ -467,10 +467,36 @@ class PolicyRunner:
         c = getattr(self, "_clock_cfg", None)
         if not c:
             return
-        self._clock_offsets = np.array(c.get("foot_offsets") or (0.5, 0.0, 0.0, 0.5), dtype=np.float64)
+        self._clock_base_offsets = np.array(c.get("foot_offsets") or (0.5, 0.0, 0.0, 0.5), dtype=np.float64)
+        fast = np.array(c.get("fast_offsets") or self._clock_base_offsets, dtype=np.float64)
+        self._clock_offset_delta = np.remainder(fast - self._clock_base_offsets + 0.5, 1.0) - 0.5
+        self._clock_base_swing = np.full(4, c["swing_time"], dtype=np.float64)
+        fast_swing = np.array(c.get("fast_swing_times") or self._clock_base_swing, dtype=np.float64)
+        self._clock_swing_delta = fast_swing - self._clock_base_swing
         self._clock_speed = 0.0
-        duty = 1.0 - c["swing_time"] * c["min_frequency"]
-        self._clock_index = (duty - self._clock_offsets.max()) % 1.0
+        offsets, duty, _ = self._clock_timing()
+        self._clock_index = self._clock_ready(offsets, duty)
+        self._clock_fresh = True
+
+    def _clock_timing(self):
+        """Offsets, per-foot duty and frequency at the filtered speed, as SpeedClockCommand._blend/_set_timing."""
+        c = self._clock_cfg
+        lo, hi = c.get("blend_speed") or (0.0, 0.0)
+        s = float(np.clip((self._clock_speed - lo) / max(hi - lo, 1e-6), 0.0, 1.0))
+        offsets = self._clock_base_offsets + s * self._clock_offset_delta
+        swing = self._clock_base_swing + s * self._clock_swing_delta
+        stride = c["stride_min"] + c["stride_gain"] * self._clock_speed
+        f = float(np.clip(self._clock_speed / stride, c["min_frequency"], c["max_frequency"]))
+        if c.get("fixed_duty"):
+            duty = np.array(c["fixed_duty"], dtype=np.float64)
+        else:
+            duty = np.clip(1.0 - swing * f, c["min_duty"], c["max_duty"])
+        return offsets, duty, f
+
+    @staticmethod
+    def _clock_ready(offsets, duty):
+        lead = int(np.argmax(offsets))
+        return (duty[lead] - offsets[lead]) % 1.0
 
     def _foot_sweep(self, velocity):
         """Fastest stance foot speed under (vx, vy, wz), as foot_sweep_speed in training. Runs from
@@ -489,20 +515,24 @@ class PolicyRunner:
         sweep = self._foot_sweep(velocity)
         return velocity * min(1.0, self._max_foot_speed / max(sweep, 1e-6))
 
-    def _speed_clock(self, velocity):
+    def _speed_clock(self, velocity, measured=None):
         """Advance the clock one policy step as SpeedClockCommand does; returns sin and cos of each foot's phase."""
         c = self._clock_cfg
         dt = self._policy_dt
-        sweep = self._foot_sweep(velocity)
+        source = measured if c.get("speed_source") == "measured" and measured is not None else velocity
+        sweep = self._foot_sweep(source)
+        if self._clock_fresh and c.get("reset_speed") is not None:
+            self._clock_speed = float(c["reset_speed"])
+        elif self._clock_fresh and c.get("reset_to_command"):
+            self._clock_speed = sweep
+        self._clock_fresh = False
         self._clock_speed += min(dt / c["filter_time"], 1.0) * (sweep - self._clock_speed)
-        stride = c["stride_min"] + c["stride_gain"] * self._clock_speed
-        f = float(np.clip(self._clock_speed / stride, c["min_frequency"], c["max_frequency"]))
-        d = float(np.clip(1.0 - c["swing_time"] * f, c["min_duty"], c["max_duty"]))
+        offsets, d, f = self._clock_timing()
         if np.linalg.norm(velocity[:3]) < c["stand_threshold"]:
-            self._clock_index = (d - self._clock_offsets.max()) % 1.0
+            self._clock_index = self._clock_ready(offsets, d)
         else:
             self._clock_index = (self._clock_index + dt * f) % 1.0
-        raw = np.remainder(self._clock_index + self._clock_offsets, 1.0)
+        raw = np.remainder(self._clock_index + offsets, 1.0)
         foot = np.where(raw < d, raw * (0.5 / d), 0.5 + (raw - d) * (0.5 / (1.0 - d)))
         angle = 2.0 * np.pi * foot
         return np.concatenate([np.sin(angle), np.cos(angle)]).astype(np.float32)
@@ -847,7 +877,9 @@ class PolicyRunner:
                 jpos_isaac - desired_qpos,
                 np.asarray(jvel_isaac, dtype=np.float32) * UNITREE_JOINT_VEL_SCALE,
                 last_actions,
-                self._speed_clock(velocity),
+                self._speed_clock(
+                    velocity, np.array([lin_vel_b[0], lin_vel_b[1], ang_vel_b[2]], dtype=np.float32)
+                ),
             ]
         elif self._obs_layout == "unitree_vel":
             # unitree_rl_lab with base_lin_vel added to the actor. Same per-term scales as

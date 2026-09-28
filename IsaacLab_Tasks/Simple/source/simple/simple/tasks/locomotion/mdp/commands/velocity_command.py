@@ -48,6 +48,7 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
     def __init__(self, cfg: UniformLevelVelocityCommandCfg, env):
         super().__init__(cfg, env)
         self._standby = torch.zeros(self.num_envs, device=self.device)
+        self._stop = torch.full((self.num_envs,), float("inf"), device=self.device)
 
     @property
     def command(self) -> torch.Tensor:
@@ -57,10 +58,11 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         axis-only shares and the standing envs all behave exactly as before; only what the
         observation, the rewards and the metrics read is masked.
         """
-        if self.cfg.standby_duration_range[1] <= 0.0:
+        if self.cfg.standby_duration_range[1] <= 0.0 and self.cfg.stop_time_range[1] <= 0.0:
             return self.vel_command_b
-        waiting = self._env.episode_length_buf * self._env.step_dt < self._standby
-        return self.vel_command_b * (~waiting).unsqueeze(1).float()
+        t = self._env.episode_length_buf * self._env.step_dt
+        active = (t >= self._standby) & (t < self._stop)
+        return self.vel_command_b * active.unsqueeze(1).float()
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         extras = super().reset(env_ids)
@@ -68,6 +70,10 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         if high > 0.0:
             ids = slice(None) if env_ids is None else env_ids
             self._standby[ids] = torch.empty_like(self._standby[ids]).uniform_(low, high)
+        low, high = self.cfg.stop_time_range
+        if high > 0.0:
+            ids = slice(None) if env_ids is None else env_ids
+            self._stop[ids] = torch.empty_like(self._stop[ids]).uniform_(low, high)
         return extras
 
     def _update_metrics(self):
@@ -177,6 +183,8 @@ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
     # Seconds at zero command at the start of every episode, drawn per episode. The sampled
     # command is revealed when it runs out. (0, 0) disables.
     standby_duration_range: tuple[float, float] = (0.0, 0.0)
+    # Episode time, s, drawn per episode, after which the command is zero again. (0, 0) disables.
+    stop_time_range: tuple[float, float] = (0.0, 0.0)
     # Hold the slow share off until the level curriculum has widened lin_vel_x to its limit.
     slow_after_full_range: bool = False
 

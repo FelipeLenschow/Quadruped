@@ -931,6 +931,7 @@ def run_cli_menu():
             iters = input("Max iterations (default 3000): ").strip()
             sweep_opts = {"task": task, "max_iterations": iters if iters.isdigit() else "3000"}
             run_name = input("Enter Run Name (optional): ").strip()
+            video = input("Record Video? [y/N]: ").lower().strip() == "y"
             auto_eval = prompt_auto_eval()
 
         if action == "train" and not is_rsl_rl_module(selected_module_path):
@@ -1293,6 +1294,8 @@ def main():
             cmd.append(f"--run_name={run_name}")
         if headless:
             cmd.append("--headless")
+        if video:
+            cmd += ["--video", "--video_length=200", "--video_interval=5000"]
         source_path = os.path.abspath(os.path.join(module_path, "source", rsl_rl_package(module_path)))
         env["PYTHONPATH"] = f"{source_path}:{env['PYTHONPATH']}" if env.get("PYTHONPATH") else source_path
         start_ts = time.time()

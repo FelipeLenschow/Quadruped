@@ -14,7 +14,67 @@ GAIT_OFFSETS = {
     "trot": (0.5, 0.0, 0.0, 0.5),
     # Lateral-sequence walk, one foot at a time: RL, FL, RR, FR a quarter cycle apart.
     "walk": (0.25, 0.75, 0.5, 0.0),
+    # Cheetah rotary gallop, touchdowns RH, LH, LF, RF at 0, 0.12, 0.48, 0.6 of the stride, shifted
+    # so no foot is more than 0.31 of a cycle from its trot phase.
+    "gallop": (0.81, 0.69, 0.17, 0.29),
 }
+
+
+def _heading_forward_speed(env) -> torch.Tensor:
+    from isaaclab.utils.math import quat_apply_inverse, yaw_quat
+
+    robot = env.scene["robot"].data
+    return quat_apply_inverse(yaw_quat(robot.root_quat_w.torch), robot.root_lin_vel_w.torch)[:, 0]
+
+
+def _update_speed_metrics(term: CommandTerm, steps: torch.Tensor):
+    """forward_speed: episode mean of the heading-frame forward speed (0.5 s low-pass); top_speed: its
+    episode maximum; best_speed: the maximum over the whole run."""
+    term._forward += min(term._env.step_dt / 0.5, 1.0) * (_heading_forward_speed(term._env) - term._forward)
+    term.metrics["forward_speed"] += (term._forward - term.metrics["forward_speed"]) / steps
+    term.metrics["top_speed"] = torch.maximum(term.metrics["top_speed"], term._forward)
+    term._best = max(term._best, float(term.metrics["top_speed"].max()))
+    term.metrics["best_speed"][:] = term._best
+
+
+class SpeedLogCommand(CommandTerm):
+    """No command, only the speed metrics of _update_speed_metrics, for tasks without a clock."""
+
+    def __init__(self, cfg: CommandTermCfg, env):
+        super().__init__(cfg, env)
+        n = self.num_envs
+        for name in ("forward_speed", "top_speed", "best_speed"):
+            self.metrics[name] = torch.zeros(n, device=self.device)
+        self._forward = torch.zeros(n, device=self.device)
+        self._best = 0.0
+        self._steps = torch.zeros(n, device=self.device)
+
+    @property
+    def command(self) -> torch.Tensor:
+        return self._forward.unsqueeze(1)
+
+    def _update_metrics(self):
+        self._steps += 1.0
+        _update_speed_metrics(self, self._steps)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        extras = super().reset(env_ids)
+        ids = slice(None) if env_ids is None else env_ids
+        self._steps[ids] = 0.0
+        self._forward[ids] = 0.0
+        return extras
+
+    def _resample_command(self, env_ids: Sequence[int]):
+        pass
+
+    def _update_command(self):
+        pass
+
+
+@configclass
+class SpeedLogCommandCfg(CommandTermCfg):
+    class_type: type = SpeedLogCommand
+    resampling_time_range: tuple[float, float] = (1e9, 1e9)
 
 
 class SpeedClockCommand(CommandTerm):
@@ -26,6 +86,16 @@ class SpeedClockCommand(CommandTerm):
     stance in [0, 0.5), swing in [0.5, 1).
     Below stand_threshold every foot is a stance foot and the clock waits with the first foot to
     swing at lift-off, so the first step comes as soon as a command does.
+
+    With speed_source "measured", v is the robot's own speed instead of the command's.
+
+    Metrics: forward_speed is the episode mean of the heading-frame forward speed (0.5 s low-pass),
+    top_speed its episode maximum, best_speed the maximum over the whole run.
+
+    With fixed_duty set, each foot's duty is that share of the cycle at every speed instead.
+
+    With fast_offsets set, the offsets and per-foot swing times blend from foot_offsets and
+    swing_time to fast_offsets and fast_swing_times as v goes from blend_speed[0] to [1].
     """
 
     cfg: SpeedClockCommandCfg
@@ -35,19 +105,31 @@ class SpeedClockCommand(CommandTerm):
         n = self.num_envs
         self.speed = torch.zeros(n, device=self.device)
         self.frequency = torch.full((n,), cfg.min_frequency, device=self.device)
-        self.duty = 1.0 - cfg.swing_time * self.frequency
-        self._offsets = torch.tensor(cfg.foot_offsets, device=self.device)
-        self._lead = max(cfg.foot_offsets)
-        self.gait_index = torch.remainder(self.duty - self._lead, 1.0)
+        self._base_offsets = torch.tensor(cfg.foot_offsets, device=self.device)
+        fast = cfg.fast_offsets if cfg.fast_offsets is not None else cfg.foot_offsets
+        self._offset_delta = torch.remainder(torch.tensor(fast, device=self.device) - self._base_offsets + 0.5, 1.0) - 0.5
+        self._base_swing = torch.full((4,), cfg.swing_time, device=self.device)
+        fast_swing = cfg.fast_swing_times if cfg.fast_swing_times is not None else (cfg.swing_time,) * 4
+        self._swing_delta = torch.tensor(fast_swing, device=self.device) - self._base_swing
+        self._blend(self.speed)
+        self.duty = torch.zeros(n, 4, device=self.device)
+        self.gait_index = torch.zeros(n, device=self.device)
+        self._set_timing()
+        self.gait_index = self._ready_index()
         self.foot_phase = torch.zeros(n, 4, device=self.device)
         self.desired_contact = torch.ones(n, 4, device=self.device)
         self.metrics["contact_match"] = torch.zeros(n, device=self.device)
         self.metrics["frequency"] = torch.zeros(n, device=self.device)
+        self.metrics["forward_speed"] = torch.zeros(n, device=self.device)
+        self.metrics["top_speed"] = torch.zeros(n, device=self.device)
+        self.metrics["best_speed"] = torch.zeros(n, device=self.device)
+        self._forward = torch.zeros(n, device=self.device)
+        self._best = 0.0
         self._match_steps = torch.zeros(n, device=self.device)
 
     @property
     def command(self) -> torch.Tensor:
-        return torch.stack([self.frequency, self.duty], dim=1)
+        return torch.cat([self.frequency.unsqueeze(1), self.duty], dim=1)
 
     @property
     def clock(self) -> torch.Tensor:
@@ -63,16 +145,45 @@ class SpeedClockCommand(CommandTerm):
         self._match_steps += 1.0
         self.metrics["contact_match"] += (match - self.metrics["contact_match"]) / self._match_steps
         self.metrics["frequency"] += (self.frequency - self.metrics["frequency"]) / self._match_steps
+        _update_speed_metrics(self, self._match_steps)
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         extras = super().reset(env_ids)
         ids = slice(None) if env_ids is None else env_ids
         self._match_steps[ids] = 0.0
         self.speed[ids] = 0.0
-        self.frequency[ids] = self.cfg.min_frequency
-        self.duty[ids] = 1.0 - self.cfg.swing_time * self.cfg.min_frequency
-        self.gait_index[ids] = torch.remainder(self.duty[ids] - self._lead, 1.0)
+        self._forward[ids] = 0.0
+        if self.cfg.reset_speed is not None:
+            self.speed[ids] = self.cfg.reset_speed
+        elif self.cfg.reset_to_command:
+            vel = self._env.command_manager.get_term(self.cfg.velocity_command_name).command[ids]
+            self.speed[ids] = foot_sweep_speed(vel, self.cfg.foot_x, self.cfg.foot_y)
+        self._blend(self.speed)
+        self._set_timing()
+        self.gait_index[ids] = self._ready_index()[ids]
         return extras
+
+    def _blend(self, speed: torch.Tensor):
+        lo, hi = self.cfg.blend_speed
+        s = ((speed - lo) / max(hi - lo, 1e-6)).clamp(0.0, 1.0).unsqueeze(1)
+        self._offsets = self._base_offsets + s * self._offset_delta
+        self._swing = self._base_swing + s * self._swing_delta
+
+    def _set_timing(self):
+        cfg = self.cfg
+        stride = cfg.stride_min + cfg.stride_gain * self.speed
+        self.frequency = (self.speed / stride).clamp(cfg.min_frequency, cfg.max_frequency)
+        if cfg.fixed_duty is not None:
+            self.duty = torch.tensor(cfg.fixed_duty, device=self.device).expand(self.num_envs, 4).clone()
+        else:
+            self.duty = (1.0 - self._swing * self.frequency.unsqueeze(1)).clamp(cfg.min_duty, cfg.max_duty)
+
+    def _ready_index(self) -> torch.Tensor:
+        """Clock index with the foot that swings first exactly at lift-off."""
+        lead = torch.argmax(self._offsets, dim=1, keepdim=True)
+        return torch.remainder(
+            self.duty.gather(1, lead).squeeze(1) - self._offsets.gather(1, lead).squeeze(1), 1.0
+        )
 
     def _resample_command(self, env_ids: Sequence[int]):
         pass
@@ -81,17 +192,21 @@ class SpeedClockCommand(CommandTerm):
         cfg = self.cfg
         dt = self._env.step_dt
         vel = self._env.command_manager.get_command(cfg.velocity_command_name)
-        sweep = foot_sweep_speed(vel, cfg.foot_x, cfg.foot_y)
+        if cfg.speed_source == "measured":
+            robot = self._env.scene["robot"].data
+            twist = torch.cat([robot.root_lin_vel_b.torch[:, :2], robot.root_ang_vel_b.torch[:, 2:3]], dim=1)
+            sweep = foot_sweep_speed(twist, cfg.foot_x, cfg.foot_y)
+        else:
+            sweep = foot_sweep_speed(vel, cfg.foot_x, cfg.foot_y)
         self.speed += min(dt / cfg.filter_time, 1.0) * (sweep - self.speed)
-        stride = cfg.stride_min + cfg.stride_gain * self.speed
-        self.frequency = (self.speed / stride).clamp(cfg.min_frequency, cfg.max_frequency)
-        self.duty = (1.0 - cfg.swing_time * self.frequency).clamp(cfg.min_duty, cfg.max_duty)
+        self._blend(self.speed)
+        self._set_timing()
         standing = torch.norm(vel, dim=1) < cfg.stand_threshold
         running = torch.remainder(self.gait_index + dt * self.frequency, 1.0)
-        self.gait_index = torch.where(standing, torch.remainder(self.duty - self._lead, 1.0), running)
+        self.gait_index = torch.where(standing, self._ready_index(), running)
 
         raw = torch.remainder(self.gait_index.unsqueeze(1) + self._offsets, 1.0)
-        duty = self.duty.unsqueeze(1)
+        duty = self.duty
         self.foot_phase = torch.where(raw < duty, raw * (0.5 / duty), 0.5 + (raw - duty) * (0.5 / (1.0 - duty)))
         normal = torch.distributions.Normal(0.0, cfg.contact_smoothing)
         p = self.foot_phase
@@ -108,6 +223,16 @@ class SpeedClockCommandCfg(CommandTermCfg):
     sensor_name: str = "contact_forces"
     foot_names: tuple[str, ...] = ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
     foot_offsets: tuple[float, float, float, float] = GAIT_OFFSETS["trot"]
+    fast_offsets: tuple[float, float, float, float] | None = None
+    fast_swing_times: tuple[float, float, float, float] | None = None
+    blend_speed: tuple[float, float] = (0.0, 0.0)
+    fixed_duty: tuple[float, float, float, float] | None = None
+    # Start each episode's filtered speed at the command's instead of at zero.
+    reset_to_command: bool = False
+    # Or at this speed, m/s.
+    reset_speed: float | None = None
+    # "command": v is the velocity command's. "measured": the robot's own base twist.
+    speed_source: str = "command"
 
     stride_min: float = 0.10
     stride_gain: float = 0.3

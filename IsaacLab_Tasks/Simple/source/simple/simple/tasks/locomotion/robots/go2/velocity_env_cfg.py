@@ -1063,13 +1063,14 @@ class RobotSigmaVelFootRoughDeployPlayEnvCfg(RobotSigmaVelFootRoughDeployEnvCfg)
 # terms are replaced by Walk These Ways' contact schedule and dense swing-height terms. The actor
 # gets sin and cos of each foot's phase, 48 + 8 inputs.
 CLOCK_FEET = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
-CLOCK_GAIT = os.environ.get("PAPER_CLOCK_GAIT", "walk")
+CLOCK_GAIT = os.environ.get("PAPER_CLOCK_GAIT", "trot")
 _WALK = CLOCK_GAIT == "walk"
 # A walk keeps three feet down: duty >= 0.75, so f <= 0.25 / swing_time = 1.25 Hz, reached at 0.4 m/s.
 CLOCK_STRIDE_MIN = float(os.environ.get("PAPER_CLOCK_STRIDE_MIN", 0.12 if _WALK else 0.10))
-CLOCK_STRIDE_GAIN = float(os.environ.get("PAPER_CLOCK_STRIDE_GAIN", 0.5 if _WALK else 0.3))
-CLOCK_SWING_TIME = float(os.environ.get("PAPER_CLOCK_SWING_TIME", 0.2))
-CLOCK_MAX_FREQUENCY = float(os.environ.get("PAPER_CLOCK_MAX_FREQUENCY", 1.25 if _WALK else 3.0))
+# A trot with a 0.3 s swing keeps duty >= 0.4 up to 2 Hz, which stride 0.1 + 0.4 v reaches at 1 m/s.
+CLOCK_STRIDE_GAIN = float(os.environ.get("PAPER_CLOCK_STRIDE_GAIN", 0.5 if _WALK else 0.4))
+CLOCK_SWING_TIME = float(os.environ.get("PAPER_CLOCK_SWING_TIME", 0.2 if _WALK else 0.3))
+CLOCK_MAX_FREQUENCY = float(os.environ.get("PAPER_CLOCK_MAX_FREQUENCY", 1.25 if _WALK else 2.0))
 CLOCK_MAX_SPEED = float(os.environ.get("PAPER_CLOCK_MAX_SPEED", 0.4 if _WALK else 1.0))
 # Turning in place at 0.4 m/s over a 0.24 m foot radius; the foot speed cap binds before this does.
 CLOCK_MAX_YAW = float(os.environ.get("PAPER_CLOCK_MAX_YAW", 1.6 if _WALK else 1.0))
@@ -1150,6 +1151,212 @@ class RobotClockEnvCfg(RobotSigmaVelFootRoughDeployEnvCfg):
 
 @configclass
 class RobotClockPlayEnvCfg(RobotClockEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+# ── Gallop ─────────────────────────────────────────────────────────────────────────────────
+# Clock with a cheetah's rotary gallop taken from a video, as a gait phase: touchdowns RH, LH, LF,
+# RF at 0, 0.12, 0.48, 0.6 of the stride, duty 0.12 / 0.16 / 0.2 / 0.2 (FL, FR, RL, RR). Frequency
+# is proportional to speed, f = v / stride, so every stride is GALLOP_STRIDE long; 2 m puts 5 Hz
+# at 10 m/s and 1 Hz at 2 m/s, and a hind stance sweeps 0.2 x 2 = 0.4 m. Commands are forward
+# only, x 2-5 m/s, and every episode starts in the air at GALLOP_START_HEIGHT moving at
+# GALLOP_START_SPEED, so there is no standing, lying or standby here.
+GALLOP_X = (float(os.environ.get("PAPER_GALLOP_X_LO", 2.0)), float(os.environ.get("PAPER_GALLOP_X_HI", 10.0)))
+GALLOP_Y = float(os.environ.get("PAPER_GALLOP_Y", 0.0))
+GALLOP_YAW = float(os.environ.get("PAPER_GALLOP_YAW", 0.3))
+GALLOP_STRIDE = float(os.environ.get("PAPER_GALLOP_STRIDE", 2.0))
+GALLOP_DUTY = (0.12, 0.16, 0.2, 0.2)
+# The top of the forward range starts at the bottom and rises by this each time tracking clears the bar.
+GALLOP_CURRICULUM_STEP = float(os.environ.get("PAPER_GALLOP_CURRICULUM_STEP", 0.5))
+GALLOP_START_HEIGHT = float(os.environ.get("PAPER_GALLOP_START_HEIGHT", 0.5))
+GALLOP_START_SPEED = float(os.environ.get("PAPER_GALLOP_START_SPEED", 2.0))
+# Joint speed and torque penalties sized for walking would cap a 5 m/s run: at 16 rad/s on every
+# joint joint_vel alone costs about 3 per second against 1.5 for tracking.
+GALLOP_EFFORT_SCALE = float(os.environ.get("PAPER_GALLOP_EFFORT_SCALE", 0.1))
+# The exp tracking kernel is flat far from the target: a robot 2 m/s short of a 2 m/s command earns
+# exp(-7.5), so nothing pushes it to speed up. This one is linear in the share of speed reached.
+GALLOP_W_PROGRESS = float(os.environ.get("PAPER_GALLOP_W_PROGRESS", 2.0))
+
+
+def _apply_gallop(cfg) -> None:
+    clock = cfg.commands.clock
+    clock.foot_offsets = mdp.GAIT_OFFSETS["gallop"]
+    clock.fixed_duty = GALLOP_DUTY
+    clock.stride_min = GALLOP_STRIDE
+    clock.stride_gain = 0.0
+    clock.max_frequency = GALLOP_X[1] / GALLOP_STRIDE + 0.5
+    clock.reset_to_command = True
+
+    vel = cfg.commands.base_velocity
+    vel.limit_ranges.lin_vel_x = GALLOP_X
+    vel.limit_ranges.lin_vel_y = (-GALLOP_Y, GALLOP_Y)
+    vel.limit_ranges.ang_vel_z = (-GALLOP_YAW, GALLOP_YAW)
+    _drop_level_curriculum(cfg)
+    vel.ranges.lin_vel_x = (GALLOP_X[0], GALLOP_X[0])
+    cfg.curriculum.lin_vel_cmd_levels = CurrTerm(
+        func=mdp.lin_vel_x_max_levels, params={"step": GALLOP_CURRICULUM_STEP}
+    )
+    vel.max_foot_speed = 0.0
+    vel.rel_standing_envs = 0.0
+    vel.slow_command_fraction = 0.0
+    vel.x_only_command_fraction = 0.0
+    vel.y_only_command_fraction = 0.0
+    vel.yaw_only_command_fraction = 0.0
+    vel.standby_duration_range = (0.0, 0.0)
+
+    cfg.events.reset_start_pose = None
+    cfg.events.reset_running_start = EventTerm(
+        func=mdp.reset_running_start,
+        mode="reset",
+        params={"height": GALLOP_START_HEIGHT, "speed": GALLOP_START_SPEED},
+    )
+    cfg.terminations.base_contact.params["grace_s"] = 0.0
+
+    # Flat ground, kept as a generated mesh so the height scanner still hits it. The border is one
+    # episode at top speed, so a fast run stays on the ground.
+    cfg.scene.terrain.terrain_generator = cfg.scene.terrain.terrain_generator.replace(
+        border_width=max(100.0, cfg.episode_length_s * GALLOP_X[1]),
+        curriculum=False,
+        sub_terrains={"flat": terrain_gen.MeshPlaneTerrainCfg(proportion=1.0)},
+    )
+    cfg.curriculum.terrain_levels = None
+
+    r = cfg.rewards
+    for name in ("joint_vel", "joint_torques", "action_rate"):
+        getattr(r, name).weight *= GALLOP_EFFORT_SCALE
+    r.forward_progress = RewTerm(func=mdp.forward_progress, weight=GALLOP_W_PROGRESS)
+    print(
+        f"[Gallop] x {GALLOP_X}, y +-{GALLOP_Y}, yaw +-{GALLOP_YAW}; stride {GALLOP_STRIDE} m so f = v / {GALLOP_STRIDE};"
+        f" duty {GALLOP_DUTY}; start {GALLOP_START_HEIGHT} m up at {GALLOP_START_SPEED} m/s;"
+        f" effort penalties x{GALLOP_EFFORT_SCALE}; flat ground; top speed starts at {GALLOP_X[0]}"
+        f" and rises {GALLOP_CURRICULUM_STEP} m/s per level; forward progress weight {GALLOP_W_PROGRESS}"
+    )
+
+
+@configclass
+class RobotGallopEnvCfg(RobotClockEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_gallop(self)
+
+
+@configclass
+class RobotGallopPlayEnvCfg(RobotGallopEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+# ── Sprint ─────────────────────────────────────────────────────────────────────────────────
+# Gallop's running start and flat ground with no speed target, no gait clock and no base height:
+# the reward is linear in forward speed, and the policy picks its own gait. The forward command is
+# a constant SPRINT_CMD, a "run" flag the policy sees; yaw commands stay for steering. Joint
+# acceleration and action rate, which grow fast with speed, are cut by SPRINT_SMOOTH_SCALE.
+# Metrics/speed/top_speed and best_speed log how fast it gets.
+SPRINT_CMD = float(os.environ.get("PAPER_SPRINT_CMD", 1.0))
+SPRINT_W_SPEED = float(os.environ.get("PAPER_SPRINT_W_SPEED", 1.0))
+SPRINT_SMOOTH_SCALE = float(os.environ.get("PAPER_SPRINT_SMOOTH_SCALE", 0.2))
+
+
+def _apply_sprint(cfg) -> None:
+    cfg.commands.clock = None
+    cfg.commands.speed = mdp.SpeedLogCommandCfg()
+    for group in (cfg.observations.policy, cfg.observations.critic):
+        for name in ("clock", "clock_contact", "clock_rate"):
+            if hasattr(group, name):
+                setattr(group, name, None)
+
+    vel = cfg.commands.base_velocity
+    vel.ranges.lin_vel_x = (SPRINT_CMD, SPRINT_CMD)
+    vel.limit_ranges.lin_vel_x = (SPRINT_CMD, SPRINT_CMD)
+    cfg.curriculum.lin_vel_cmd_levels = None
+
+    r = cfg.rewards
+    for name in ("track_lin_vel_xy", "forward_progress", "clock_contact_force", "clock_contact_vel",
+                 "clock_swing_height", "base_height"):
+        setattr(r, name, None)
+    r.joint_acc.weight *= SPRINT_SMOOTH_SCALE
+    r.action_rate.weight *= SPRINT_SMOOTH_SCALE
+    r.forward_speed = RewTerm(func=mdp.forward_speed, weight=SPRINT_W_SPEED)
+    print(
+        f"[Sprint] no speed target, clock or base height; forward speed weight {SPRINT_W_SPEED};"
+        f" joint_acc and action_rate x{SPRINT_SMOOTH_SCALE}"
+    )
+
+
+@configclass
+class RobotSprintEnvCfg(RobotGallopEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_sprint(self)
+
+
+@configclass
+class RobotSprintPlayEnvCfg(RobotSprintEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+
+
+# ── Sprint-Deploy ──────────────────────────────────────────────────────────────────────────
+# Sprint made for the robot. Episodes start standing still, hold zero command for Deploy's standby
+# (1-3 s), run while the forward flag is 1, and from a random time in
+# SPRINT_STOP_TIME the flag is 0 again: the robot is paid minus its speed, so it has to brake and
+# stand, with 5-8 s of the 20 s episode to do it. Rough ground is back. Protection: the soft joint
+# limit penalty (90% of the range) is SPRINT_W_JOINT_LIMIT, feet are charged for force above
+# SPRINT_FORCE_LIMIT (Sprint peaked at 1444 N, 9x body weight, p99 850 N), and action rate is
+# SPRINT_ACTION_RATE_SCALE of Deploy's. Torque and joint acceleration stay at Sprint's weights: at
+# Deploy's, with action rate, they cost more than the speed reward and a run stalled at 3 m/s.
+SPRINT_STOP_TIME = (
+    float(os.environ.get("PAPER_SPRINT_STOP_LO", 12.0)),
+    float(os.environ.get("PAPER_SPRINT_STOP_HI", 15.0)),
+)
+SPRINT_W_JOINT_LIMIT = float(os.environ.get("PAPER_SPRINT_W_JOINT_LIMIT", -100.0))
+SPRINT_FORCE_LIMIT = float(os.environ.get("PAPER_SPRINT_FORCE_LIMIT", 600.0))
+SPRINT_W_FORCE = float(os.environ.get("PAPER_SPRINT_W_FORCE", -0.002))
+# Action rate as a share of Deploy's weight. At full weight it cost as much as the whole speed reward
+# and a run held at about 2.4 m/s top speed; 0.1 is what Gallop trained with.
+SPRINT_ACTION_RATE_SCALE = float(os.environ.get("PAPER_SPRINT_ACTION_RATE_SCALE", 0.1))
+
+
+def _apply_sprint_deploy(cfg) -> None:
+    cfg.events.reset_running_start = None
+    cfg.commands.base_velocity.standby_duration_range = DEPLOY_STANDBY
+    cfg.commands.base_velocity.stop_time_range = SPRINT_STOP_TIME
+
+    _apply_rough_terrain(cfg)
+    cfg.scene.terrain.terrain_generator = cfg.scene.terrain.terrain_generator.replace(
+        border_width=max(100.0, cfg.episode_length_s * GALLOP_X[1]), curriculum=False
+    )
+
+    r = cfg.rewards
+    r.forward_speed = None
+    r.sprint_speed = RewTerm(func=mdp.sprint_speed, weight=SPRINT_W_SPEED)
+    r.dof_pos_limits.weight = SPRINT_W_JOINT_LIMIT
+    r.feet_impact = RewTerm(
+        func=mdp.contact_forces,
+        weight=SPRINT_W_FORCE,
+        params={"threshold": SPRINT_FORCE_LIMIT, "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
+    )
+    r.action_rate.weight *= SPRINT_ACTION_RATE_SCALE / (SPRINT_SMOOTH_SCALE * GALLOP_EFFORT_SCALE)
+    print(
+        f"[SprintDeploy] standing start, stop at {SPRINT_STOP_TIME} s of {cfg.episode_length_s} s; joint limit weight"
+        f" {SPRINT_W_JOINT_LIMIT}; foot force above {SPRINT_FORCE_LIMIT} N x {SPRINT_W_FORCE}; torque and"
+        f" joint_acc at Sprint's weights, action_rate x{SPRINT_ACTION_RATE_SCALE} of Deploy; rough ground"
+    )
+
+
+@configclass
+class RobotSprintDeployEnvCfg(RobotSprintEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_sprint_deploy(self)
+
+
+@configclass
+class RobotSprintDeployPlayEnvCfg(RobotSprintDeployEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         _apply_play_overrides(self)

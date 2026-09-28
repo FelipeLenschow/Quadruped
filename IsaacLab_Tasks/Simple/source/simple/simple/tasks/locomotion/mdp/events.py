@@ -108,3 +108,35 @@ def reset_start_pose(
     joint_pos = joint_pos.clamp(limits[..., 0], limits[..., 1])
     asset.write_joint_position_to_sim_index(position=joint_pos, env_ids=ids)
     asset.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(joint_pos), env_ids=ids)
+
+
+def reset_running_start(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    height: float = 0.5,
+    speed: float = 2.0,
+    xy_range: float = 0.5,
+) -> None:
+    """Start every episode with the base at `height` above the env origin, random yaw, moving forward
+    at `speed` along its own heading."""
+    from isaaclab.utils import math as math_utils
+
+    asset = env.scene[asset_cfg.name]
+    device = asset.device
+    k = len(env_ids)
+    if k == 0:
+        return
+    default_pose = asset.data.default_root_pose.torch[env_ids]
+    origins = env.scene.env_origins[env_ids]
+    pos = default_pose[:, 0:3] + origins
+    pos[:, 0:2] += math_utils.sample_uniform(-xy_range, xy_range, (k, 2), device)
+    pos[:, 2] = origins[:, 2] + height
+    yaw = math_utils.sample_uniform(-torch.pi, torch.pi, (k,), device)
+    zeros = torch.zeros(k, device=device)
+    quat = math_utils.quat_mul(default_pose[:, 3:7], math_utils.quat_from_euler_xyz(zeros, zeros, yaw))
+    velocity = torch.zeros(k, 6, device=device)
+    velocity[:, 0] = speed * torch.cos(yaw)
+    velocity[:, 1] = speed * torch.sin(yaw)
+    asset.write_root_pose_to_sim_index(root_pose=torch.cat([pos, quat], dim=-1), env_ids=env_ids)
+    asset.write_root_velocity_to_sim_index(root_velocity=velocity, env_ids=env_ids)

@@ -74,3 +74,33 @@ def ang_vel_cmd_levels(
             ).tolist()
 
     return torch.tensor(ranges.ang_vel_z[1], device=env.device)
+
+
+def lin_vel_x_max_levels(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    step: float = 0.5,
+    threshold: float = 0.7,
+    reward_term_name: str = "track_lin_vel_xy",
+) -> torch.Tensor:
+    """Raise only the top of the forward command range by `step`, up to its limit, each time the mean
+    tracking reward over an episode's worth of resets clears threshold x weight."""
+    command_term = env.command_manager.get_term("base_velocity")
+    ranges = command_term.cfg.ranges
+    limit = command_term.cfg.limit_ranges.lin_vel_x[1]
+    reward_term = env.reward_manager.get_term_cfg(reward_term_name)
+
+    state = getattr(env, "_lin_vel_x_max_state", None)
+    if state is None:
+        state = {"step": env.common_step_counter, "sum": 0.0, "n": 0}
+        env._lin_vel_x_max_state = state
+    state["sum"] += float(torch.sum(env.reward_manager._episode_sums[reward_term_name][env_ids]))
+    state["n"] += len(env_ids)
+
+    if env.common_step_counter - state["step"] >= env.max_episode_length and state["n"] > 0:
+        reward = (state["sum"] / state["n"]) / env.max_episode_length_s
+        state["step"], state["sum"], state["n"] = env.common_step_counter, 0.0, 0
+        if reward > reward_term.weight * threshold:
+            ranges.lin_vel_x = (ranges.lin_vel_x[0], min(ranges.lin_vel_x[1] + step, limit))
+
+    return torch.tensor(ranges.lin_vel_x[1], device=env.device)

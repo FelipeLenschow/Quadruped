@@ -161,3 +161,23 @@ def update_rsl_rl_cfg(agent_cfg: RslRlOnPolicyRunnerCfg, args_cli: argparse.Name
         agent_cfg.experiment_name = task_name.lower().replace("-", "_").removesuffix("_play")
 
     return agent_cfg
+
+
+def add_video_recorder(env_cfg, output_dir: str, video_length: int, video_interval: int = 0):
+    """Record mp4 clips from a Kit viewport that follows env 0's robot (Isaac Lab 3.0 dropped
+    render_mode="rgb_array", so gymnasium's RecordVideo only gets empty frames)."""
+    from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
+    from isaaclab_visualizers.kit import KitVisualizerCfg
+
+    env_cfg.sim.visualizer_cfgs = [
+        KitVisualizerCfg(eye=(2.0, 2.0, 1.0), lookat=(0.0, 0.0, 0.0), origin_type="asset", origin_track_path="robot")
+    ]
+    env_cfg.video_recorders = [
+        VideoRecorderCfg(
+            source="visualizer:kit",
+            output_dir=output_dir,
+            video_length=video_length,
+            video_interval=video_interval,
+        )
+    ]
+    print(f"[INFO] Recording {video_length}-step clips to {output_dir}" + (f" every {video_interval} steps" if video_interval else ""))

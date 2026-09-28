@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import torch
 from typing import TYPE_CHECKING
 
@@ -380,11 +381,12 @@ def clock_swing_height(
     max_error: float = 0.1,
     command_name: str = "clock",
 ) -> torch.Tensor:
-    """Squared error to a swing profile peaking at swing_height mid-swing, above the env origin, clipped to
-    max_error so a fallen robot is not paid to end the episode."""
+    """Squared error to a sin^2 swing profile, zero vertical speed at lift-off and touchdown, peaking at
+    swing_height mid-swing, above the env origin. Clipped to max_error so a fallen robot is not paid to
+    end the episode."""
     asset: Articulation = env.scene[asset_cfg.name]
     term = env.command_manager.get_term(command_name)
-    swing = 1 - torch.abs(1.0 - torch.clip(term.foot_phase * 2.0 - 1.0, 0.0, 1.0) * 2.0)
+    swing = torch.square(torch.sin(math.pi * torch.clip(term.foot_phase * 2.0 - 1.0, 0.0, 1.0)))
     target = swing_height * swing + foot_radius
     foot_z = asset.data.body_pos_w.torch[:, asset_cfg.body_ids, 2] - env.scene.env_origins[:, 2].unsqueeze(1)
     error = (target - foot_z).clamp(-max_error, max_error)
@@ -406,3 +408,42 @@ def base_height_moving(
     error = (asset.data.root_pos_w.torch[:, 2] - ground - target_height).clamp(-max_error, max_error)
     moving = torch.norm(env.command_manager.get_command(command_name), dim=1) > 0.0
     return torch.square(error) * moving
+
+
+def forward_progress(
+    env: ManagerBasedRLEnv, command_name: str = "base_velocity", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Share of the commanded forward speed reached, clip(v_x / cmd_x, -1, 1): linear from standing to
+    the target, where the exp tracking kernel is flat. Zero for commands under 0.1 m/s."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)[:, 0]
+    ratio = asset.data.root_lin_vel_b.torch[:, 0] / cmd.clamp(min=0.1)
+    return ratio.clamp(-1.0, 1.0) * (cmd > 0.1)
+
+
+def forward_speed(
+    env: ManagerBasedRLEnv, max_speed: float = 15.0, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Forward speed along the robot's heading (yaw frame, so pitching does not change it), m/s,
+    clipped to [-1, max_speed]."""
+    from isaaclab.utils.math import yaw_quat
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    vel = quat_apply_inverse(yaw_quat(asset.data.root_quat_w.torch), asset.data.root_lin_vel_w.torch)
+    return vel[:, 0].clamp(-1.0, max_speed)
+
+
+def sprint_speed(
+    env: ManagerBasedRLEnv,
+    command_name: str = "base_velocity",
+    max_speed: float = 15.0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """With a forward command: forward speed along the heading, clipped to [-1, max_speed]. Without
+    one: minus the planar speed, so the robot is paid to stop and stay stopped."""
+    from isaaclab.utils.math import yaw_quat
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    vel = quat_apply_inverse(yaw_quat(asset.data.root_quat_w.torch), asset.data.root_lin_vel_w.torch)
+    run = env.command_manager.get_command(command_name)[:, 0] > 0.0
+    return torch.where(run, vel[:, 0].clamp(-1.0, max_speed), -torch.norm(vel[:, :2], dim=1))
