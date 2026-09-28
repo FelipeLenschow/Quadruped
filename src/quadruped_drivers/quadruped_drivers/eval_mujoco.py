@@ -60,6 +60,8 @@ class MujocoEvaluator(Node):
             joint_names=self.isaac_names,
             sim_dt=0.001
         )
+        # The sweep measures the response to a step command.
+        self.pipeline.command_slew.enabled = False
 
         # 3. Arm the pipeline for an unattended sweep.
         #

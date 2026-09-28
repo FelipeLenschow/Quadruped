@@ -10,6 +10,17 @@ control:
   saturation_limit: 0.90  # 90% of physical capacity
   default_height: 0.33    # Target height for standing pose (m)
 
+# --- Velocity command slew limit ---
+# Per-axis limit on how fast the command reaching the policy may change, applied in the pipeline
+# to every command source (joystick, keyboard, MCP, Nav2). Slowing down (toward zero, or through
+# it on a reversal) uses the decel limits, so releasing the deadman still stops quickly. 0 = off.
+# eval_mujoco turns it off, since it measures the response to a step.
+command_slew:
+  lin_accel: 1.5          # m/s^2, vx and vy
+  lin_decel: 2.5
+  yaw_accel: 3.0          # rad/s^2
+  yaw_decel: 5.0
+
 # --- Motor Physical Parameters ---
 motor:
   max_torque: 45.0        # Nm (Saturation torque for Go2)

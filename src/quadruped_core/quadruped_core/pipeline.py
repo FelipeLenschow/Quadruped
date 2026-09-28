@@ -6,6 +6,7 @@ from quadruped_core.controller.policy_manager import PolicyManager
 from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
 from quadruped_core.controller.command_safety_processor import CommandSafetyProcessor
 from quadruped_core.controller.distributor import Distributor
+from quadruped_core.controller.command_slew import CommandSlewLimiter
 from quadruped_core.config_loader import load_config
 
 
@@ -55,6 +56,12 @@ class LocomotionPipeline:
         self.sim_dt = sim_dt
         self.decimation = self.ctrl_cfg.get("decimation", 4)
         self.policy_dt = self.decimation * self.sim_dt
+        self.command_slew = CommandSlewLimiter.from_config(self.config.get("command_slew"))
+        self._slew_time = None
+        if self.command_slew.enabled:
+            self.node.get_logger().info(
+                f"[LocomotionPipeline] Command slew limit: accel {self.command_slew.accel.tolist()}, "
+                f"decel {self.command_slew.decel.tolist()} (vx, vy m/s^2; wz rad/s^2).")
 
         # 3. Command Safety Processor (safety checking + arbitration)
         self.safety_processor = CommandSafetyProcessor(
@@ -101,6 +108,8 @@ class LocomotionPipeline:
         t=0.00 with no chance to recover.
         """
         self.policy_manager.reset_policy_state()
+        self.command_slew.reset()
+        self._slew_time = None
         self.latest_targets = self.desired_qpos.copy()
         self.step_counter = 0
         self.mode_transition_active = False
@@ -216,6 +225,10 @@ class LocomotionPipeline:
                     "[Pipeline] E-STOP released — holding at measured joint "
                     "positions in POSE mode.")
 
+            if self.mode != "policy" or self.safety_processor.is_estopped:
+                self.command_slew.reset()
+                self._slew_time = None
+
             if self.mode == "pose":
                 # ── POSE MODE ────────────────────────────────────────
                 # Bypass ROM/tilt safety checks — the whole point of the
@@ -266,6 +279,12 @@ class LocomotionPipeline:
                 # Full safety evaluation: ROM, tilt, and heartbeat checks.
                 # ─────────────────────────────────────────────────────
                 is_safe, _ = self.safety_processor.evaluate_safety(state)
+
+                dt = self.policy_dt
+                if self._slew_time is not None and 0.0 < sim_time - self._slew_time <= 0.1:
+                    dt = sim_time - self._slew_time
+                self._slew_time = sim_time
+                cmd_vel = self.command_slew(cmd_vel, dt)
 
                 if not is_safe:
                     active_policy = "safety"
