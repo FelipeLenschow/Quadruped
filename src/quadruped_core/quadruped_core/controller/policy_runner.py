@@ -476,7 +476,37 @@ class PolicyRunner:
         self._clock_speed = 0.0
         offsets, duty, _ = self._clock_timing()
         self._clock_index = self._clock_ready(offsets, duty)
+        self._clock_phase = self._clock_to_phase(np.remainder(self._clock_index + offsets, 1.0), duty)
         self._clock_fresh = True
+
+    @staticmethod
+    def _clock_to_phase(raw, d):
+        return np.where(raw < d, raw * (0.5 / d), 0.5 + (raw - d) * (0.5 / (1.0 - d)))
+
+    @staticmethod
+    def _clock_to_raw(phase, d):
+        return np.where(phase < 0.5, phase * (2.0 * d), d + (phase - 0.5) * (2.0 * (1.0 - d)))
+
+    def _clock_integrate(self, offsets, d, f, standing, dt):
+        """SpeedClockCommand._integrate: each foot's phase advances at its stance or swing rate."""
+        phase = self._clock_phase
+        raw = self._clock_to_raw(phase, d)
+        angle = 2.0 * np.pi * (raw - offsets)
+        index = np.arctan2(np.sin(angle).mean(), np.cos(angle).mean()) / (2.0 * np.pi)
+        error = np.remainder(index + offsets - raw + 0.5, 1.0) - 0.5
+        sync = np.clip(1.0 + float(self._clock_cfg.get("sync_gain", 4.0)) * error, 0.5, 1.5)
+        swinging = phase > 0.5 + 1e-4
+        rate = np.where(swinging, 0.5 * f / (1.0 - d), 0.5 * f / d * sync)
+        if standing:
+            rate = np.where(swinging, rate, 0.0)
+        phase = np.remainder(phase + rate * dt, 1.0)
+        if standing and not (phase > 0.5 + 1e-4).any():
+            self._clock_index = self._clock_ready(offsets, d)
+            phase = self._clock_to_phase(np.remainder(self._clock_index + offsets, 1.0), d)
+        else:
+            self._clock_index = index % 1.0
+        self._clock_phase = phase
+        return phase
 
     def _clock_timing(self):
         """Offsets, per-foot duty and frequency at the filtered speed, as SpeedClockCommand._blend/_set_timing."""
@@ -528,12 +558,15 @@ class PolicyRunner:
         self._clock_fresh = False
         self._clock_speed += min(dt / c["filter_time"], 1.0) * (sweep - self._clock_speed)
         offsets, d, f = self._clock_timing()
-        if np.linalg.norm(velocity[:3]) < c["stand_threshold"]:
-            self._clock_index = self._clock_ready(offsets, d)
+        standing = np.linalg.norm(velocity[:3]) < c["stand_threshold"]
+        if c.get("integrate_phase"):
+            foot = self._clock_integrate(offsets, d, f, standing, dt)
         else:
-            self._clock_index = (self._clock_index + dt * f) % 1.0
-        raw = np.remainder(self._clock_index + offsets, 1.0)
-        foot = np.where(raw < d, raw * (0.5 / d), 0.5 + (raw - d) * (0.5 / (1.0 - d)))
+            if standing:
+                self._clock_index = self._clock_ready(offsets, d)
+            else:
+                self._clock_index = (self._clock_index + dt * f) % 1.0
+            foot = self._clock_to_phase(np.remainder(self._clock_index + offsets, 1.0), d)
         angle = 2.0 * np.pi * foot
         return np.concatenate([np.sin(angle), np.cos(angle)]).astype(np.float32)
 

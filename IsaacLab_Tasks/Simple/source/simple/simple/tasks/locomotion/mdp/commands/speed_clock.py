@@ -96,6 +96,13 @@ class SpeedClockCommand(CommandTerm):
 
     With fast_offsets set, the offsets and per-foot swing times blend from foot_offsets and
     swing_time to fast_offsets and fast_swing_times as v goes from blend_speed[0] to [1].
+
+    With integrate_phase set, each foot's phase is integrated at its stance or swing rate instead of
+    mapped from the global index through the current duty. A changing duty then changes how fast a
+    foot moves through its phase, not where it is, so a swing always takes its full swing time
+    (the mapping cut the first swing after a standing start to 0.12 s). Stance rates are corrected
+    by sync_gain times each foot's offset error against the others, so the gait keeps its offsets.
+    On a stop, feet in swing finish it before the clock settles into the ready pose.
     """
 
     cfg: SpeedClockCommandCfg
@@ -116,7 +123,7 @@ class SpeedClockCommand(CommandTerm):
         self.gait_index = torch.zeros(n, device=self.device)
         self._set_timing()
         self.gait_index = self._ready_index()
-        self.foot_phase = torch.zeros(n, 4, device=self.device)
+        self.foot_phase = self._to_phase(torch.remainder(self.gait_index.unsqueeze(1) + self._offsets, 1.0))
         self.desired_contact = torch.ones(n, 4, device=self.device)
         self.metrics["contact_match"] = torch.zeros(n, device=self.device)
         self.metrics["frequency"] = torch.zeros(n, device=self.device)
@@ -161,6 +168,7 @@ class SpeedClockCommand(CommandTerm):
         self._blend(self.speed)
         self._set_timing()
         self.gait_index[ids] = self._ready_index()[ids]
+        self.foot_phase[ids] = self._ready_phase()[ids]
         return extras
 
     def _blend(self, speed: torch.Tensor):
@@ -185,6 +193,34 @@ class SpeedClockCommand(CommandTerm):
             self.duty.gather(1, lead).squeeze(1) - self._offsets.gather(1, lead).squeeze(1), 1.0
         )
 
+    def _to_phase(self, raw: torch.Tensor) -> torch.Tensor:
+        d = self.duty
+        return torch.where(raw < d, raw * (0.5 / d), 0.5 + (raw - d) * (0.5 / (1.0 - d)))
+
+    def _to_raw(self, phase: torch.Tensor) -> torch.Tensor:
+        d = self.duty
+        return torch.where(phase < 0.5, phase * (2.0 * d), d + (phase - 0.5) * (2.0 * (1.0 - d)))
+
+    def _ready_phase(self) -> torch.Tensor:
+        return self._to_phase(torch.remainder(self._ready_index().unsqueeze(1) + self._offsets, 1.0))
+
+    def _integrate(self, standing: torch.Tensor, dt: float):
+        phase = self.foot_phase
+        d = self.duty
+        f = self.frequency.unsqueeze(1)
+        raw = self._to_raw(phase)
+        angle = 2.0 * math.pi * (raw - self._offsets)
+        index = torch.atan2(torch.sin(angle).mean(dim=1), torch.cos(angle).mean(dim=1)) / (2.0 * math.pi)
+        error = torch.remainder(index.unsqueeze(1) + self._offsets - raw + 0.5, 1.0) - 0.5
+        sync = (1.0 + self.cfg.sync_gain * error).clamp(0.5, 1.5)
+        swinging = phase > 0.5 + 1e-4
+        rate = torch.where(swinging, 0.5 * f / (1.0 - d), 0.5 * f / d * sync)
+        rate = torch.where(standing.unsqueeze(1) & ~swinging, torch.zeros_like(rate), rate)
+        phase = torch.remainder(phase + rate * dt, 1.0)
+        settled = standing & ~(phase > 0.5 + 1e-4).any(dim=1)
+        self.foot_phase = torch.where(settled.unsqueeze(1), self._ready_phase(), phase)
+        self.gait_index = torch.remainder(index, 1.0)
+
     def _resample_command(self, env_ids: Sequence[int]):
         pass
 
@@ -202,16 +238,18 @@ class SpeedClockCommand(CommandTerm):
         self._blend(self.speed)
         self._set_timing()
         standing = torch.norm(vel, dim=1) < cfg.stand_threshold
-        running = torch.remainder(self.gait_index + dt * self.frequency, 1.0)
-        self.gait_index = torch.where(standing, self._ready_index(), running)
-
-        raw = torch.remainder(self.gait_index.unsqueeze(1) + self._offsets, 1.0)
-        duty = self.duty
-        self.foot_phase = torch.where(raw < duty, raw * (0.5 / duty), 0.5 + (raw - duty) * (0.5 / (1.0 - duty)))
+        if cfg.integrate_phase:
+            self._integrate(standing, dt)
+            planted = standing.unsqueeze(1) & (self.foot_phase <= 0.5 + 1e-4)
+        else:
+            running = torch.remainder(self.gait_index + dt * self.frequency, 1.0)
+            self.gait_index = torch.where(standing, self._ready_index(), running)
+            self.foot_phase = self._to_phase(torch.remainder(self.gait_index.unsqueeze(1) + self._offsets, 1.0))
+            planted = standing.unsqueeze(1).expand(-1, 4)
         normal = torch.distributions.Normal(0.0, cfg.contact_smoothing)
         p = self.foot_phase
         contact = normal.cdf(p) * (1 - normal.cdf(p - 0.5)) + normal.cdf(p - 1) * (1 - normal.cdf(p - 1.5))
-        self.desired_contact = torch.where(standing.unsqueeze(1), torch.ones_like(contact), contact)
+        self.desired_contact = torch.where(planted, torch.ones_like(contact), contact)
 
 
 @configclass
@@ -246,3 +284,5 @@ class SpeedClockCommandCfg(CommandTermCfg):
     foot_y: float = 0.14
     stand_threshold: float = 0.02
     contact_smoothing: float = 0.07
+    integrate_phase: bool = False
+    sync_gain: float = 4.0

@@ -1075,6 +1075,7 @@ CLOCK_MAX_SPEED = float(os.environ.get("PAPER_CLOCK_MAX_SPEED", 0.4 if _WALK els
 # Turning in place at 0.4 m/s over a 0.24 m foot radius; the foot speed cap binds before this does.
 CLOCK_MAX_YAW = float(os.environ.get("PAPER_CLOCK_MAX_YAW", 1.6 if _WALK else 1.0))
 CLOCK_SWING_HEIGHT = float(os.environ.get("PAPER_CLOCK_SWING_HEIGHT", 0.08))
+CLOCK_INTEGRATE = os.environ.get("PAPER_CLOCK_INTEGRATE", "1") == "1"
 CLOCK_W_FORCE = float(os.environ.get("PAPER_CLOCK_W_FORCE", 2.0))
 CLOCK_W_VEL = float(os.environ.get("PAPER_CLOCK_W_VEL", 0.5))
 # At -20 the term cost 2% of the tracking reward and feet cleared 2-6 cm of the 8 asked.
@@ -1095,6 +1096,7 @@ def _apply_clock(cfg) -> None:
         stride_gain=CLOCK_STRIDE_GAIN,
         swing_time=CLOCK_SWING_TIME,
         max_frequency=CLOCK_MAX_FREQUENCY,
+        integrate_phase=CLOCK_INTEGRATE,
     )
     cfg.commands.base_velocity.max_foot_speed = CLOCK_MAX_SPEED
     limits = cfg.commands.base_velocity.limit_ranges
@@ -1132,7 +1134,7 @@ def _apply_clock(cfg) -> None:
         params={"target_height": CLOCK_BASE_HEIGHT, "sensor_cfg": scanner},
     )
     r.termination = RewTerm(func=mdp.is_terminated, weight=CLOCK_W_TERMINATION)
-    print(f"[Clock] fall penalty weight {CLOCK_W_TERMINATION}")
+    print(f"[Clock] fall penalty weight {CLOCK_W_TERMINATION}, integrated phase {CLOCK_INTEGRATE}")
     print(f"[Clock] base height {CLOCK_BASE_HEIGHT} m above the scan, weight {CLOCK_W_HEIGHT}, critic only")
     print(f"[Clock] {CLOCK_GAIT}, fastest foot <= {CLOCK_MAX_SPEED} m/s, commands x +-{CLOCK_MAX_SPEED}, y {limits.lin_vel_y}, yaw +-{CLOCK_MAX_YAW}")
     print(
