@@ -1,7 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import OpaqueFunction
 
-from quadruped_bringup.launch_common import arg, common_args, flag, get, include, node, record, reward, reward_args
+from quadruped_bringup.launch_common import arg, common_args, flag, get, include, interface, interface_args, node, record, reward, reward_args
 
 
 def setup(context):
@@ -16,6 +16,7 @@ def setup(context):
         "--headless" if flag(context, "headless") else "",
         main=True,
     )]
+    actions += interface(context)
     if flag(context, "joy"):
         actions.append(include("joy.launch.py"))
     return actions + record(context, "gazebo") + reward(context)
@@ -24,6 +25,7 @@ def setup(context):
 def generate_launch_description():
     return LaunchDescription([
         *common_args(),
+        *interface_args(),
         arg("checkpoint"),
         arg("obs_dim", "49"),
         arg("world", "quadruped_world"),

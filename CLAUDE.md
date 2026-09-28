@@ -67,11 +67,14 @@ In Docker run colcon as `python3 -m colcon ...` from the venv, so node scripts g
 - `src/`: the ROS 2 packages (colcon workspace, `colcon build --symlink-install --base-paths src`):
   - `quadruped_core`: library, no nodes: `pipeline.py`, `controller/` (policy runner, safety processor, pose generator), `telemetry/` (TelemetryManager, LKF estimator, kinematics), `config_loader.py`, `paths.py`.
   - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`).
-  - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool.
+  - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool, `skill_server`.
+  - `quadruped_interfaces`: `srv/Skill.srv` (ament_cmake).
   - `quadruped_description`: MuJoCo menagerie, Gazebo world, Go2/Go1/A1 models, kinematics yaml, bundled policies.
-  - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`).
+  - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`, `twist_mux.yaml`).
   - `unitree_sdk2py`: wraps the `third_party/unitree_sdk2_python` submodule.
 - `IsaacSim/isaac_driver.py`: stays outside the packages (Isaac Sim's Python 3.12); imports `quadruped_core` from `src/`.
+
+Velocity sources publish on `/cmd_vel/<source>` and `twist_mux` picks one for `/cmd_vel`; the pipeline publishes `/robot_state` (JSON) and `skill_server` serves `/skill`. See `PROJECT_OVERVIEW.md` (Robot interface).
 
 Scripts still take command-line flags (not ROS parameters); `rclpy.utilities.remove_ros_args` strips the `--ros-args` that `Node` appends. Data is found through `quadruped_core.paths` (ament share dir, falling back to `src/`), and `config.yaml` lives at `src/quadruped_bringup/config/config.yaml`.
 

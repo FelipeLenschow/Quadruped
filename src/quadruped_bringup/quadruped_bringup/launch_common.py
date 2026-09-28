@@ -32,6 +32,13 @@ def reward_args():
     ]
 
 
+def interface_args():
+    return [
+        arg("mux", "true", "run twist_mux: /cmd_vel/{joy,keyboard,skill,nav,llm} -> /cmd_vel"),
+        arg("skills", "true", "run the /skill service"),
+    ]
+
+
 def get(context, name):
     return LaunchConfiguration(name).perform(context)
 
@@ -53,6 +60,16 @@ def node(package, executable, *args, main=False, **kwargs):
         on_exit=[Shutdown()] if main else None,
         **kwargs,
     )
+
+
+def interface(context):
+    actions = []
+    if flag(context, "mux"):
+        actions.append(Node(package="twist_mux", executable="twist_mux", output="log",
+                            parameters=[paths.config("twist_mux.yaml")], remappings=[("/cmd_vel_out", "/cmd_vel")]))
+    if flag(context, "skills"):
+        actions.append(node("quadruped_operator", "skill_server"))
+    return actions
 
 
 def include(name, **launch_args):

@@ -65,7 +65,7 @@ BUTTON_NAMES = {0: "A", 1: "B", 2: "X", 3: "Y"}
 # joy_node republishes at autorepeat_rate (20 Hz) even with nothing pressed, so a silence this long
 # means the pad or joy_node is gone - and the deadman with it, so the segment stops.
 JOY_TIMEOUT_S = 0.3
-# The console publishes /pipeline/mode at 10 Hz.
+# The pipeline publishes /robot_state at 10 Hz.
 MODE_TIMEOUT_S = 1.0
 
 _BOLD, _RED, _YELLOW, _GREEN, _DIM, _RESET = (
@@ -120,7 +120,7 @@ class SweepTeleop(Node):
 
         self.create_subscription(Joy, "/joy", self._joy_cb, 10)
         self.create_subscription(Bool, "/safety/estop_state", self._estop_state_cb, 10)
-        self.create_subscription(String, "/pipeline/mode", self._mode_cb, 10)
+        self.create_subscription(String, "/robot_state", self._mode_cb, 10)
 
         self.state = "idle"          # idle | warmup | running | estop
         self.finished = False
@@ -154,7 +154,7 @@ class SweepTeleop(Node):
         # Discovery needs a moment before the graph shows anyone else. Checked before this node
         # creates its own publisher, which count_publishers would otherwise include.
         time.sleep(1.5)
-        others = self.get_publishers_info_by_topic("/cmd_vel")
+        others = [i for i in self.get_publishers_info_by_topic("/cmd_vel") if i.node_name != "twist_mux"]
         if others:
             names = ", ".join(sorted({i.node_name for i in others}))
             raise SystemExit(
@@ -206,7 +206,7 @@ class SweepTeleop(Node):
     # Inputs
     # ------------------------------------------------------------------
     def _mode_cb(self, msg):
-        self.mode = msg.data
+        self.mode = json.loads(msg.data).get("mode")
         self.last_mode = time.monotonic()
 
     def _estop_state_cb(self, msg):
@@ -346,7 +346,7 @@ class SweepTeleop(Node):
         # A segment walked in pose mode is the stand pose with a velocity command nobody reads.
         if not self._mode_ok(now):
             why = (f"pipeline is in '{self.mode}' mode" if self.mode and self.last_mode
-                   and now - self.last_mode < MODE_TIMEOUT_S else "no /pipeline/mode from the console")
+                   and now - self.last_mode < MODE_TIMEOUT_S else "no /robot_state from the driver")
             self._say(f"{_YELLOW}[Sweep] Not starting: {why}. Switch to policy on the console.{_RESET}")
             return
         axis, speed = self._selected()
@@ -442,7 +442,7 @@ class SweepTeleop(Node):
                 self._abort(f"gamepad silent for more than {JOY_TIMEOUT_S:.1f} s")
             elif not self._mode_ok(now):
                 self._abort("pipeline left policy mode" if self.mode != "policy"
-                            else "lost /pipeline/mode from the console")
+                            else "lost /robot_state from the driver")
 
         cmd = (0.0, 0.0, 0.0)
         if self.state == "warmup" and now - self.t_state >= self.warmup_s:

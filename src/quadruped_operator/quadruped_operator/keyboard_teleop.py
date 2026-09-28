@@ -1,5 +1,5 @@
 """
-Keyboard teleop - /cmd_vel with teleop_twist_keyboard's keys, plus the Walk These Ways gait commands.
+Keyboard teleop - /cmd_vel/keyboard (twist_mux input) with teleop_twist_keyboard's keys, plus the Walk These Ways gait commands.
 
 Velocity (teleop_twist_keyboard layout, speeds scale with q/z, w/x, e/c):
     u i o      forward-left / forward / forward-right
@@ -19,7 +19,7 @@ Gait (published on /gait_command; a policy without a gait input ignores it):
     0          gait back to nominal
     Ctrl-C     quit (sends a zero velocity)
 
-Runs in place of teleop_twist_keyboard: two /cmd_vel sources fight. PolicyRunner clamps the gait
+Velocity is sent only while a move key is active, so Nav2 or the LLM take over once stopped. PolicyRunner clamps the gait
 commands to the ranges the run trained on, so the values shown here can read wider than what the
 policy gets.
 """
@@ -77,9 +77,9 @@ class KeyboardTeleop(Node):
         self.direction = (0, 0, 0)
         self.gait = "trot"
         self.fields = dict(NOMINAL)
-        self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.cmd_pub = self.create_publisher(Twist, "/cmd_vel/keyboard", 10)
         self.gait_pub = self.create_publisher(Float32MultiArray, "/gait_command", 10)
-        self.create_timer(0.1, self._publish_velocity)
+        self.create_timer(0.1, self._repeat_velocity)
         self.create_timer(1.0, self._publish_gait)
 
     def on_key(self, key):
@@ -107,6 +107,10 @@ class KeyboardTeleop(Node):
     def stop(self):
         self.direction = (0, 0, 0)
         self._publish_velocity()
+
+    def _repeat_velocity(self):
+        if self.direction != (0, 0, 0):
+            self._publish_velocity()
 
     def _publish_velocity(self):
         x, y, yaw = self.direction

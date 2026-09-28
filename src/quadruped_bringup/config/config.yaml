@@ -21,6 +21,11 @@ command_slew:
   yaw_accel: 3.0          # rad/s^2
   yaw_decel: 5.0
 
+# --- Velocity command input ---
+cmd_vel:
+  timeout: 0.5            # s
+  robot_state_rate: 10.0  # Hz
+
 # --- Motor Physical Parameters ---
 motor:
   max_torque: 45.0        # Nm (Saturation torque for Go2)

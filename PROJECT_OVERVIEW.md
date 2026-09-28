@@ -37,7 +37,14 @@ While the control loop is internal (non-ROS), the system publishes telemetry to 
 - `/sensors/joint_states`
 - `/sensors/imu`
 - `/odom`
-Internal drivers subscribe to `/cmd_vel` for steering and high-level commands.
+The pipeline subscribes to `/cmd_vel` (with a timeout) for steering.
+
+### 4. Robot interface (for teleop, Nav2, the LLM)
+The driver launches (`real`, `mujoco`, `gazebo`, `isaac_sim`) also start `twist_mux` and `skill_server` (`mux:=false` / `skills:=false` to skip).
+- **Velocity**: publish a `Twist` on your source's input, never on `/cmd_vel` directly: `/cmd_vel/joy` > `/cmd_vel/keyboard` > `/cmd_vel/skill` > `/cmd_vel/nav` > `/cmd_vel/llm` (priorities and timeouts in `config/twist_mux.yaml`). The winner is forwarded to `/cmd_vel`. The pipeline treats a `/cmd_vel` older than `cmd_vel.timeout` (0.5 s) as zero.
+- **State**: `/robot_state` (`std_msgs/String`, JSON, 10 Hz): mode, posture (`fallen`, `lying`, `sit`, `standing`, `walking`, ...), pose, e-stop and safety flags, tilt, velocity, command, and the WTW gait.
+- **Skills**: the `/skill` service (`quadruped_interfaces/srv/Skill`) blocks until done: `stop`, `stand`, `sit`, `lie`, `walk` (stand, then policy mode), `sniff` (WTW nose-down), `gait_walk|trot|pace|bound|pronk`. Example: `ros2 service call /skill quadruped_interfaces/srv/Skill "{name: walk}"`.
+- `/gait_command/override` lends the WTW gait to a skill; the last `/gait_command` returns 0.5 s after it stops.
 
 ## Important Constants (Unitree Go2)
 - **Control Frequency**: 50Hz (Policy), 200-500Hz (Actuator Loops).

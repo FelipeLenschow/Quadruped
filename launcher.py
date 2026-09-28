@@ -393,6 +393,15 @@ def _workspace_stale(stamp, signature):
     return False
 
 
+def _remove_dangling_links(*dirs):
+    for d in dirs:
+        for root, _, names in os.walk(d):
+            for n in names:
+                path = os.path.join(root, n)
+                if os.path.islink(path) and not os.path.exists(path):
+                    os.remove(path)
+
+
 def workspace_env(env):
     """Build the ROS 2 packages under src/ if needed and return env with install/setup.bash sourced.
     colcon runs under the ROS 2 interpreter so the node scripts get its shebang (the Docker venv)."""
@@ -401,6 +410,7 @@ def workspace_env(env):
     signature = f"{REPO_DIR}\n{python}\n"
     if _workspace_stale(stamp, signature):
         print("[Launcher] Building ROS 2 packages (colcon build --symlink-install)...")
+        _remove_dangling_links(os.path.join(REPO_DIR, "build"), os.path.join(REPO_DIR, "install"))
         subprocess.run([python, "-m", "colcon", "build", "--symlink-install", "--base-paths", "src"],
                        cwd=REPO_DIR, env=env, check=True)
         with open(stamp, "w") as f:

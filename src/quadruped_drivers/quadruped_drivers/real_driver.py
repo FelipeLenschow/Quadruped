@@ -7,7 +7,6 @@ import threading
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState, Imu
-from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32, Float32MultiArray
 import yaml
@@ -118,8 +117,6 @@ class RealDriver(Node):
         self.pipeline.policy_dt = POLICY_DT
 
         # 4. Teleop Subscription
-        self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
-        self.cmds_vel = np.zeros(4)  # [vx, vy, wz, height_cmd(unused)]
 
         # Dynamic gains subscription & initialization
         config_path = paths.config("config.yaml")
@@ -270,9 +267,6 @@ class RealDriver(Node):
                 f"[RealDriver] No LowState for {1000 * LOWSTATE_STALE_S:.0f} ms - the policy "
                 "is running on the last sample received.")
 
-    def teleop_cb(self, msg):
-        self.cmds_vel = np.array([msg.linear.x, msg.linear.y, msg.angular.z, 0.0])
-
     def kp_cb(self, msg):
         new_kp = float(msg.data)
         if new_kp != self.kp:
@@ -385,7 +379,7 @@ class RealDriver(Node):
         # publishing. Telemetry-only mode (no policy loaded) never writes to the motors.
         self.pipeline.step(
             raw_state_kwargs=raw_data,
-            cmd_vel=self.cmds_vel,
+            cmd_vel=None,
             sim_time=time.time(),
             send_cb=self._send_targets if "main" in self.pipeline.policy_manager.policies else None,
         )

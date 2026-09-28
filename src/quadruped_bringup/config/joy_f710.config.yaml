@@ -46,7 +46,7 @@ teleop_twist_joy_node:
       yaw: 1.0
 
     # Deadman on a shoulder button rather than the Logitech button. Releasing it
-    # publishes a zero Twist, which is what stops the robot - real_driver.py has
-    # no cmd_vel timeout of its own.
+    # publishes a zero Twist and then nothing, so twist_mux hands /cmd_vel back to
+    # the next source (Nav2, LLM) after its timeout.
     enable_button: 4        # LB
     enable_turbo_button: 5  # RB

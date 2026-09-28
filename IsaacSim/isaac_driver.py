@@ -176,7 +176,6 @@ class Ros2IsaacDriver(Node):
             )
 
         # 3. Subscriptions
-        self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
         self.create_subscription(Bool, "/base/freeze", self._freeze_base_cb, 10)
 
         # 4. Buffers
@@ -209,8 +208,6 @@ class Ros2IsaacDriver(Node):
             'q': q, 'dq': dq, 'quat': quat, 'gyro': gyro, 'pos': pos, 'vel': vel_b
         }
 
-    def teleop_cb(self, msg):
-        self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
 
     def _freeze_base_cb(self, msg: Bool):
         """Freeze base is not supported in IsaacSim."""
@@ -222,7 +219,7 @@ class Ros2IsaacDriver(Node):
         
         targets = self.pipeline.step(
             raw_state_kwargs=raw_data,
-            cmd_vel=self.cmd_vel,
+            cmd_vel=None,
             sim_time=float(self.step_counter * 0.005)
         )
         self.latest_targets[:] = torch.from_numpy(targets).to(

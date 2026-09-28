@@ -38,5 +38,6 @@ setup(
         "gazebo_twin = quadruped_operator.gazebo_twin:main",
         "reward_estimator = quadruped_operator.reward_estimator_node:main",
         "mcap_tool = quadruped_operator.mcap_tool:main",
+        "skill_server = quadruped_operator.skill_server:main",
     ]},
 )

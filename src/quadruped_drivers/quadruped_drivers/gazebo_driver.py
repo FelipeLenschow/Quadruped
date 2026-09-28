@@ -28,7 +28,6 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from rclpy.utilities import remove_ros_args
-from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, Float32
 
 try:
@@ -79,7 +78,6 @@ class Ros2GazeboDriver(Node):
         self.pipeline.decimation = int(round(POLICY_DT / (PHYSICS_DT * CONTROL_STEPS)))
         self.pipeline.policy_dt = POLICY_DT
 
-        self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
         self.create_subscription(Float32, "/control/kp", self._kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self._kd_cb, 10)
         self.create_subscription(Bool, "/base/freeze", self._freeze_base_cb, 10)
@@ -125,12 +123,6 @@ class Ros2GazeboDriver(Node):
         signal.signal(signal.SIGTERM, signal.default_int_handler)
 
     # --- ROS callbacks ---
-    def _teleop_cb(self, msg):
-        self.cmd_vel[0] = msg.linear.x
-        self.cmd_vel[1] = msg.linear.y
-        self.cmd_vel[2] = msg.angular.z
-        self.cmd_vel[3] = 0.0
-
     def _kp_cb(self, msg):
         if float(msg.data) != self.kp:
             self.kp = float(msg.data)
@@ -278,6 +270,7 @@ class Ros2GazeboDriver(Node):
                 "accel": self.base_accel,
                 "contact": self._foot_contacts(),
             }
+            self.cmd_vel = self.pipeline.cmd_vel
             self.targets = np.asarray(self.pipeline.step(
                 raw_state_kwargs=raw_data, cmd_vel=self.cmd_vel, sim_time=self.sim_time), dtype=np.float64)
             self.effort_limit = self.pipeline.safety_processor.active_max_torque

@@ -18,7 +18,8 @@ def generate_launch_description():
         arg("config", paths.config("joy_f710.config.yaml")),
         arg("gait", "true", "also run the Walk These Ways gait teleop"),
         IncludeLaunchDescription(PythonLaunchDescriptionSource(teleop),
-                                 launch_arguments={"config_filepath": LaunchConfiguration("config")}.items()),
+                                 launch_arguments={"config_filepath": LaunchConfiguration("config"),
+                                                   "joy_vel": "/cmd_vel/joy"}.items()),
         Node(package="quadruped_operator", executable="gait_teleop", output="screen", emulate_tty=True,
              condition=IfCondition(LaunchConfiguration("gait"))),
     ])

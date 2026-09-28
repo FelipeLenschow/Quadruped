@@ -162,7 +162,6 @@ class Ros2MujocoDriver(Node):
         )
 
         # 3. Subscriptions
-        self.create_subscription(Twist, "/cmd_vel", self.teleop_cb, 10)
         self.create_subscription(Bool, "/base/freeze", self._freeze_base_cb, 10)
 
         # Freeze-base state
@@ -391,10 +390,6 @@ class Ros2MujocoDriver(Node):
             raw['vel'] = vel_b
         return raw
 
-    def teleop_cb(self, msg):
-        """Teleop passed through to sensors for the policy runner to see."""
-        self.cmd_vel = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
-
     def _freeze_base_cb(self, msg: Bool):
         """Enable/disable mid-air base freeze at Z=1.0m."""
         if msg.data and not self._freeze_base_active:
@@ -536,6 +531,7 @@ class Ros2MujocoDriver(Node):
                 
                 # --- Centralized Pipeline (handles inference & telemetry) ---
                 raw_data = self._get_raw_sensor_data()
+                self.cmd_vel = self.pipeline.cmd_vel
                 self.current_targets = self.pipeline.step(
                     raw_state_kwargs=raw_data,
                     cmd_vel=self.cmd_vel,

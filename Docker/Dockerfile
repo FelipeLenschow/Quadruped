@@ -34,6 +34,7 @@ RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=fa
     ros-humble-plotjuggler-ros \
     ros-humble-teleop-twist-keyboard \
     ros-humble-teleop-twist-joy \
+    ros-humble-twist-mux \
     ros-humble-joy \
     ros-humble-rosbag2-storage-mcap \
     ros-humble-rviz2 \
@@ -68,6 +69,7 @@ ENV LD_LIBRARY_PATH="/usr/local/lib"
 # Upgrading pip and installing wheel first is good practice
 RUN pip install --no-cache-dir --upgrade pip wheel && \
     pip install --no-cache-dir \
+    "setuptools<80" \
     protobuf==3.20.3 \
     cyclonedds==0.10.2 \
     numpy \
@@ -91,6 +93,7 @@ ENV PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 # 9. Source ROS 2 automatically when entering the container
 RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 RUN echo "source /opt/venv/bin/activate" >> ~/.bashrc
+RUN echo '[ -f /app/Tools/ros_env.sh ] && source /app/Tools/ros_env.sh' >> ~/.bashrc
 
 # 10. Customize the bash prompt so you know you are inside the Docker container
 RUN echo 'export PS1="(Quadruped-Docker) \[\033[01;32m\]\u@docker\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]# "' >> ~/.bashrc

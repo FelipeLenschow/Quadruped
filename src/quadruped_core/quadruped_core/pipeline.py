@@ -1,5 +1,8 @@
+import json
 import os
+import time
 import numpy as np
+from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32MultiArray, String
 from quadruped_core.telemetry.telemetry import TelemetryManager
 from quadruped_core.controller.policy_manager import PolicyManager
@@ -7,6 +10,8 @@ from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
 from quadruped_core.controller.command_safety_processor import CommandSafetyProcessor
 from quadruped_core.controller.distributor import Distributor
 from quadruped_core.controller.command_slew import CommandSlewLimiter
+from quadruped_core.controller.policy_runner import WTW_GAITS
+from quadruped_core.telemetry.estimator import projected_gravity_b
 from quadruped_core.config_loader import load_config
 
 
@@ -82,6 +87,20 @@ class LocomotionPipeline:
         # PolicyRunner.gait_command. Policies without a gait input ignore it.
         self.node.create_subscription(
             Float32MultiArray, "/gait_command", self._gait_cb, 10)
+        self.node.create_subscription(
+            Float32MultiArray, "/gait_command/override", self._gait_override_cb, 10)
+        self._gait_base = None
+        self._gait_override_time = None
+
+        cmd_cfg = self.config.get("cmd_vel") or {}
+        self.cmd_timeout = float(cmd_cfg.get("timeout", 0.5))
+        self._cmd = [0.0, 0.0, 0.0, 0.0]
+        self._cmd_time = None
+        self.node.create_subscription(Twist, "/cmd_vel", self._cmd_vel_cb, 10)
+
+        self._state_pub = self.node.create_publisher(String, "/robot_state", 10)
+        self._state_period = 1.0 / float(cmd_cfg.get("robot_state_rate", 10.0))
+        self._state_time = 0.0
 
         # Nominal standing pose (default fallback)
         self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
@@ -116,12 +135,102 @@ class LocomotionPipeline:
         self.mode_transition_start_time = None
         self.mode_transition_start_targets = self.desired_qpos.copy()
 
+    def _wtw_runners(self):
+        return [r for r in self.policy_manager.policies.values() if getattr(r, "_obs_layout", None) == "wtw"]
+
     def _gait_cb(self, msg: Float32MultiArray):
         if len(msg.data) not in (8, 9):
             return
-        for runner in self.policy_manager.policies.values():
-            if getattr(runner, "_obs_layout", None) == "wtw":
+        self._gait_base = list(msg.data)
+        if self._gait_override_time is None:
+            for runner in self._wtw_runners():
                 runner.set_gait_vector(msg.data)
+
+    def _gait_override_cb(self, msg: Float32MultiArray):
+        if len(msg.data) not in (8, 9):
+            return
+        runners = self._wtw_runners()
+        if self._gait_override_time is None and self._gait_base is None and runners:
+            self._gait_base = runners[0].gait_command.tolist()
+        self._gait_override_time = time.monotonic()
+        for runner in runners:
+            runner.set_gait_vector(msg.data)
+
+    def _release_gait_override(self):
+        if self._gait_override_time is None or time.monotonic() - self._gait_override_time <= self.cmd_timeout:
+            return
+        self._gait_override_time = None
+        if self._gait_base is not None:
+            for runner in self._wtw_runners():
+                runner.set_gait_vector(self._gait_base)
+
+    def _cmd_vel_cb(self, msg: Twist):
+        self._cmd = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
+        self._cmd_time = time.monotonic()
+
+    @property
+    def cmd_age(self):
+        return None if self._cmd_time is None else time.monotonic() - self._cmd_time
+
+    @property
+    def cmd_vel(self):
+        age = self.cmd_age
+        if age is None or age > self.cmd_timeout:
+            return [0.0, 0.0, 0.0, 0.0]
+        return list(self._cmd)
+
+    def _publish_robot_state(self, state, cmd_vel, sim_time):
+        now = time.monotonic()
+        if now - self._state_time < self._state_period:
+            return
+        self._state_time = now
+        sp = self.safety_processor
+        pose_gen = self.policy_manager.policies.get("pose")
+        pg = projected_gravity_b(state.imu.quaternion)
+        tilt = float(np.degrees(np.arccos(np.clip(-pg[2] / np.linalg.norm(pg), -1.0, 1.0))))
+        vel = [float(v) for v in (state.base_lin_vel or [0.0, 0.0, 0.0])[:2]]
+        yaw_rate = float(state.imu.gyroscope[2]) if state.imu.gyroscope else 0.0
+        cmd = [round(float(c), 3) for c in cmd_vel[:3]]
+        moving = max(abs(c) for c in cmd) > 0.05 or float(np.hypot(*vel)) > 0.15
+        pose = pose_gen.current_pose_name if pose_gen else "none"
+        pose_done = bool(pose_gen.is_complete) if pose_gen else False
+
+        if tilt > 60.0:
+            posture = "fallen"
+        elif self.mode == "policy":
+            posture = "walking" if moving else "standing"
+        elif pose == "lie_flat" or sp.active_max_torque <= 0.1:
+            posture = "lying"
+        else:
+            posture = pose
+
+        gait = None
+        runners = self._wtw_runners()
+        if runners:
+            g = runners[0].gait_command.tolist()
+            names = ["height", "frequency", "phase", "offset", "bound", "swing", "pitch", "width", "duty"]
+            gait = {n: round(float(v), 3) for n, v in zip(names, g)}
+            gait["name"] = min(WTW_GAITS, key=lambda k: float(np.abs(np.array(WTW_GAITS[k]) - g[2:5]).sum()))
+            gait["override"] = self._gait_override_time is not None
+
+        msg = String()
+        msg.data = json.dumps({
+            "t": round(float(sim_time), 3),
+            "mode": self.mode,
+            "transition": self.mode_transition_active,
+            "posture": posture,
+            "pose": pose,
+            "pose_done": pose_done,
+            "moving": moving,
+            "estop": sp.is_estopped,
+            "safety_blocked": sp._policy_blocked,
+            "torque_on": sp.active_max_torque > 0.1,
+            "tilt_deg": round(tilt, 1),
+            "velocity": [round(v, 3) for v in vel] + [round(yaw_rate, 3)],
+            "cmd": cmd,
+            "gait": gait,
+        })
+        self._state_pub.publish(msg)
 
     def _mode_cb(self, msg: String):
         """Handle pipeline mode switch commands from the Console."""
@@ -189,6 +298,8 @@ class LocomotionPipeline:
         # Determine if this is a policy inference step (e.g., 50Hz)
         is_policy_step = (self.step_counter % self.decimation) == 0
         self.step_counter += 1
+        if cmd_vel is None:
+            cmd_vel = self.cmd_vel
 
         # 1. Standardize State
         raw_state_kwargs['update_estimator'] = is_policy_step
@@ -224,6 +335,8 @@ class LocomotionPipeline:
                 self.node.get_logger().warn(
                     "[Pipeline] E-STOP released — holding at measured joint "
                     "positions in POSE mode.")
+
+            self._release_gait_override()
 
             if self.mode != "policy" or self.safety_processor.is_estopped:
                 self.command_slew.reset()
@@ -339,6 +452,7 @@ class LocomotionPipeline:
         # 3. Telemetry Publishing
         if is_policy_step:
             self.telemetry.publish(sim_time=sim_time, state=state)
+            self._publish_robot_state(state, cmd_vel, sim_time)
 
         return self.latest_targets
 

@@ -25,6 +25,7 @@ releases it - pressing ENTER on the driver, at the robot. Only a console that
 actually dies trips the watchdog.
 """
 
+import json
 import os
 import sys
 import time
@@ -66,7 +67,7 @@ class ConsoleNode(Node):
       /safety/joint_rom_safety_margin     — joint ROM safe boundary fraction
 
     Pipeline and Pose control:
-      /pipeline/mode       — "pose" or "policy"
+      /pipeline/mode       — "pose" or "policy", sent on change (the shown mode follows /robot_state)
       /pose/command        — named pose (e.g. "stand", "pushup")
       /pose/interp_duration — interpolation time override
 
@@ -168,6 +169,8 @@ class ConsoleNode(Node):
         # ------------------------------------------------------------------
         self.create_subscription(
             String, "/pose/status", self._pose_status_cb, 10)
+        self.create_subscription(
+            String, "/robot_state", self._robot_state_cb, 10)
 
         # ------------------------------------------------------------------
         # 4b. Estimator state - pre-flight gate for policy mode
@@ -277,6 +280,12 @@ class ConsoleNode(Node):
         # has no global pose), so on hardware it reads its 0.5 default forever.
 
         return (not reasons), reasons
+
+    def _robot_state_cb(self, msg):
+        try:
+            self.current_mode = json.loads(msg.data)["mode"]
+        except (ValueError, KeyError):
+            pass
 
     def _pose_status_cb(self, msg: String):
         """Parse pose status: 'pose_name|progress|label'."""
@@ -624,11 +633,6 @@ class ConsoleNode(Node):
             Float32(data=float(self.kp)))
         self.kd_pub.publish(
             Float32(data=float(self.kd)))
-
-        # Also re-publish mode on every heartbeat so late-joining nodes pick it up
-        mode_msg = String()
-        mode_msg.data = self.current_mode
-        self.mode_pub.publish(mode_msg)
 
         # Console status report on every heartbeat (replaces the last multi-line block in-place)
         self.heartbeat_count += 1
