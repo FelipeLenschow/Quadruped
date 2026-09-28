@@ -13,6 +13,7 @@ def setup(context):
         f"--obs_dim={get(context, 'obs_dim')}",
         f"--internal_policy={checkpoint}" if checkpoint else "",
         "--use_estimator" if flag(context, "use_estimator") else "",
+        "--headless" if flag(context, "headless") else "",
         main=True,
     )]
     if flag(context, "joy"):
@@ -26,6 +27,7 @@ def generate_launch_description():
         arg("checkpoint"),
         arg("obs_dim", "49"),
         arg("world", "quadruped_world"),
+        arg("headless", "false", "no Gazebo GUI"),
         arg("use_estimator", "false"),
         arg("joy", "false", "also start the gamepad teleop"),
         *reward_args(),

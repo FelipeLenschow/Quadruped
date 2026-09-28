@@ -1,488 +1,347 @@
 """
 Gazebo Driver for Quadruped Locomotion.
-Manages high-frequency physics stepping, ActuatorNet simulation,
-and deterministic policy deployment (Turbo Mode).
+
+Runs the Gazebo server in-process and steps it in lockstep with the controller, the way the
+MuJoCo driver steps MuJoCo: the PD runs on every 1 ms physics step and the pipeline every 5 ms,
+so a slow Python loop only slows the simulation down instead of delaying the torques. The GUI,
+when wanted, is a separate `gz sim -g` client on the same partition.
 """
 
 import os
 import sys
-
-
 import time
-import numpy as np
-import torch
-import argparse
 import signal
+import argparse
 import threading
 import subprocess
-from pathlib import Path
+
+import numpy as np
 
 from quadruped_core.pipeline import LocomotionPipeline
 from quadruped_core.telemetry.estimator import rot_from_quat
 from quadruped_core.telemetry.kinematics import Go2Kinematics
 from quadruped_core.config_loader import load_config
+from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
 from quadruped_core import paths
 
-# ROS 2 Standard Imports
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Imu, JointState
-from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Quaternion, Vector3, Twist
-from std_msgs.msg import Bool, Float32
+from rclpy.executors import ExternalShutdownException
 from rclpy.utilities import remove_ros_args
+from geometry_msgs.msg import Twist
+from std_msgs.msg import Bool, Float32
 
-# Gazebo Transport & Msgs
 try:
-    from gz.transport13 import Node as GzTransportNode
-    from gz.msgs10 import (
-        double_pb2,
-        model_pb2,
-        imu_pb2,
-        pose_pb2,
-        world_stats_pb2,
-        odometry_pb2,
-    )
+    import gz.math7  # noqa: F401  (registers the Pose3d/Vector3d types the sim bindings return)
+    from gz.sim8 import TestFixture, World, Model, Link, Joint, world_entity
 except ImportError:
-    print("[ERROR] Gazebo (Harmonic) Python bindings not found.")
+    print("[ERROR] Gazebo (Harmonic) Python bindings not found (python3-gz-sim8).")
     sys.exit(1)
 
 
-# MuJoCo/Isaac order (Grouped by Joint Type): FL, FR, RL, RR
+# Isaac order (grouped by joint type): FL, FR, RL, RR
 JOINT_NAMES = [
     "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
     "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
     "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 ]
+PHYSICS_DT = 0.001
+CONTROL_STEPS = 5        # physics steps per pipeline step (200 Hz)
+POLICY_DT = 0.02
 
-# Gazebo and MuJoCo models use 1 0 0 for both hips.
+
 class Ros2GazeboDriver(Node):
-    def __init__(
-        self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49,
-        use_estimator=False
-    ):
+    def __init__(self, robot_type, world_name="quadruped_world", checkpoint=None, obs_dim=49,
+                 use_estimator=False, headless=False):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
-        
-        # 0. Load Central Config
+        self.world_name = world_name
+        self.headless = headless
+
         self.config = load_config()
         self.ctrl_cfg = self.config.get("control", {})
         self.motor_cfg = self.config.get("motor", {})
         est_cfg = self.config.get("state_estimator", {})
-        
+
         self.kp = float(self.ctrl_cfg.get("kp", 0.0))
         self.kd = float(self.ctrl_cfg.get("kd", 0.0))
-        self.cmd_vel = [0.0, 0.0, 0.0, 0.0]  # [vx, vy, wz, unused_height_cmd]
-        
-        # Priority: CLI arg (if explicitly True) > YAML config
-        effective_use_estimator = use_estimator
-        if not effective_use_estimator:
-            effective_use_estimator = est_cfg.get("use_estimator", False)
+        self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
 
-        self.world_name = world_name
-
-        # Handles internal policy inference, physics stepping,
-        # and standardizes telemetry for ROS 2 monitoring.
         self.pipeline = LocomotionPipeline(
             node=self,
             robot_type=robot_type,
             checkpoint=checkpoint,
             obs_dim=obs_dim,
-            use_estimator=effective_use_estimator,
+            use_estimator=use_estimator or est_cfg.get("use_estimator", False),
             joint_names=JOINT_NAMES,
-            sim_dt=0.001
+            sim_dt=PHYSICS_DT * CONTROL_STEPS,
         )
+        self.pipeline.decimation = int(round(POLICY_DT / (PHYSICS_DT * CONTROL_STEPS)))
+        self.pipeline.policy_dt = POLICY_DT
 
         self.create_subscription(Twist, "/cmd_vel", self._teleop_cb, 10)
         self.create_subscription(Float32, "/control/kp", self._kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self._kd_cb, 10)
         self.create_subscription(Bool, "/base/freeze", self._freeze_base_cb, 10)
-        self._startup_console_check = False
 
-        # Nominal standing pose (Matches MuJoCo Driver exactly in Isaac order)
-        self.desired_qpos = np.array(
-            [
-                0.1, -0.1, 0.1, -0.1,  # hips
-                0.8, 0.8, 1.0, 1.0,    # thighs
-                -1.5, -1.5, -1.5, -1.5  # calves
-            ],
-            dtype=np.float32,
-        )
-        self.latest_torques = np.zeros(12, dtype=np.float32)
-        self.latest_targets = self.desired_qpos.copy()
+        self.kinematics = Go2Kinematics()
         self.sim_time = 0.0
-        self.q = np.zeros(12)
+        self.q = DEFAULT_STANCE_QPOS.astype(np.float64).copy()
         self.dq = np.zeros(12)
+        self._steps_left = 0
         self.base_pos = np.zeros(3)
-        self.base_quat = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
+        self.base_quat = np.array([1.0, 0.0, 0.0, 0.0])
         self.base_ang_vel = np.zeros(3)
         self.base_lin_vel_b = np.zeros(3)
-        self.base_accel = np.array([0., 0., 9.81])  # body-frame specific force (m/s^2)
-        self.kinematics = Go2Kinematics()
+        self.base_accel = np.array([0.0, 0.0, 9.81])
+        self.targets = DEFAULT_STANCE_QPOS.astype(np.float64).copy()
+        self.effort_limit = 0.0
+        self.torques = np.zeros(12)
 
-        # 3. Gazebo Transport (Deferred until physics loop for partitioning)
-        self.gz_node = None
-        self.joint_pubs = []
-
-        self.new_data_event = threading.Event()
+        self._joints = None
+        self._base = None
         self._stop = threading.Event()
-        base_world_path = paths.description("gazebo", "scene.sdf")
-        with open(base_world_path, "r") as f:
+        self._ready = threading.Event()
+        self._done = threading.Event()
+        self.gui_proc = None
+
+        with open(paths.description("gazebo", "scene.sdf"), "r") as f:
             scene_xml = f.read()
         scene_xml = scene_xml.replace("go2_description", f"{self.robot_type}_description")
         scene_xml = scene_xml.replace("<name>go2</name>", f"<name>{self.robot_type}</name>")
+        # Unthrottled: the driver paces sim time to the wall clock itself, and Gazebo's own
+        # throttle stacked on top of the controller's work held it near 0.8x real time.
+        scene_xml = scene_xml.replace("<real_time_factor>1.0</real_time_factor>", "<real_time_factor>0</real_time_factor>")
         self.world_path = f"/tmp/gazebo_scene_{self.robot_type}_{os.getpid()}.sdf"
         with open(self.world_path, "w") as f:
             f.write(scene_xml)
 
-        # 4. Starting Threads
         self.physics_thread = threading.Thread(target=self._physics_loop, daemon=True)
         self.physics_thread.start()
+        # The in-process Gazebo server installs its own SIGINT handler, which would swallow
+        # Ctrl+C; put Python's back once it exists so rclpy.spin still stops.
+        self._ready.wait(timeout=60.0)
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        signal.signal(signal.SIGTERM, signal.default_int_handler)
 
-        print(
-            f"[GazeboDriver] Initialized for {robot_type.upper()}. Physics at 500Hz (Slave)."
-        )
-
+    # --- ROS callbacks ---
     def _teleop_cb(self, msg):
-        # Update velocities, keeping 4th command 0.0 to match training distribution
         self.cmd_vel[0] = msg.linear.x
         self.cmd_vel[1] = msg.linear.y
         self.cmd_vel[2] = msg.angular.z
         self.cmd_vel[3] = 0.0
 
     def _kp_cb(self, msg):
-        new_kp = float(msg.data)
-        if new_kp != self.kp:
-            self.kp = new_kp
+        if float(msg.data) != self.kp:
+            self.kp = float(msg.data)
             self.get_logger().info(f"[GazeboDriver] Dynamic Kp updated to: {self.kp:.1f}")
 
     def _kd_cb(self, msg):
-        new_kd = float(msg.data)
-        if new_kd != self.kd:
-            self.kd = new_kd
+        if float(msg.data) != self.kd:
+            self.kd = float(msg.data)
             self.get_logger().info(f"[GazeboDriver] Dynamic Kd updated to: {self.kd:.2f}")
 
     def _freeze_base_cb(self, msg: Bool):
-        """Freeze base is not supported in Gazebo."""
         state = "on" if msg.data else "off"
         print(f"[GazeboDriver] freeze_base ({state}): Not supported on this simulator.")
 
-    # --- Control & Gains ---
-    def _stats_cb(self, msg):
-        self.sim_time = msg.sim_time.sec + msg.sim_time.nsec * 1e-9
+    # --- Gazebo system callbacks (run inside server.run, on every physics step) ---
+    def _setup(self, ecm):
+        model = Model(World(world_entity(ecm)).model_by_name(ecm, self.robot_type))
+        self._joints = [Joint(model.joint_by_name(ecm, name)) for name in JOINT_NAMES]
+        # Gazebo 8 ignores <initial_position>, so the stance is set here, as MuJoCo's reset does.
+        for joint, q0 in zip(self._joints, DEFAULT_STANCE_QPOS):
+            joint.enable_position_check(ecm, True)
+            joint.enable_velocity_check(ecm, True)
+            joint.reset_position(ecm, [float(q0)])
+        self._base = Link(model.link_by_name(ecm, "base"))
+        self._base.enable_velocity_checks(ecm, True)
+        self._base.enable_acceleration_checks(ecm, True)
 
-    def _imu_cb(self, msg):
-        # msg.orientation is [x, y, z, w] in protobuf
-        q = msg.orientation
-        self.base_quat = np.array([q.w, q.x, q.y, q.z])
-        self.base_ang_vel = np.array(
-            [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
-        )
-        if hasattr(msg, 'linear_acceleration'):
-            la = msg.linear_acceleration
-            self.base_accel = np.array([la.x, la.y, la.z])
+    def _read_joints(self, ecm):
+        for i, joint in enumerate(self._joints):
+            p = joint.position(ecm)
+            v = joint.velocity(ecm)
+            if p:
+                self.q[i] = p[0]
+            if v:
+                self.dq[i] = v[0]
 
-    def _joint_cb(self, msg):
-        if hasattr(msg, "header") and hasattr(msg.header, "stamp"):
-            t = msg.header.stamp.sec + msg.header.stamp.nsec * 1e-9
-            if t > 0 and t > self.sim_time:
-                self.sim_time = t
+    def _pre_update(self, info, ecm):
+        if self._joints is None:
+            self._setup(ecm)
+            return
+        if info.paused:
+            return
+        self._read_joints(ecm)
+        self.torques = self._pd_torques()
+        for joint, tau in zip(self._joints, self.torques):
+            joint.set_force(ecm, [float(tau)])
 
-        for joint in msg.joint:
-            if joint.name in JOINT_NAMES:
-                idx = JOINT_NAMES.index(joint.name)
-                try:
-                    self.q[idx] = joint.axis1.position
-                    self.dq[idx] = joint.axis1.velocity
-                except AttributeError:
-                    pass
-        # Signal the physics loop to step
-        self.new_data_event.set()
+    def _post_update(self, info, ecm):
+        self.sim_time = info.sim_time.total_seconds()
+        self._steps_left -= 1
+        if self._base is None or self._steps_left > 0:
+            return
+        self._read_joints(ecm)
+        pose = self._base.world_pose(ecm)
+        if pose is None:
+            return
+        p, r = pose.pos(), pose.rot()
+        self.base_pos = np.array([p.x(), p.y(), p.z()])
+        self.base_quat = np.array([r.w(), r.x(), r.y(), r.z()])
+        R = rot_from_quat(self.base_quat)
+        v = self._base.world_linear_velocity(ecm)
+        w = self._base.world_angular_velocity(ecm)
+        a = self._base.world_linear_acceleration(ecm)
+        if v is not None:
+            self.base_lin_vel_b = R.T @ np.array([v.x(), v.y(), v.z()])
+        if w is not None:
+            self.base_ang_vel = R.T @ np.array([w.x(), w.y(), w.z()])
+        if a is not None:
+            self.base_accel = R.T @ (np.array([a.x(), a.y(), a.z()]) + np.array([0.0, 0.0, 9.81]))
 
-    def _odom_cb(self, msg):
-        self.base_pos = np.array(
-            [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
-        )
-        
-        # Ground truth orientation and angular velocity from simulator
-        q = msg.pose.orientation
-        self.base_quat = np.array([q.w, q.x, q.y, q.z])
-        w_body = np.array([msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z])
+    def _pd_torques(self):
+        """DC-motor PD matching the MuJoCo driver: torque limited by the safety processor's
+        active limit and the torque-speed curve."""
+        effort_limit = self.effort_limit
+        if effort_limit <= 0.1:
+            return np.zeros(12)
+        sat_effort = self.motor_cfg.get("max_torque", 45.0)
+        vel_lim = self.motor_cfg.get("max_velocity", 30.0)
+        raw = self.kp * (self.targets - self.q) - self.kd * self.dq
+        v_max = vel_lim * (1 + effort_limit / sat_effort)
+        v = np.clip(self.dq, -v_max, v_max)
+        t_top = effort_limit * (1.0 - v / vel_lim)
+        t_bot = effort_limit * (-1.0 - v / vel_lim)
+        return np.clip(raw, np.maximum(t_bot, -effort_limit), np.minimum(t_top, effort_limit))
 
-        # gz::sim::systems::OdometryPublisher (dimensions=3) reports the twist
-        # in the BODY frame (child frame), NOT the world frame.
-        v_body = np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z])
-
-        try:
-            self.base_lin_vel_b[:] = v_body
-            self.base_ang_vel[:] = w_body
-        except Exception:
-            self.base_lin_vel_b[:] = v_body
-            self.base_ang_vel[:] = w_body
-
-        # Log Suspected Drift
-        if np.abs(self.base_lin_vel_b[1]) > 0.5 and self.sim_time > 5.0:
-            print(
-                f"\r[Bridge] WARNING: Lateral vel vy={self.base_lin_vel_b[1]:.2f} at t={self.sim_time:.1f}",
-                end="", flush=True,
-            )
-
-
+    # --- Main loop ---
+    def _foot_contacts(self):
+        contact = [0.0, 0.0, 0.0, 0.0]
+        R = rot_from_quat(self.base_quat)
+        for leg in range(4):
+            q_leg = np.array([self.q[leg], self.q[leg + 4], self.q[leg + 8]])
+            r_foot_w = self.base_pos + R @ self.kinematics.foot_position_body(leg, q_leg)
+            if r_foot_w[2] < 0.04:  # foot radius is 2.2 cm
+                contact[leg] = 1.0
+        return contact
 
     def _physics_loop(self):
-        # 1. Load ActuatorNet
-        act_net_path = Path(paths.description("policies", "unitree_quadruped.pt"))
-        if not act_net_path.exists():
-            print(f"[Ros2GazeboBridge] ERROR: ActuatorNet missing at {act_net_path}")
-            return
-        self.act_net = torch.jit.load(str(act_net_path), map_location="cpu").eval()
+        try:
+            self._run_physics()
+        finally:
+            self._done.set()
 
-        # 2. Resource & Global Cleanup
-        subprocess.run(
-            ["pkill", "-9", "-f", "gz-sim-server"], stderr=subprocess.DEVNULL
-        )
-        time.sleep(1.0)
-
-        # 3. Environment Setup (Crucial for Resource Path and Partition)
-        env = os.environ.copy()
-
-        # Ensure a truly unique partition for THIS specific bridge instance
-        unique_id = os.getpid() % 100000
-        partition = f"quadruped_sim_{unique_id}"
-        env["GZ_PARTITION"] = partition
-
-        # Resource paths for model loading
-        env["GZ_SIM_RESOURCE_PATH"] = os.pathsep.join(
+    def _run_physics(self):
+        partition = f"quadruped_sim_{os.getpid() % 100000}"
+        os.environ["GZ_PARTITION"] = partition
+        os.environ["GZ_SIM_RESOURCE_PATH"] = os.pathsep.join(
             [paths.description("gazebo")]
             + [paths.description("robots", r, "models") for r in ("Unitree_Go2", "Unitree_Go1", "Unitree_A1")]
-            + [env.get("GZ_SIM_RESOURCE_PATH", "")]
+            + [os.environ.get("GZ_SIM_RESOURCE_PATH", "")]
         )
-
-        # VDI Rendering Fixes
-        if os.environ.get("FORCE_SOFTWARE_RENDER", "1") == "1":
-            env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-            env["QT_X11_NO_MITSHM"] = "1"
-
-        gz_args = ["gz", "sim", self.world_path]
-        if os.environ.get("GZ_HEADLESS", "0") == "1":
-            gz_args.append("-s")
-
         print(f"[GazeboDriver] Partition: {partition}")
-        print(f"[GazeboDriver] Launching: {' '.join(gz_args)}")
 
-        # Launch Gazebo in a new process group with the ENRICHED env
-        self.gz_proc = subprocess.Popen(gz_args, env=env, preexec_fn=os.setsid)
+        fixture = TestFixture(self.world_path)
+        fixture.on_pre_update(self._pre_update)
+        fixture.on_post_update(self._post_update)
+        fixture.finalize()
+        server = fixture.server()
+        self._steps_left = 1
+        server.run(True, 1, False)  # first step runs _setup
+        self._steps_left = 1
+        server.run(True, 1, False)  # the stance set by _setup is now in the state
+        self._ready.set()
 
-        # Match our own process partition for topic discovery
-        os.environ["GZ_PARTITION"] = partition
-        print(f"[GazeboDriver] Initializing GzTransportNode on partition: {partition}")
-        self.gz_node = GzTransportNode()
+        if not self.headless:
+            env = os.environ.copy()
+            if os.environ.get("FORCE_SOFTWARE_RENDER", "1") == "1":
+                env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+                env["QT_X11_NO_MITSHM"] = "1"
+            self.gui_proc = subprocess.Popen(["gz", "sim", "-g"], env=env, preexec_fn=os.setsid)
 
-        # Advertise joint topics
-        self.joint_pubs = []
-        for jname in JOINT_NAMES:
-            topic = f"/model/{self.robot_type}/joint/{jname}/cmd_force"
-            self.joint_pubs.append(self.gz_node.advertise(topic, double_pb2.Double))
+        print(f"[GazeboDriver] Initialized for {self.robot_type.upper()}: physics {1 / PHYSICS_DT:.0f} Hz, "
+              f"pipeline {1 / (PHYSICS_DT * CONTROL_STEPS):.0f} Hz, lockstep.")
 
-        time.sleep(5.0)
-
-        # 4. Bind Subscriptions
-        self.gz_node.subscribe(
-            imu_pb2.IMU,
-            f"/model/{self.robot_type}/link/base/sensor/imu/imu",
-            self._imu_cb,
-        )
-        self.gz_node.subscribe(
-            model_pb2.Model, f"/model/{self.robot_type}/joint_state", self._joint_cb
-        )
-        self.gz_node.subscribe(
-            odometry_pb2.Odometry, f"/model/{self.robot_type}/odometry", self._odom_cb
-        )
-        self.gz_node.subscribe(
-            world_stats_pb2.WorldStatistics,
-            f"/world/{self.world_name}/stats",
-            self._stats_cb,
-        )
-
-        # 5. Wait for First State
-        print("[GazeboDriver] Waiting for simulation to start and first joint state...")
-        while (self.sim_time == 0) and not self._stop.is_set():
-            time.sleep(0.1)
-
-        print(
-            f"[GazeboDriver] Simulation started at t={self.sim_time:.2f}. Initializing targets."
-        )
-        self.latest_targets[:] = (
-            self.q if not np.all(self.q == 0) else self.latest_targets
-        )
-
-
-
-        print(
-            "\n=======================================================\n"
-            "[GazeboDriver] Activating Control Loop..."
-            "\n=======================================================\n"
-        )
-        actuator_count = 0
+        wall_ref, sim_ref = time.time(), self.sim_time
+        rtf_wall, rtf_sim = wall_ref, self.sim_time
         count = 0
-        pos_err_hist = np.zeros((6, 12), dtype=np.float32)
-        vel_hist = np.zeros((6, 12), dtype=np.float32)
-        last_pd_time = self.sim_time
-        physics_tick = 0
-
         while not self._stop.is_set():
-            # Event-driven sync: Block until Gazebo sends a new joint state message.
-            # This releases the Python GIL, allowing ROS 2 executor callbacks to run freely
-            # and completely eliminates stale-data history corruption in the NN policy.
-            if not self.new_data_event.wait(timeout=0.1):
-                continue
-            self.new_data_event.clear()
-            
-            physics_tick += 1
-
-            # Check if console was opened before this pipeline
-            if hasattr(self, "_startup_console_check") and self._startup_console_check:
-                if not hasattr(self, "_startup_ticks"):
-                    self._startup_ticks = 0
-                self._startup_ticks += 1
-                if self._startup_ticks >= 200: # 200ms at 1000Hz loop rate
-                    self._startup_console_check = False
-                    if self.count_publishers("/safety/heartbeat") > 0:
-                        self.get_logger().error("[Safety] Console was detected running before driver! Exiting bridge for safety.")
-                        import sys
-                        sys.exit(0)
-            
-            # Calculate heuristic contacts using kinematics
-            contact = [0.0, 0.0, 0.0, 0.0]
-            R = rot_from_quat(self.base_quat)
-            for leg_idx in range(4):
-                q_leg = np.array([
-                    self.q[leg_idx],       # hip
-                    self.q[leg_idx + 4],   # thigh
-                    self.q[leg_idx + 8]    # calf
-                ])
-                r_foot_b = self.kinematics.foot_position_body(leg_idx, q_leg)
-                r_foot_w = self.base_pos + R @ r_foot_b
-                if r_foot_w[2] < 0.04:  # 4cm threshold (foot radius is 2.2cm)
-                    contact[leg_idx] = 1.0
-
             raw_data = {
-                'q': self.q,
-                'dq': self.dq,
-                'quat': self.base_quat,
-                'gyro': self.base_ang_vel,
-                'vel': self.base_lin_vel_b,
-                'pos': self.base_pos,
-                'accel': self.base_accel,
-                'contact': contact
+                "q": self.q.copy(),
+                "dq": self.dq.copy(),
+                "quat": self.base_quat,
+                "gyro": self.base_ang_vel,
+                "vel": self.base_lin_vel_b,
+                "pos": self.base_pos,
+                "accel": self.base_accel,
+                "contact": self._foot_contacts(),
             }
+            self.targets = np.asarray(self.pipeline.step(
+                raw_state_kwargs=raw_data, cmd_vel=self.cmd_vel, sim_time=self.sim_time), dtype=np.float64)
+            self.effort_limit = self.pipeline.safety_processor.active_max_torque
 
-            self.latest_targets[:] = self.pipeline.step(
-                raw_state_kwargs=raw_data,
-                cmd_vel=self.cmd_vel,
-                sim_time=self.sim_time
-            )
+            self._steps_left = CONTROL_STEPS
+            server.run(True, CONTROL_STEPS, False)
 
-            actuator_count += 1
-
-            # Motor model matching MuJoCo.
-            targets = self.latest_targets
-            kp = self.kp
-            kd = self.kd
-            
-            # Override with safety watchdog torque
-            effort_limit = self.pipeline.safety_processor.active_max_torque
-            sat_effort = self.motor_cfg.get("max_torque", 45.0)
-            vel_lim = self.motor_cfg.get("max_velocity", 30.0)
-            
-            if effort_limit <= 0.1:
-                kp = 0.0
-                kd = 0.0
-            
-            if physics_tick % 5 == 0:
-                pos_err = targets - self.q
-                raw_torques = kp * pos_err - kd * self.dq
-                
-                vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
-                v_clamp = np.clip(self.dq, -vel_at_lim, vel_at_lim)
-                t_top = effort_limit * (1.0 - v_clamp / vel_lim)
-                t_bot = effort_limit * (-1.0 - v_clamp / vel_lim)
-                
-                pd_torques = np.clip(
-                    raw_torques, np.maximum(t_bot, -effort_limit), np.minimum(t_top, effort_limit)
-                )
-
-                # Convert torques from Isaac convention back to Gazebo convention
-                self.latest_torques[:] = pd_torques
-
-                # Publish directly to Gazebo at 200Hz
-                if hasattr(self, "joint_pubs") and len(self.joint_pubs) == 12:
-                    for i, torque in enumerate(pd_torques):
-                        msg = double_pb2.Double()
-                        msg.data = float(torque)
-                        self.joint_pubs[i].publish(msg)
-
-            # LOGGING FOR DIAGNOSIS (every 100 physics steps ~ 0.2s)
-            # Silenced debug print to keep terminal clean
-            pass
+            ahead = (self.sim_time - sim_ref) - (time.time() - wall_ref)
+            if ahead > 0:
+                time.sleep(ahead)
+            elif ahead < -0.1:
+                wall_ref, sim_ref = time.time(), self.sim_time
 
             count += 1
-            if count % 200 == 0:
-                # Access latest inference time if available from runner
-                inf_ms = 0.0
+            if count % 40 == 0:
+                now = time.time()
+                rtf = (self.sim_time - rtf_sim) / max(now - rtf_wall, 1e-6)
+                rtf_wall, rtf_sim = now, self.sim_time
                 runner = self.pipeline.policy_manager.policies.get("main")
-                if runner:
-                    if hasattr(runner, "inf_times") and runner.inf_times:
-                        inf_ms = runner.inf_times[-1] * 1000
-                
-                # Debug Pose Error and Torque
-                err_norm = np.linalg.norm(pos_err)
-                torque_norm = np.linalg.norm(pd_torques)
-                
+                inf_ms = runner.inf_times[-1] * 1000 if runner and getattr(runner, "inf_times", None) else 0.0
                 print(
-                    f"\r[Bridge] t={self.sim_time:7.2f} h={self.base_pos[2]:.2f} vx={self.base_lin_vel_b[0]:+5.2f} vy={self.base_lin_vel_b[1]:+5.2f} wz={self.base_ang_vel[2]:+5.2f} err={err_norm:.3f} c={sum(contact)} tq={torque_norm:.1f} | inf={inf_ms:4.1f}ms   ",
-                    end="",
-                    flush=True,
+                    f"\r[Bridge] t={self.sim_time:7.2f} rtf={rtf:4.2f}x h={self.base_pos[2]:.2f} "
+                    f"vx={self.base_lin_vel_b[0]:+5.2f} vy={self.base_lin_vel_b[1]:+5.2f} "
+                    f"wz={self.base_ang_vel[2]:+5.2f} tq={np.linalg.norm(self.torques):.1f} "
+                    f"{self.pipeline.mode} cmd={self.cmd_vel[0]:+.2f} | inf={inf_ms:4.1f}ms   ",
+                    end="", flush=True,
                 )
 
     def _cleanup(self):
-        """Clean up Gazebo server and simulator processes."""
+        # The server must be torn down in its own thread before the interpreter exits, or its
+        # threads abort the process ("terminate called without an active exception").
         self._stop.set()
-        if hasattr(self, "gz_proc") and self.gz_proc:
-            print(f"[GazeboDriver] Terminating simulator (PID {self.gz_proc.pid})...")
+        self._done.wait(timeout=15.0)
+        self.physics_thread.join(timeout=5.0)
+        if self.gui_proc:
             try:
-                os.killpg(os.getpgid(self.gz_proc.pid), signal.SIGTERM)
-                self.gz_proc.wait(timeout=5)
+                os.killpg(os.getpgid(self.gui_proc.pid), 15)
+                self.gui_proc.wait(timeout=5)
             except Exception:
-                subprocess.run(
-                    ["pkill", "-9", "-f", "gz-sim-server"], stderr=subprocess.DEVNULL
-                )
+                pass
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", type=str, default="go2")
     parser.add_argument("--world", type=str, default="quadruped_world")
-    parser.add_argument(
-        "--internal_policy",
-        type=str,
-        default=None,
-        help="Path to policy checkpoint (Turbo Mode)",
-    )
+    parser.add_argument("--internal_policy", type=str, default=None, help="Path to policy checkpoint")
     parser.add_argument("--obs_dim", type=int, default=49)
-    parser.add_argument(
-        "--use_estimator", action="store_true", default=False,
-        help="Replace perfect odometry with contact-aided IMU velocity estimator (for sim2real testing)"
-    )
+    parser.add_argument("--use_estimator", action="store_true", default=False,
+                        help="Replace perfect odometry with contact-aided IMU velocity estimator")
+    parser.add_argument("--headless", action="store_true", help="No Gazebo GUI")
     args = parser.parse_args(remove_ros_args()[1:])
     rclpy.init()
     node = Ros2GazeboDriver(
-        args.robot, args.world, checkpoint=args.internal_policy,
-        obs_dim=args.obs_dim, use_estimator=args.use_estimator,
+        args.robot, args.world, checkpoint=args.internal_policy, obs_dim=args.obs_dim,
+        use_estimator=args.use_estimator,
+        headless=args.headless or os.environ.get("GZ_HEADLESS", "0") == "1",
     )
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
+        # spin_once with a timeout, not spin(): Python's SIGINT handler (see __init__) only
+        # runs when this thread gets back to Python.
+        while rclpy.ok():
+            rclpy.spin_once(node, timeout_sec=0.1)
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node._cleanup()

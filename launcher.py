@@ -741,7 +741,7 @@ def run_cli_menu():
         # quadruped_core/controller/policy_runner.py, which reads rsl_rl archives directly.
         # Deploy is one of them: its run's params/deploy.yaml (kp 25, kd 0.5, 50 Hz, action
         # scale 0.25, default pose) matches what real_driver.py and robot_defaults.py apply.
-        if action not in ("train", "eval_policy", "mujoco", "mujoco_twin", "real_deploy", "teleop_sweep"):
+        if action not in ("train", "eval_policy", "mujoco", "gazebo", "mujoco_twin", "real_deploy", "teleop_sweep"):
             modules = [m for m in modules if not is_rsl_rl_module(os.path.join(TASKS_DIR, m))]
         
         if not modules:
@@ -1421,7 +1421,7 @@ def main():
                 cmd.append("--use_estimator")
         elif action == "gazebo":
             cmd = ros2_launch("gazebo.launch.py", robot=robot_key, checkpoint=abs_ckpt,
-                              obs_dim=obs_dim, use_estimator=use_estimator)
+                              obs_dim=obs_dim, use_estimator=use_estimator, headless=headless)
         elif action in ["real_deploy", "real_telemetry"]:
             sdk_iface = sdk_network_interface()
             if sdk_iface:
