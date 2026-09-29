@@ -359,9 +359,11 @@ def find_highest_step_checkpoint(run_dir):
     return os.path.abspath(all_pts[0]) if all_pts else None
 
 def ros2_launch(name, **launch_args):
+    """Empty values are left out (ros2 launch rejects 'name:='), so the launch file's default applies."""
     def value(v):
         return str(v).lower() if isinstance(v, bool) else str(v)
-    return ["ros2", "launch", "quadruped_bringup", name] + [f"{k}:={value(v)}" for k, v in launch_args.items()]
+    return ["ros2", "launch", "quadruped_bringup", name] + [f"{k}:={value(v)}" for k, v in launch_args.items()
+                                                             if v is not None and v != ""]
 
 
 def ros2_run(package, executable, *args):
