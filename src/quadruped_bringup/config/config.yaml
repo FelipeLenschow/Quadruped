@@ -44,6 +44,11 @@ lidar_filter:
     z: [-0.50, 0.15]
   max_range: 20.0
 
+# Real Go2 L1 lidar mount on the base (real_sensors). Gazebo uses the URDF's; find these with lidar_level.
+real_lidar:
+  xyz: [0.28945, 0.0, -0.046825]
+  rpy: [0.0, 2.8782, 0.0]
+
 # --- Motor Physical Parameters ---
 motor:
   max_torque: 45.0        # Nm (Saturation torque for Go2)

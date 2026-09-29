@@ -18,5 +18,6 @@ setup(
     license="TODO: License declaration",
     entry_points={"console_scripts": [
         "lidar_filter = quadruped_perception.lidar_filter:main",
+        "lidar_level = quadruped_perception.lidar_level:main",
     ]},
 )

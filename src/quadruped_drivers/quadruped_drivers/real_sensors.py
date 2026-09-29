@@ -7,7 +7,6 @@ import sys
 import time
 
 import rclpy
-import yaml
 from cyclonedds.core import Policy, Qos
 from cyclonedds.domain import DomainParticipant
 from cyclonedds.internal import InvalidSample
@@ -21,19 +20,23 @@ from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublish
 from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_
 from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_
 
-from quadruped_core import paths
-from quadruped_drivers.sensor_mounts import publish_static_tf
+from quadruped_core.config_loader import load_config
+from quadruped_drivers.sensor_mounts import MOUNTS, publish_static_tf
 
 LIDAR_SWITCH_TOPIC = "rt/utlidar/switch"
 STALE_S = 1.0
 
 
 class RealSensors(Node):
-    def __init__(self, args):
+    def __init__(self, args, cfg):
         super().__init__("real_sensors")
         self.frame = args.frame
         self.cloud_pub = self.create_publisher(PointCloud2, "/lidar/points", 5)
-        self.tf = publish_static_tf(self, args.base_frame)
+        xyz, rpy = MOUNTS["radar"]
+        mount = cfg.get("real_lidar") or {}
+        mount = (tuple(mount.get("xyz", xyz)), tuple(mount.get("rpy", rpy)))
+        self.tf = publish_static_tf(self, args.base_frame, {"radar": mount})
+        self.get_logger().info(f"lidar mount xyz {list(mount[0])} rpy {list(mount[1])}")
 
         participant = DomainParticipant(0)
         self._participant = participant
@@ -99,10 +102,10 @@ def main():
         print(f"[SDK2] Failed to initialize ChannelFactory: {e}")
         sys.exit(1)
 
-    with open(paths.config("config.yaml")) as f:
-        os.environ["ROS_DOMAIN_ID"] = str(yaml.safe_load(f).get("network", {}).get("ros_domain_id", "1"))
+    cfg = load_config()
+    os.environ["ROS_DOMAIN_ID"] = str(cfg.get("network", {}).get("ros_domain_id", "1"))
     rclpy.init()
-    node = RealSensors(args)
+    node = RealSensors(args, cfg)
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

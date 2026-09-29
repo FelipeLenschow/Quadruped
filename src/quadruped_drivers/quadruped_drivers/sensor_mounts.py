@@ -30,9 +30,10 @@ def transform(parent, child, xyz, rpy):
     return t
 
 
-def publish_static_tf(node, base_frame):
+def publish_static_tf(node, base_frame, mounts=None):
     """Returns the broadcaster; keep it alive with the node."""
-    transforms = [transform(base_frame, child, xyz, rpy) for child, (xyz, rpy) in MOUNTS.items()]
+    mounts = {**MOUNTS, **(mounts or {})}
+    transforms = [transform(base_frame, child, xyz, rpy) for child, (xyz, rpy) in mounts.items()]
     transforms.append(transform("front_camera", OPTICAL_FRAME, (0.0, 0.0, 0.0), (-math.pi / 2, 0.0, -math.pi / 2)))
     broadcaster = StaticTransformBroadcaster(node)
     broadcaster.sendTransform(transforms)
