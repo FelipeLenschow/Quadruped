@@ -911,8 +911,12 @@ def run_cli_menu():
             terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
             terrain_cfg = "rough" if terrain_choice == "2" else "flat"
         elif action == "gazebo":
-            world_choice = input("Select World [1: flat, 2: nav (walls, obstacles, cones, lidar + camera)] (default 1): ").strip() or "1"
+            world_choice = input("Select World [1: flat, 2: nav (walls, obstacles, cones, lidar + camera)] (default 2): ").strip() or "2"
             terrain_cfg = "nav" if world_choice == "2" else "flat"
+            if terrain_cfg == "nav":
+                spawn_choice = input("Spawn [1: origin, 2: random free spot] (default 2): ").strip() or "2"
+                if spawn_choice == "2":
+                    terrain_cfg = "nav_random"
         else:
             terrain_cfg = ""
         
@@ -1140,6 +1144,27 @@ def run_cli_menu():
         if not chosen:
             sys.exit(0)
         sweep_opts = {"recordings": chosen}
+
+    if action == "nav":
+        map_dir = os.path.join(REPO_DIR, "maps")
+        maps = sorted(f[:-5] for f in os.listdir(map_dir)
+                      if f.endswith(".yaml") and not f.endswith("_keepout.yaml")) if os.path.isdir(map_dir) else []
+        print("\nSelect Map:")
+        print("  [0] Build a new map (SLAM)")
+        for i, m in enumerate(maps):
+            keepout = " + keepout zones" if os.path.exists(os.path.join(map_dir, f"{m}_keepout.yaml")) else ""
+            print(f"  [{i + 1}] {m}{keepout}")
+        default_map = str(maps.index("nav") + 1) if "nav" in maps else "0"
+        pick = input(f"Enter choice [0-{len(maps)}] (default {default_map}): ").strip() or default_map
+        chosen_map = maps[int(pick) - 1] if pick.isdigit() and 0 < int(pick) <= len(maps) else ""
+        initial_pose = "0,0,0"
+        auto_localize = False
+        if chosen_map:
+            pose_choice = input("Robot start [1: map origin, 2: unknown, find it with the localize skill] (default 2): ").strip() or "2"
+            initial_pose = "0,0,0" if pose_choice == "1" else "unknown"
+        if initial_pose == "unknown":
+            auto_localize = input("Localize automatically once in policy mode? [Y/n] (default Y): ").lower().strip() != "n"
+        sweep_opts = {"map": chosen_map, "initial_pose": initial_pose, "auto_localize": auto_localize}
 
     return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, no_ground_truth, show_ghost, record_session, training_phase, auto_eval, sweep_opts
 
@@ -1439,7 +1464,8 @@ def main():
         elif action == "gazebo":
             cmd = ros2_launch("gazebo.launch.py", robot=robot_key, checkpoint=abs_ckpt,
                               obs_dim=obs_dim, use_estimator=use_estimator, headless=headless,
-                              world="nav" if terrain_cfg == "nav" else "scene")
+                              world="nav" if terrain_cfg.startswith("nav") else "scene",
+                              spawn="random" if terrain_cfg == "nav_random" else "0,0,0")
         elif action in ["real_deploy", "real_telemetry"]:
             sdk_iface = sdk_network_interface()
             if sdk_iface:
@@ -1494,7 +1520,9 @@ def main():
 
         elif action == "nav":
             # Needs the robot running (Gazebo nav world or the real Go2) on the same ROS domain.
-            cmd = ros2_launch("nav.launch.py", sim=not IS_ROBOT, rviz=not IS_ROBOT)
+            cmd = ros2_launch("nav.launch.py", sim=not IS_ROBOT, rviz=not IS_ROBOT, map=sweep_opts.get("map", ""),
+                              initial_pose=sweep_opts.get("initial_pose", "0,0,0"),
+                              auto_localize=sweep_opts.get("auto_localize", True))
 
         elif action == "mcap_record":
             cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name))

@@ -70,7 +70,7 @@ In Docker run colcon as `python3 -m colcon ...` from the venv, so node scripts g
   - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool, `skill_server`.
   - `quadruped_perception`: `lidar_filter` (drops the robot's own body from the lidar cloud).
   - `quadruped_interfaces`: `srv/Skill.srv` (ament_cmake).
-  - `quadruped_description`: MuJoCo menagerie, Gazebo worlds (`scene`: flat, `nav`: walls, obstacles, 4 cones), Go2/Go1/A1 models (the Go2 carries an L1-style lidar and a front camera), kinematics yaml, bundled policies.
+  - `quadruped_description`: MuJoCo menagerie, Gazebo worlds (`scene`: flat, `nav`: walls, obstacles, 4 cones; `scripts/sdf_to_map.py` makes its Nav2 map), Go2/Go1/A1 models (the Go2 carries an L1-style lidar and a front camera), kinematics yaml, bundled policies.
   - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`, `twist_mux.yaml`, `nav2.yaml`, `slam.yaml`).
   - `unitree_sdk2py`: wraps the `third_party/unitree_sdk2_python` submodule.
 - `IsaacSim/isaac_driver.py`: stays outside the packages (Isaac Sim's Python 3.12); imports `quadruped_core` from `src/`.

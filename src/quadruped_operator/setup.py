@@ -8,7 +8,8 @@ package_name = "quadruped_operator"
 def tree(*dirs):
     files = []
     for d in dirs:
-        for root, _, names in os.walk(d):
+        for root, dirs, names in os.walk(d):
+            dirs[:] = [x for x in dirs if x != "__pycache__"]
             if names:
                 files.append((os.path.join("share", package_name, root), [os.path.join(root, n) for n in names]))
     return files
@@ -39,5 +40,6 @@ setup(
         "reward_estimator = quadruped_operator.reward_estimator_node:main",
         "mcap_tool = quadruped_operator.mcap_tool:main",
         "skill_server = quadruped_operator.skill_server:main",
+        "auto_localize = quadruped_operator.auto_localize:main",
     ]},
 )

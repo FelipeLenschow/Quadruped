@@ -120,6 +120,7 @@ class TelemetryManager:
         self._has_pos = False
         self._odom_pos = None
         self._odom_time = None
+        self._odom_start = None
         self.tf_pub = None
         self.odom_pub = self.node.create_publisher(Odometry, '/odom', 10)
         if odom_cfg.get("publish_tf", True):
@@ -317,7 +318,18 @@ class TelemetryManager:
         quat = state.imu.quaternion
         ground_truth = self.odom_source == "ground_truth" or (self.odom_source == "auto" and not self.use_estimator)
         if self._has_pos and ground_truth:
-            return np.asarray(state.base_pos, dtype=np.float64), quat
+            # Relative to where the robot started, as on the real robot: the world pose would give a
+            # randomly spawned robot's position away to the localizer through the odom frame.
+            w, x, y, z = quat
+            yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+            if self._odom_start is None:
+                self._odom_start = (np.asarray(state.base_pos, dtype=np.float64)[:2].copy(), yaw)
+            p0, yaw0 = self._odom_start
+            c, s = np.cos(yaw0), np.sin(yaw0)
+            d = np.asarray(state.base_pos, dtype=np.float64)[:2] - p0
+            pos = np.array([c * d[0] + s * d[1], -s * d[0] + c * d[1], state.base_pos[2]])
+            hw, hz = np.cos(yaw0 / 2), -np.sin(yaw0 / 2)
+            return pos, (hw * w - hz * z, hw * x - hz * y, hw * y + hz * x, hw * z + hz * w)
         if self._odom_pos is None:
             self._odom_pos = np.array([0.0, 0.0, self.odom_height])
         if self._odom_time is not None and 0.0 < sim_time - self._odom_time < 0.5:

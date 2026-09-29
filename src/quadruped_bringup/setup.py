@@ -8,7 +8,8 @@ package_name = "quadruped_bringup"
 def tree(*dirs):
     files = []
     for d in dirs:
-        for root, _, names in os.walk(d):
+        for root, dirs, names in os.walk(d):
+            dirs[:] = [x for x in dirs if x != "__pycache__"]
             if names:
                 files.append((os.path.join("share", package_name, root), [os.path.join(root, n) for n in names]))
     return files

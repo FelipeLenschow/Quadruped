@@ -7,6 +7,7 @@ so a slow Python loop only slows the simulation down instead of delaying the tor
 when wanted, is a separate `gz sim -g` client on the same partition.
 """
 
+import math
 import os
 import sys
 import time
@@ -51,9 +52,53 @@ CONTROL_STEPS = 5        # physics steps per pipeline step (200 Hz)
 POLICY_DT = 0.02
 
 
+def random_spawn(world_xml, clearance=0.6):
+    """A random x, y, yaw at least `clearance` from every static box, cylinder and cone in the world,
+    inside its walls (boxes longer than 5 m), or within 3 m of the origin when there are none."""
+    import random
+    import xml.etree.ElementTree as ET
+    world = ET.fromstring(world_xml).find("world")
+    shapes = []
+    for model in world.findall("model"):
+        geom = model.find("link/collision/geometry")
+        if geom is None or model.findtext("static", "false").strip() != "true" or geom.find("plane") is not None:
+            continue
+        pose = [float(v) for v in (model.findtext("pose") or "0 0 0 0 0 0").split()]
+        if geom.find("box") is not None:
+            sx, sy, _ = [float(v) for v in geom.findtext("box/size").split()]
+            shapes.append((pose[0], pose[1], pose[5], sx / 2, sy / 2))
+        elif geom.find("cylinder") is not None:
+            r = float(geom.findtext("cylinder/radius"))
+            shapes.append((pose[0], pose[1], 0.0, -r, 0.0))
+    for inc in world.findall("include"):
+        if "traffic_cone" in (inc.findtext("uri") or ""):
+            pose = [float(v) for v in inc.findtext("pose").split()]
+            shapes.append((pose[0], pose[1], 0.0, -0.18, 0.0))
+    walls = [s for s in shapes if max(s[3], s[4]) > 2.5]
+    if walls:
+        x0, x1 = min(s[0] for s in walls) + clearance, max(s[0] for s in walls) - clearance
+        y0, y1 = min(s[1] for s in walls) + clearance, max(s[1] for s in walls) - clearance
+    else:
+        x0, x1, y0, y1 = -3.0, 3.0, -3.0, 3.0
+
+    def gap(x, y, shape):
+        sx, sy, yaw, hx, hy = shape
+        if hx < 0:
+            return math.hypot(x - sx, y - sy) + hx
+        c, s = math.cos(yaw), math.sin(yaw)
+        lx, ly = c * (x - sx) + s * (y - sy), -s * (x - sx) + c * (y - sy)
+        return math.hypot(max(abs(lx) - hx, 0.0), max(abs(ly) - hy, 0.0))
+
+    for _ in range(10000):
+        x, y = random.uniform(x0, x1), random.uniform(y0, y1)
+        if all(gap(x, y, shape) > clearance for shape in shapes):
+            return x, y, random.uniform(-math.pi, math.pi)
+    return 0.0, 0.0, 0.0
+
+
 class Ros2GazeboDriver(Node):
     def __init__(self, robot_type, world_name="scene", checkpoint=None, obs_dim=49,
-                 use_estimator=False, headless=False):
+                 use_estimator=False, headless=False, spawn="0,0,0"):
         super().__init__("gazebo_bridge_node")
         self.robot_type = robot_type
         self.world_name = world_name
@@ -110,6 +155,9 @@ class Ros2GazeboDriver(Node):
             scene_xml = f.read()
         scene_xml = scene_xml.replace("go2_description", f"{self.robot_type}_description")
         scene_xml = scene_xml.replace("<name>go2</name>", f"<name>{self.robot_type}</name>")
+        x, y, yaw = random_spawn(scene_xml) if spawn == "random" else [float(v) for v in spawn.split(",")]
+        scene_xml = scene_xml.replace("<pose>0 0 0.38 0 0 0</pose>", f"<pose>{x:.3f} {y:.3f} 0.38 0 0 {yaw:.3f}</pose>")
+        print(f"[GazeboDriver] Spawn at x={x:.2f} y={y:.2f} yaw={yaw:.2f}")
         # Unthrottled: the driver paces sim time to the wall clock itself, and Gazebo's own
         # throttle stacked on top of the controller's work held it near 0.8x real time.
         scene_xml = scene_xml.replace("<real_time_factor>1.0</real_time_factor>", "<real_time_factor>0</real_time_factor>")
@@ -332,12 +380,14 @@ def main():
     parser.add_argument("--use_estimator", action="store_true", default=False,
                         help="Replace perfect odometry with contact-aided IMU velocity estimator")
     parser.add_argument("--headless", action="store_true", help="No Gazebo GUI")
+    parser.add_argument("--spawn", default="0,0,0", help="x,y,yaw, or random (a free spot inside the walls)")
     args = parser.parse_args(remove_ros_args()[1:])
     rclpy.init()
     node = Ros2GazeboDriver(
         args.robot, args.world, checkpoint=args.internal_policy, obs_dim=args.obs_dim,
         use_estimator=args.use_estimator,
         headless=args.headless or os.environ.get("GZ_HEADLESS", "0") == "1",
+        spawn=args.spawn,
     )
     try:
         # spin_once with a timeout, not spin(): Python's SIGINT handler (see __init__) only
