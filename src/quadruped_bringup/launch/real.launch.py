@@ -6,12 +6,12 @@ from quadruped_bringup.launch_common import arg, common_args, flag, get, include
 
 def setup(context):
     checkpoint = get(context, "checkpoint")
-    interface = get(context, "interface")
+    net_interface = get(context, "interface")
     actions = [node(
         "quadruped_drivers", "real_driver",
         f"--robot={get(context, 'robot')}",
         f"--obs_dim={get(context, 'obs_dim')}",
-        f"--interface={interface}" if interface else "",
+        f"--interface={net_interface}" if net_interface else "",
         f"--internal_policy={checkpoint}" if checkpoint else "",
         main=True,
     )]
