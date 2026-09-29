@@ -48,7 +48,7 @@ def fit_floor(pts, up, max_tilt, iters=500, tol=0.03):
         return None
     floor = pts[best]
     centre = floor.mean(axis=0)
-    n = np.linalg.svd(floor - centre)[2][-1]
+    n = np.linalg.eigh(np.cov((floor - centre).T))[1][:, 0]
     if n @ up < 0:
         n = -n
     return n, -n @ centre, int(best.sum())
