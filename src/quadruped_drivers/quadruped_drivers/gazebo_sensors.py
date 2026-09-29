@@ -2,49 +2,35 @@
 
 import argparse
 import array
-import math
 import signal
 import traceback
 
 import rclpy
-from geometry_msgs.msg import TransformStamped
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
-from tf2_ros import StaticTransformBroadcaster
 
 from gz.msgs10.camera_info_pb2 import CameraInfo as GzCameraInfo
 from gz.msgs10.image_pb2 import Image as GzImage
 from gz.msgs10.pointcloud_packed_pb2 import PointCloudPacked
 from gz.transport13 import Node as GzNode
 
-# base -> sensor mounts, as in the Unitree Go2 URDF and model.sdf
-MOUNTS = {
-    "radar": ((0.28945, 0.0, -0.046825), (0.0, 2.8782, 0.0)),
-    "front_camera": ((0.32715, 0.0, 0.04297), (0.0, 0.0, 0.0)),
-}
+from quadruped_drivers.sensor_mounts import OPTICAL_FRAME, publish_static_tf
+
 IMAGE_ENCODINGS = {3: "rgb8", 13: "32FC1"}
-
-
-def quaternion(roll, pitch, yaw):
-    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
-    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
-    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
-    return (sr * cp * cy - cr * sp * sy, cr * sp * cy + sr * cp * sy,
-            cr * cp * sy - sr * sp * cy, cr * cp * cy + sr * sp * sy)
 
 
 class GazeboSensors(Node):
     def __init__(self, args):
         super().__init__("gazebo_sensors")
         self.base_frame = args.base_frame
-        self.optical_frame = "front_camera_optical"
+        self.optical_frame = OPTICAL_FRAME
         self.cloud_pub = self.create_publisher(PointCloud2, "/lidar/points", 5)
         self.image_pub = self.create_publisher(Image, "/camera/image_raw", 5)
         # self.depth_pub = self.create_publisher(Image, "/camera/depth/image_raw", 5)
         self.info_pub = self.create_publisher(CameraInfo, "/camera/camera_info", 5)
-        self._publish_static_tf()
+        self.tf = publish_static_tf(self, self.base_frame)
 
         self.gz = GzNode()
         self.gz.subscribe(PointCloudPacked, "/lidar/points", self._guard(self._cloud_cb))
@@ -69,23 +55,6 @@ class GazeboSensors(Node):
     def close(self):
         for topic in self.gz.subscribed_topics():
             self.gz.unsubscribe(topic)
-
-    def _publish_static_tf(self):
-        transforms = []
-        for child, (xyz, rpy) in MOUNTS.items():
-            transforms.append(self._transform(self.base_frame, child, xyz, rpy))
-        transforms.append(self._transform("front_camera", self.optical_frame, (0.0, 0.0, 0.0),
-                                          (-math.pi / 2, 0.0, -math.pi / 2)))
-        self.tf = StaticTransformBroadcaster(self)
-        self.tf.sendTransform(transforms)
-
-    def _transform(self, parent, child, xyz, rpy):
-        t = TransformStamped()
-        t.header.frame_id, t.child_frame_id = parent, child
-        t.transform.translation.x, t.transform.translation.y, t.transform.translation.z = xyz
-        q = quaternion(*rpy)
-        t.transform.rotation.x, t.transform.rotation.y, t.transform.rotation.z, t.transform.rotation.w = q
-        return t
 
     @staticmethod
     def _bytes(data):

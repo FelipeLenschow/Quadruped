@@ -15,6 +15,8 @@ def setup(context):
         f"--internal_policy={checkpoint}" if checkpoint else "",
         main=True,
     )]
+    if flag(context, "sensors"):
+        actions.append(node("quadruped_drivers", "real_sensors", f"--interface={net_interface}" if net_interface else ""))
     actions += interface(context)
     if flag(context, "joy"):
         actions.append(include("joy.launch.py"))
@@ -29,6 +31,7 @@ def generate_launch_description():
         arg("obs_dim", "45"),
         arg("interface", "", "network interface for the Unitree SDK"),
         arg("joy", "false", "also start the gamepad teleop"),
+        arg("sensors", "true", "lidar cloud to /lidar/points and the sensor TF"),
         *reward_args(),
         OpaqueFunction(function=setup),
     ])

@@ -66,7 +66,7 @@ In Docker run colcon as `python3 -m colcon ...` from the venv, so node scripts g
 
 - `src/`: the ROS 2 packages (colcon workspace, `colcon build --symlink-install --base-paths src`):
   - `quadruped_core`: library, no nodes: `pipeline.py`, `controller/` (policy runner, safety processor, pose generator), `telemetry/` (TelemetryManager, LKF estimator, kinematics), `config_loader.py`, `paths.py`.
-  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`, `gazebo_sensors`: lidar and camera to ROS).
+  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `real_sensors`: L1 lidar to ROS, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`, `gazebo_sensors`: lidar and camera to ROS).
   - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool, `skill_server`.
   - `quadruped_perception`: `lidar_filter` (drops the robot's own body from the lidar cloud).
   - `quadruped_interfaces`: `srv/Skill.srv` (ament_cmake).

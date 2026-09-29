@@ -20,10 +20,22 @@ def map_file(name):
     return paths.repo("maps", f"{name}.yaml")
 
 
+def merge(base, over):
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            merge(base[k], v)
+        else:
+            base[k] = v
+
+
 def nav2_params(sim, keepout, initial_pose):
-    """nav2.yaml for this run: the keepout filter only when there is a mask, AMCL's start pose."""
+    """nav2.yaml for this run: the real_robot overrides off sim, the keepout filter only when there is a mask,
+    AMCL's start pose."""
     with open(paths.config("nav2.yaml")) as f:
         params = yaml.safe_load(f)
+    real = params.pop("real_robot", {})
+    if not sim:
+        merge(params, real)
     for costmap in ("local_costmap", "global_costmap"):
         p = params[costmap][costmap]["ros__parameters"]
         if keepout:
