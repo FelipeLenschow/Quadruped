@@ -46,6 +46,16 @@ RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=fa
     ros-humble-xacro \
     || echo "Some ROS tools unavailable on this architecture. Continuing."
 
+# 3.6 Navigation: Nav2 (MPPI), slam_toolbox, lidar to laser scan
+RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false && \
+    apt-get install -y \
+    ros-humble-navigation2 \
+    ros-humble-nav2-bringup \
+    ros-humble-nav2-mppi-controller \
+    ros-humble-slam-toolbox \
+    ros-humble-pointcloud-to-laserscan \
+    && rm -rf /var/lib/apt/lists/*
+
 # 4. Create a workspace
 WORKDIR /app
 

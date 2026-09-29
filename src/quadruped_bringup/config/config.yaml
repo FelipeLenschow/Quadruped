@@ -26,6 +26,24 @@ cmd_vel:
   timeout: 0.5            # s
   robot_state_rate: 10.0  # Hz
 
+# --- Odometry (odom -> base, odom -> base_footprint TF) ---
+# auto: leg odometry (estimator velocity + IMU) when the estimator is on (the launcher's "Use State Estimator"),
+# the simulator's pose otherwise. The real robot has no simulator pose, so it is always leg odometry.
+odometry:
+  publish_tf: true
+  source: auto            # auto | ground_truth | leg
+
+# --- Lidar body filter (quadruped_perception lidar_filter) ---
+# Points inside body_box (base frame, m) are the robot itself and are dropped; everything outside
+# stays, including a person's legs beside the robot.
+lidar_filter:
+  frame: base
+  body_box:
+    x: [-0.45, 0.45]
+    y: [-0.22, 0.22]
+    z: [-0.50, 0.15]
+  max_range: 20.0
+
 # --- Motor Physical Parameters ---
 motor:
   max_torque: 45.0        # Nm (Saturation torque for Go2)

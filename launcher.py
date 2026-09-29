@@ -577,6 +577,7 @@ def run_cli_menu():
         print("  [T] Test Joints (Real Robot)")
         print("  " + "-" * 45)
         print("  --- ROS 2 Tools ---")
+        print("  [N] Navigation (SLAM + Nav2 + rviz)")
         print("  [K] Remote Teleop / Eval Sweep")
         print("  [V] Visualizers")
         print("  [P] PlotJuggler")
@@ -594,6 +595,7 @@ def run_cli_menu():
         print("  [X] Test Joints (Real Robot) (REQUIRES DOCKER OR PY3.10)")
         print("  " + "-" * 45)
         print("  --- ROS 2 Tools ---")
+        print("  [X] Navigation (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Remote Teleop (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Visualizers (REQUIRES DOCKER OR PY3.10)")
         print("  [X] PlotJuggler (REQUIRES DOCKER OR PY3.10)")
@@ -611,6 +613,8 @@ def run_cli_menu():
         "5": "gazebo",
         "6": "real_deploy",
         "7": "eval_policy",
+        "n": "nav",
+        "N": "nav",
         "k": "teleop",
         "K": "teleop",
         "v": "visualizers",
@@ -635,7 +639,7 @@ def run_cli_menu():
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-7, K, V, C, T, P, M, R, F, D] (default {default_action}): ").strip() or default_action
+    choice = input(f"Enter choice [0-7, N, K, V, C, T, P, M, R, F, D] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice.lower(), "None")
     
     if action == "hardware_tools":
@@ -681,7 +685,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "discovery_server"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "nav", "discovery_server"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -742,7 +746,7 @@ def run_cli_menu():
     
     # teleop_sweep is not in this list on purpose: it asks for the checkpoint the robot is running,
     # only to file the report under it later. sweep_report reads that back from the recording.
-    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "discovery_server"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         # Simple and WalkTheseWays (cut from unitree_rl_lab) live here so their logs sit alongside
         # the others (the eval viewer and the checkpoint list both read them in place), but they
@@ -806,7 +810,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "discovery_server"]:
+    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "discovery_server"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -1404,7 +1408,7 @@ def main():
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "discovery_server"):
+    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "discovery_server"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable
@@ -1487,6 +1491,10 @@ def main():
 
         elif action in ("rqt_graph", "tf2_tree"):
             cmd = ros2_launch("tools.launch.py", tool=action)
+
+        elif action == "nav":
+            # Needs the robot running (Gazebo nav world or the real Go2) on the same ROS domain.
+            cmd = ros2_launch("nav.launch.py", sim=not IS_ROBOT, rviz=not IS_ROBOT)
 
         elif action == "mcap_record":
             cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name))

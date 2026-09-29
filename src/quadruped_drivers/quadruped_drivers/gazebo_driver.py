@@ -28,6 +28,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from rclpy.utilities import remove_ros_args
+from rosgraph_msgs.msg import Clock
+from rclpy.time import Time
 from std_msgs.msg import Bool, Float32
 
 try:
@@ -81,6 +83,7 @@ class Ros2GazeboDriver(Node):
         self.create_subscription(Float32, "/control/kp", self._kp_cb, 10)
         self.create_subscription(Float32, "/control/kd", self._kd_cb, 10)
         self.create_subscription(Bool, "/base/freeze", self._freeze_base_cb, 10)
+        self.clock_pub = self.create_publisher(Clock, "/clock", 10)
 
         self.kinematics = Go2Kinematics()
         self.sim_time = 0.0
@@ -210,12 +213,18 @@ class Ros2GazeboDriver(Node):
 
     # --- Main loop ---
     def _foot_contacts(self):
+        """Low and still, the way a force sensor would see it: height alone also flagged swing feet
+        skimming the ground, which pulled the estimator's leg odometry to ~70% of the true speed."""
         contact = [0.0, 0.0, 0.0, 0.0]
         R = rot_from_quat(self.base_quat)
         for leg in range(4):
-            q_leg = np.array([self.q[leg], self.q[leg + 4], self.q[leg + 8]])
-            r_foot_w = self.base_pos + R @ self.kinematics.foot_position_body(leg, q_leg)
-            if r_foot_w[2] < 0.04:  # foot radius is 2.2 cm
+            idx = [leg, leg + 4, leg + 8]
+            r_foot = self.kinematics.foot_position_body(leg, self.q[idx])
+            if (self.base_pos + R @ r_foot)[2] >= 0.04:  # foot radius is 2.2 cm
+                continue
+            v_foot = (self.base_lin_vel_b + np.cross(self.base_ang_vel, r_foot)
+                      + self.kinematics.foot_jacobian_body(leg, self.q[idx]) @ self.dq[idx])
+            if np.linalg.norm(v_foot) < 0.25:
                 contact[leg] = 1.0
         return contact
 
@@ -270,6 +279,7 @@ class Ros2GazeboDriver(Node):
                 "accel": self.base_accel,
                 "contact": self._foot_contacts(),
             }
+            self.clock_pub.publish(Clock(clock=Time(seconds=self.sim_time).to_msg()))
             self.cmd_vel = self.pipeline.cmd_vel
             self.targets = np.asarray(self.pipeline.step(
                 raw_state_kwargs=raw_data, cmd_vel=self.cmd_vel, sim_time=self.sim_time), dtype=np.float64)

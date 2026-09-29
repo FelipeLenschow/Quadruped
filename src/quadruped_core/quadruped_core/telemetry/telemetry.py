@@ -3,7 +3,7 @@ import os
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Quaternion, Vector3
+from geometry_msgs.msg import Quaternion, TransformStamped, Vector3
 from std_msgs.msg import Float32, Float32MultiArray
 import numpy as np
 from .estimator import StateEstimator, rot_from_quat, projected_gravity_b
@@ -114,6 +114,21 @@ class TelemetryManager:
             Float32MultiArray, '/estimator/leg_odometry', 10
         )
 
+        odom_cfg = self.config.get("odometry") or {}
+        self.odom_source = str(odom_cfg.get("source", "auto"))
+        self.odom_height = float(self.config.get("control", {}).get("default_height", 0.33))
+        self._has_pos = False
+        self._odom_pos = None
+        self._odom_time = None
+        self.tf_pub = None
+        self.odom_pub = self.node.create_publisher(Odometry, '/odom', 10)
+        if odom_cfg.get("publish_tf", True):
+            try:
+                from tf2_ros import TransformBroadcaster
+                self.tf_pub = TransformBroadcaster(self.node)
+            except ImportError:
+                self.node.get_logger().warn("[Telemetry] tf2_ros missing: no odom -> base transform.")
+
     # ------------------------------------------------------------------
     def process_state(self, q, dq, quat, gyro, accel=None, pos=None, vel=None, contact=None, update_estimator=True):
         """
@@ -149,6 +164,7 @@ class TelemetryManager:
             state.motorState[i].q  = q[i]
             state.motorState[i].dq = dq[i]
 
+        self._has_pos = pos is not None
         if pos is not None:
             state.base_pos = pos.tolist() if hasattr(pos, 'tolist') else list(pos)
 
@@ -292,3 +308,47 @@ class TelemetryManager:
         lo_msg      = Float32MultiArray()
         lo_msg.data = norms
         self.leg_odom_pub.publish(lo_msg)
+
+        self._publish_odom(msg_time, sim_time, state)
+
+    def _odom_pose(self, sim_time, state):
+        """Leg odometry (the estimated body velocity turned by the IMU orientation, integrated), or the
+        simulator's pose for source ground_truth, or for auto when the estimator is off."""
+        quat = state.imu.quaternion
+        ground_truth = self.odom_source == "ground_truth" or (self.odom_source == "auto" and not self.use_estimator)
+        if self._has_pos and ground_truth:
+            return np.asarray(state.base_pos, dtype=np.float64), quat
+        if self._odom_pos is None:
+            self._odom_pos = np.array([0.0, 0.0, self.odom_height])
+        if self._odom_time is not None and 0.0 < sim_time - self._odom_time < 0.5:
+            v_world = rot_from_quat(quat) @ np.asarray(state.base_lin_vel_est, dtype=np.float64)
+            self._odom_pos[:2] += v_world[:2] * (sim_time - self._odom_time)
+        self._odom_time = sim_time
+        return self._odom_pos, quat
+
+    def _publish_odom(self, msg_time, sim_time, state):
+        pos, (w, x, y, z) = self._odom_pose(sim_time, state)
+        base = TransformStamped()
+        base.header.stamp = msg_time
+        base.header.frame_id, base.child_frame_id = "odom", "base"
+        base.transform.translation.x, base.transform.translation.y, base.transform.translation.z = (
+            float(pos[0]), float(pos[1]), float(pos[2]))
+        base.transform.rotation = Quaternion(w=float(w), x=float(x), y=float(y), z=float(z))
+        yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+        footprint = TransformStamped()
+        footprint.header.stamp = msg_time
+        footprint.header.frame_id, footprint.child_frame_id = "odom", "base_footprint"
+        footprint.transform.translation.x, footprint.transform.translation.y = float(pos[0]), float(pos[1])
+        footprint.transform.rotation = Quaternion(w=float(np.cos(yaw / 2)), z=float(np.sin(yaw / 2)))
+        if self.tf_pub is not None:
+            self.tf_pub.sendTransform([base, footprint])
+
+        odom = Odometry()
+        odom.header.stamp = msg_time
+        odom.header.frame_id, odom.child_frame_id = "odom", "base_footprint"
+        odom.pose.pose.position.x, odom.pose.pose.position.y = float(pos[0]), float(pos[1])
+        odom.pose.pose.orientation = footprint.transform.rotation
+        v, wz = state.base_lin_vel, state.imu.gyroscope[2]
+        odom.twist.twist.linear = Vector3(x=float(v[0]), y=float(v[1]), z=0.0)
+        odom.twist.twist.angular = Vector3(x=0.0, y=0.0, z=float(wz))
+        self.odom_pub.publish(odom)

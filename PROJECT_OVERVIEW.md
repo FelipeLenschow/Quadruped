@@ -46,6 +46,8 @@ The driver launches (`real`, `mujoco`, `gazebo`, `isaac_sim`) also start `twist_
 - **Skills**: the `/skill` service (`quadruped_interfaces/srv/Skill`) blocks until done: `stop`, `stand`, `sit`, `lie`, `walk` (stand, then policy mode), `sniff` (WTW nose-down), `gait_walk|trot|pace|bound|pronk`. Example: `ros2 service call /skill quadruped_interfaces/srv/Skill "{name: walk}"`.
 - `/gait_command/override` lends the WTW gait to a skill; the last `/gait_command` returns 0.5 s after it stops.
 - **Sensors (Gazebo `world:=nav`)**: `/lidar/points` (frame `radar`, 10 Hz), `/camera/image_raw`, `/camera/camera_info` (frame `front_camera_optical`, 15 Hz), static TF from `base`, all stamped with sim time. The lidar sits under the chin as on the real Go2, so it sees the front and the ground but almost nothing behind.
+- **Odometry**: telemetry publishes `/odom` and the `odom -> base` / `odom -> base_footprint` TF: leg odometry (estimator velocity + IMU) when the state estimator is on and always on the real robot, the simulator's pose otherwise (`odometry` in `config.yaml`). The Gazebo driver publishes `/clock`.
+- **Navigation**: launcher [N], or `ros2 launch quadruped_bringup nav.launch.py` (after Gazebo with `world:=nav`): `lidar_filter` drops the robot's own body (a box in `base`, `lidar_filter` in `config.yaml`; a person beside the robot stays in) -> `pointcloud_to_laserscan` (`/scan`, 0.1-0.6 m above ground) -> `slam_toolbox` (map) and Nav2 with MPPI (omni), whose output goes to `/cmd_vel/nav`. Configs: `config/nav2.yaml`, `config/slam.yaml`. `sim:=false` on the real robot.
 
 ## Important Constants (Unitree Go2)
 - **Control Frequency**: 50Hz (Policy), 200-500Hz (Actuator Loops).
