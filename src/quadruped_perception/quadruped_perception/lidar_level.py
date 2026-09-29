@@ -82,18 +82,30 @@ def main():
     tf_buffer = Buffer()
     TransformListener(tf_buffer, node)
     clouds = []
-    node.create_subscription(PointCloud2, "/lidar/points", clouds.append, qos_profile_sensor_data)
+
+    def keep(msg):
+        if len(clouds) < args.clouds:
+            clouds.append(msg)
+
+    sub = node.create_subscription(PointCloud2, "/lidar/points", keep, qos_profile_sensor_data)
     node.get_logger().info(f"collecting {args.clouds} clouds from /lidar/points...")
     while rclpy.ok() and len(clouds) < args.clouds:
         rclpy.spin_once(node, timeout_sec=0.5)
+    node.destroy_subscription(sub)
 
     frame = clouds[0].header.frame_id
-    while True:
+    node.get_logger().info(f"{sum(m.width * m.height for m in clouds)} points; looking up {args.base_frame} <- {frame}")
+    t = None
+    for _ in range(20):
         try:
             t = tf_buffer.lookup_transform(args.base_frame, frame, Time()).transform
             break
         except TransformException:
             rclpy.spin_once(node, timeout_sec=0.5)
+    if t is None:
+        node.get_logger().error(f"no TF {args.base_frame} <- {frame}; is real_sensors running?")
+        rclpy.try_shutdown()
+        return
     R = rotation(t.rotation)
     tz = t.translation.z
 
