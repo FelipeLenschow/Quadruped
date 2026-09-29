@@ -47,7 +47,7 @@ lidar_filter:
 # Real Go2 L1 lidar mount on the base (real_sensors). Gazebo uses the URDF's; find these with lidar_level.
 real_lidar:
   xyz: [0.28945, 0.0, -0.046825]
-  rpy: [0.0, 2.8782, 0.0]
+  rpy: [0.1878, 3.2260, 0.0171]
 
 # --- Motor Physical Parameters ---
 motor:
