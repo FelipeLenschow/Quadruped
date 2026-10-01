@@ -6,6 +6,7 @@ import os
 import sys
 import time
 
+import numpy as np
 import rclpy
 from cyclonedds.core import Policy, Qos
 from cyclonedds.domain import DomainParticipant
@@ -25,6 +26,7 @@ from quadruped_drivers.sensor_mounts import MOUNTS, publish_static_tf
 
 LIDAR_SWITCH_TOPIC = "rt/utlidar/switch"
 STALE_S = 1.0
+MIN_RANGE = 0.05  # the L1's own minimum range; nearer after the range correction is not a real return
 
 
 class RealSensors(Node):
@@ -33,10 +35,12 @@ class RealSensors(Node):
         self.frame = args.frame
         self.cloud_pub = self.create_publisher(PointCloud2, "/lidar/points", 5)
         xyz, rpy = MOUNTS["radar"]
-        mount = cfg.get("real_lidar") or {}
-        mount = (tuple(mount.get("xyz", xyz)), tuple(mount.get("rpy", rpy)))
+        lidar_cfg = cfg.get("real_lidar") or {}
+        mount = (tuple(lidar_cfg.get("xyz", xyz)), tuple(lidar_cfg.get("rpy", rpy)))
+        self.range_offset = float(lidar_cfg.get("range_offset", 0.0))
         self.tf = publish_static_tf(self, args.base_frame, {"radar": mount})
-        self.get_logger().info(f"lidar mount xyz {list(mount[0])} rpy {list(mount[1])}")
+        self.get_logger().info(f"lidar mount xyz {list(mount[0])} rpy {list(mount[1])}, "
+                               f"range offset {self.range_offset:.3f} m")
 
         participant = DomainParticipant(0)
         self._participant = participant
@@ -81,9 +85,26 @@ class RealSensors(Node):
         msg.fields = [PointField(name=f.name, offset=f.offset, datatype=f.datatype, count=f.count) for f in m.fields]
         msg.is_bigendian = m.is_bigendian
         msg.point_step, msg.row_step = m.point_step, m.row_step
-        msg.is_dense = m.is_dense
-        msg.data = array.array("B", m.data)
+        data = bytearray(m.data)
+        dense = self._correct_range(m, data) if self.range_offset else True
+        msg.is_dense = m.is_dense and dense
+        msg.data = array.array("B", data)
         self.cloud_pub.publish(msg)
+
+    def _correct_range(self, m, data):
+        """The L1 reports every range range_offset too long: pulls each point back along its ray, in place.
+        Points left nearer than MIN_RANGE become NaN. Returns False if any did."""
+        off = {f.name: f.offset for f in m.fields}
+        f4 = ">f4" if m.is_bigendian else "<f4"
+        pts = np.frombuffer(data, np.dtype({"names": ["x", "y", "z"], "formats": [f4] * 3,
+                                            "offsets": [off["x"], off["y"], off["z"]], "itemsize": m.point_step}),
+                            count=m.width * m.height)
+        r = np.sqrt(pts["x"].astype(np.float64) ** 2 + pts["y"] ** 2 + pts["z"] ** 2)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            k = np.where(r - self.range_offset >= MIN_RANGE, 1.0 - self.range_offset / r, np.nan)
+        for c in "xyz":
+            pts[c] *= k
+        return not np.isnan(k).any()
 
 
 def main():

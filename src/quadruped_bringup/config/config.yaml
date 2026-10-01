@@ -35,19 +35,29 @@ odometry:
 
 # --- Lidar body filter (quadruped_perception lidar_filter) ---
 # Points inside body_box (base frame, m) are the robot itself and are dropped; everything outside
-# stays, including a person's legs beside the robot.
+# stays, including a person's legs beside the robot. y is wide because the walking gait splays the
+# legs (hip abduction up to ~0.75 rad, foot centrelines at |y| 0.26 m) and the real L1 reads near
+# returns a few cm long, so leg points reached |y| 0.33 m.
 lidar_filter:
   frame: base
   body_box:
     x: [-0.45, 0.45]
-    y: [-0.22, 0.22]
+    y: [-0.35, 0.35]
     z: [-0.50, 0.15]
+  # Also drop points whose beam passed this close (m) to a thigh or calf (forward kinematics from the joint
+  # states): a beam clipping a leg's edge returns a point smeared out past the leg. 0 disables.
+  leg_radius: 0.045
   max_range: 20.0
 
-# Real Go2 L1 lidar mount on the base (real_sensors). Gazebo uses the URDF's; find these with lidar_level.
+# Real Go2 L1 lidar mount on the base (real_sensors). Gazebo uses the URDF's. lidar_level finds roll and
+# pitch from the floor and keeps yaw. The yaw is ~120 deg about the lidar's own axis off the URDF's radar
+# frame, measured by aligning the clouds before and after a straight 1.3 m walk against odometry.
 real_lidar:
   xyz: [0.28945, 0.0, -0.046825]
-  rpy: [0.1878, 3.2260, 0.0171]
+  rpy: [0.2171, 3.2680, 2.0766]
+  # The L1 reports every range this much too long (m); real_sensors pulls each point back along its ray.
+  # Fitted to a wall at a tape-measured 1.60 m and the floor under the standing robot's feet (leg FK).
+  range_offset: 0.12
 
 # --- Motor Physical Parameters ---
 motor:

@@ -12,6 +12,8 @@ from quadruped_bringup.launch_common import arg, flag, get
 from quadruped_core import paths
 
 NAV2_NODES = ["controller_server", "planner_server", "behavior_server", "bt_navigator"]
+# The real L1 fills ~44 of /scan's 360 beams per cloud; 5 clouds (1/3 s at 15 Hz) fill ~160.
+REAL_LIDAR_CLOUDS_MERGED = 5
 
 
 def map_file(name):
@@ -68,7 +70,8 @@ def setup(context):
     to_mux = [("cmd_vel", "/cmd_vel/nav")]
 
     actions = [
-        Node(package="quadruped_perception", executable="lidar_filter", output="screen", parameters=[use_sim]),
+        Node(package="quadruped_perception", executable="lidar_filter", output="screen", parameters=[use_sim],
+             arguments=[] if sim else [f"--accumulate={REAL_LIDAR_CLOUDS_MERGED}"]),
         Node(package="pointcloud_to_laserscan", executable="pointcloud_to_laserscan_node", output="log",
              remappings=[("cloud_in", "/lidar/points_filtered"), ("scan", "/scan")],
              parameters=[use_sim, {

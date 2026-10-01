@@ -147,6 +147,19 @@ class Go2Kinematics:
 
         return p
 
+    def leg_chain_body(self, leg_idx: int, q_leg: np.ndarray) -> np.ndarray:
+        """
+        Thigh joint, knee and foot positions in the body frame, shape (3, 3): the ends of the thigh
+        and calf links, same chain as foot_position_body.
+        """
+        q0, q1, q2 = float(q_leg[0]), float(q_leg[1]), float(q_leg[2])
+        R_ab = _Rx(q0)
+        p_thigh = _HIP_ORIGINS[leg_idx] + R_ab @ np.array([0.0, _THIGH_Y[leg_idx], 0.0])
+        R_th = R_ab @ _Ry(q1)
+        p_knee = p_thigh + R_th @ np.array([0.0, 0.0, -_L_THIGH])
+        p_foot = p_knee + R_th @ _Ry(q2) @ np.array([_FOOT_X_OFF, 0.0, -_L_CALF])
+        return np.array([p_thigh, p_knee, p_foot])
+
     def foot_jacobian_body(self, leg_idx: int, q_leg: np.ndarray) -> np.ndarray:
         """
         Compute the 3×3 geometric Jacobian mapping joint velocities to
@@ -208,6 +221,10 @@ def foot_position_body(leg_idx: int, q_leg: np.ndarray) -> np.ndarray:
 def foot_jacobian_body(leg_idx: int, q_leg: np.ndarray) -> np.ndarray:
     """Module-level convenience wrapper for Go2Kinematics.foot_jacobian_body."""
     return _kin.foot_jacobian_body(leg_idx, q_leg)
+
+def leg_chain_body(leg_idx: int, q_leg: np.ndarray) -> np.ndarray:
+    """Module-level convenience wrapper for Go2Kinematics.leg_chain_body."""
+    return _kin.leg_chain_body(leg_idx, q_leg)
 
 
 # ---------------------------------------------------------------------------
