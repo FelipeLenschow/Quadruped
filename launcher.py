@@ -667,7 +667,7 @@ def run_cli_menu():
             action = "teleop_keyboard"
             
     if action == "visualizers":
-        vis_choice = input("Select Visualizer [1: MuJoCo Twin, 2: Gazebo Twin, 3: RViz, 4: Foxglove] (default 1): ").strip() or "1"
+        vis_choice = input("Select Visualizer [1: MuJoCo Twin, 2: Gazebo Twin, 3: RViz (Nav2 view), 4: Foxglove] (default 1): ").strip() or "1"
         if vis_choice == "4":
             action = "foxglove"
         elif vis_choice == "3":
