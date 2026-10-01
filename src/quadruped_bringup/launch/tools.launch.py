@@ -1,3 +1,6 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess, OpaqueFunction, Shutdown
 from launch_ros.actions import Node
@@ -21,7 +24,11 @@ def setup(context):
     if tool not in TOOLS:
         raise ValueError(f"tool must be one of {sorted([*TOOLS, 'foxglove'])}, got {tool!r}")
     package, executable = TOOLS[tool]
-    arguments = ["--layout", paths.config("plotjuggler_reward_layout.xml")] if tool == "plotjuggler" else []
+    arguments = []
+    if tool == "plotjuggler":
+        arguments = ["--layout", paths.config("plotjuggler_reward_layout.xml")]
+    elif tool == "rviz":  # the Nav2 view nav.launch.py opens: map, costmaps, plan, footprint, goal tool
+        arguments = ["-d", os.path.join(get_package_share_directory("nav2_bringup"), "rviz", "nav2_default_view.rviz")]
     return [Node(package=package, executable=executable, arguments=arguments, output="screen", on_exit=[Shutdown()])]
 
 

@@ -61,6 +61,8 @@ class Ros2MujocoDriver(Node):
         self.kd = float(self.ctrl_cfg.get("kd", 0.0))
         self.emergency_kd = float(
             self.config.get("safety", {}).get("emergency_kd", 5.0))
+        self.emergency_kd_rear = float(
+            self.config.get("safety", {}).get("emergency_kd_rear", self.emergency_kd))
 
         # Simulated FSR. The real foot sensor is a raw integer with a big no-load
         # offset (~16 in the air, ~30 loaded) that differs from foot to foot, so
@@ -454,9 +456,10 @@ class Ros2MujocoDriver(Node):
         if emergency:
             # Damping only, no position hold - mirrors real_driver.send_to_sdk,
             # which sends kp=0 with a damping kd so the robot sinks under control
-            # instead of collapsing.
+            # instead of collapsing, the rear legs with their own (lower) kd.
             kp = 0.0
-            kd = self.emergency_kd
+            kd = np.array([self.emergency_kd_rear if n[:2] in ("RL", "RR") else self.emergency_kd
+                           for n in self.isaac_names])
 
         torques = kp * pos_err + kd * (0 - v)
 

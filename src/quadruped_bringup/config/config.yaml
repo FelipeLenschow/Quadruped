@@ -164,6 +164,10 @@ safety:
   emergency_kd: 5.0          # Damping applied on emergency stop (kp=0). Zero would
                              # leave the joints free and the robot would collapse;
                              # this makes it sink under control instead.
+  emergency_kd_rear: 3.0     # Rear legs' damping on emergency stop. Lower than the front
+                             # so the hips sink first and the robot sits back instead of
+                             # landing on the lidar under its nose. In MuJoCo 3.0 put the
+                             # rear down first at ~6 cm/s; 1.0 hit at up to 0.6 m/s.
   supervisor_frequency: 10.0 # Hz (Rate at which safety checks are performed)
   global_max_torque_percent: 55.0 # Maximum allowed torque as a percentage of physical motor capacity (45.0 Nm)
   base_tilt_limit_deg: 30   # Trigger emergency stop if base tilts past 30 degrees in any direction

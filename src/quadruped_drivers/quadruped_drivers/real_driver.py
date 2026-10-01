@@ -136,8 +136,11 @@ class RealDriver(Node):
         # Damping used when the safety gate cuts the policy. kp=0 with kd=0 leaves
         # the joints completely free and the robot collapses; a damping kd makes
         # it sink under control. The motor applies this itself, so it is bounded
-        # by the motor, not by the (zero) safety torque budget.
+        # by the motor, not by the (zero) safety torque budget. The rear legs get
+        # their own, lower damping so the hips sink first and the robot sits back
+        # instead of landing on the lidar under its nose.
         self.emergency_kd = 5.0
+        self.emergency_kd_rear = 5.0
         # Counts ABOVE each foot's own no-load offset, not an absolute reading.
         # The four FSRs sit at visibly different zeros, so one absolute cut is a
         # different gate on every foot: the foot with the highest offset trips
@@ -153,7 +156,9 @@ class RealDriver(Node):
         try:
             with open(config_path, 'r') as f:
                 _cfg = yaml.safe_load(f) or {}
-            self.emergency_kd = float(_cfg.get("safety", {}).get("emergency_kd", 5.0))
+            _safety = _cfg.get("safety", {}) or {}
+            self.emergency_kd = float(_safety.get("emergency_kd", 5.0))
+            self.emergency_kd_rear = float(_safety.get("emergency_kd_rear", self.emergency_kd))
             _est = _cfg.get("state_estimator", {}) or {}
             self.contact_threshold = float(_est.get("contact_threshold", 10.0))
             _fsr_bias = float(_est.get("fsr_bias", 16.0))
@@ -424,9 +429,10 @@ class RealDriver(Node):
             self.low_cmd.motor_cmd[i].dq = 0.0
             
             if max_torque <= 0.1:
-                # Emergency: damping only, no position hold.
+                # Emergency: damping only, no position hold. SDK motor order is FR, FL,
+                # RR, RL (hip, thigh, calf each), so 6-11 are the rear legs.
                 self.low_cmd.motor_cmd[i].kp = 0.0
-                self.low_cmd.motor_cmd[i].kd = self.emergency_kd
+                self.low_cmd.motor_cmd[i].kd = self.emergency_kd_rear if i >= 6 else self.emergency_kd
                 self.low_cmd.motor_cmd[i].tau = 0.0
             else:
                 self.low_cmd.motor_cmd[i].kp = self.kp
