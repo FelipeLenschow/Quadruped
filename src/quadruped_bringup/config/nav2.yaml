@@ -94,13 +94,16 @@ controller_server:
         cost_weight: 5.0
         offset_from_furthest: 5
         threshold_to_consider: 1.4
+      # Keeps the robot facing along the path, so it walks forward and uses vy only for corrections. vx and
+      # vy are limited separately, so crabbing diagonally (~34 deg) is faster than walking straight; at 1.0
+      # rad this never fired. offset 20 looks ~1 m ahead, where a 10 cm sidestep is only ~6 deg.
       PathAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 2.0
-        offset_from_furthest: 4
+        cost_weight: 4.0
+        offset_from_furthest: 20
         threshold_to_consider: 0.5
-        max_angle_to_furthest: 1.0
+        max_angle_to_furthest: 0.35
         mode: 0
 
 local_costmap:
