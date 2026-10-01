@@ -1,6 +1,7 @@
 """Lidar level check: fits the floor in the lidar cloud and prints the mount angles that make it level.
 
-Stand the robot on flat, open ground and run it. Only roll and pitch come from the floor; yaw is kept.
+Stand the robot still on flat, open ground. The floor is levelled against gravity (the IMU, through the odom
+frame), so the body's own lean does not end up in the mount. Only roll and pitch come from the floor; yaw is kept.
 """
 
 import argparse
@@ -73,6 +74,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--clouds", type=int, default=10)
     ap.add_argument("--base_frame", default="base")
+    ap.add_argument("--world_frame", default="odom", help="gravity-aligned frame; base assumes the body is level")
     ap.add_argument("--max_range", type=float, default=4.0)
     ap.add_argument("--max_tilt", type=float, default=45.0, help="deg the floor may be off from the current mount")
     args = ap.parse_args(remove_ros_args()[1:])
@@ -95,19 +97,23 @@ def main():
 
     frame = clouds[0].header.frame_id
     node.get_logger().info(f"{sum(m.width * m.height for m in clouds)} points; looking up {args.base_frame} <- {frame}")
-    t = None
+    t = body = None
     for _ in range(20):
         try:
             t = tf_buffer.lookup_transform(args.base_frame, frame, Time()).transform
+            body = tf_buffer.lookup_transform(args.world_frame, args.base_frame, Time()).transform
             break
         except TransformException:
             rclpy.spin_once(node, timeout_sec=0.5)
-    if t is None:
-        node.get_logger().error(f"no TF {args.base_frame} <- {frame}; is real_sensors running?")
+    if body is None:
+        node.get_logger().error(f"no TF {args.world_frame} <- {args.base_frame} <- {frame}; are the driver and "
+                                "real_sensors running?")
         rclpy.try_shutdown()
         return
-    R = rotation(t.rotation)
-    tz = t.translation.z
+    R_mount = rotation(t.rotation)
+    R_body = rotation(body.rotation)
+    R = R_body @ R_mount
+    print(f"body {math.degrees(math.acos(np.clip(R_body[2, 2], -1, 1))):.1f} deg off level (IMU)")
 
     pts = np.concatenate([points(m) for m in clouds])
     r = np.linalg.norm(pts, axis=1)
@@ -120,13 +126,13 @@ def main():
     else:
         n, d, count = fit
         up_now = R @ n
-        R_new = min_rotation(up_now, np.array([0.0, 0.0, 1.0])) @ R
+        R_new = R_body.T @ min_rotation(up_now, np.array([0.0, 0.0, 1.0])) @ R
         roll, pitch, yaw = rpy(R_new)
         print(f"floor: {count} points, {math.degrees(math.acos(np.clip(up_now[2], -1, 1))):.1f} deg off level "
-              f"with the current mount ({frame} -> {args.base_frame})")
+              f"with the current mount ({frame} -> {args.world_frame})")
         print(f"  tilts {'down' if up_now[0] > 0 else 'up'} at the front {math.degrees(math.asin(abs(up_now[0]))):.1f} deg, "
               f"{'left' if up_now[1] > 0 else 'right'} side down {math.degrees(math.asin(abs(up_now[1]))):.1f} deg")
-        print(f"  lidar {d:.3f} m above the floor, so {args.base_frame} at {d - tz:.3f} m")
+        print(f"  lidar {d:.3f} m above the floor")
         print(f"level mount rpy: [{roll:.4f}, {pitch:.4f}, {yaw:.4f}]")
     node.destroy_node()
     rclpy.try_shutdown()
