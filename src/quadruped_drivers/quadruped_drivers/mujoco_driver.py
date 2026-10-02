@@ -25,6 +25,7 @@ from quadruped_core.pipeline import LocomotionPipeline
 from quadruped_core.config_loader import load_config
 from quadruped_core import paths
 from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_core.controller.motor_model import Go2MotorModel
 from quadruped_drivers.foot_contact_overlay import FootContactOverlay
 from quadruped_drivers.velocity_arrow_overlay import VelocityArrowOverlay
 from quadruped_drivers import terrain as terrain_mod
@@ -255,6 +256,7 @@ class Ros2MujocoDriver(Node):
 
         # Default Pose
         self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
+        self.motor_model = Go2MotorModel(self.isaac_names)
 
         # Buffer for smooth targets
         self.current_targets = self.desired_qpos.copy()
@@ -469,6 +471,11 @@ class Ros2MujocoDriver(Node):
             # zero here. Clipping to effort_limit like the normal path would
             # cancel the damping entirely and make the robot go limp again.
             return np.clip(torques, -sat_effort, sat_effort)
+
+        if self.robot_type.lower() == "go2":
+            # The real driver sends kp/kd and the motors apply their own torque-speed curve; the
+            # torque budget only switches emergency damping on, so only the curve limits here.
+            return self.motor_model.clip(torques, v)
 
         vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
         v_clamp = np.clip(v, -vel_at_lim, vel_at_lim)

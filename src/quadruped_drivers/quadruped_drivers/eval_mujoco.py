@@ -16,6 +16,7 @@ from quadruped_core.pipeline import LocomotionPipeline
 from quadruped_core.config_loader import load_config
 from quadruped_core import paths
 from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_core.controller.motor_model import Go2MotorModel
 from quadruped_drivers import gait_metrics
 from rclpy.utilities import remove_ros_args
 
@@ -209,6 +210,7 @@ class MujocoEvaluator(Node):
             )
 
         self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
+        self.motor_model = Go2MotorModel(self.isaac_names)
 
         self.current_targets = self.desired_qpos.copy()
 
@@ -316,6 +318,10 @@ class MujocoEvaluator(Node):
             kd = 0.0
 
         torques = kp * pos_err + kd * (0 - v)
+        if self.robot_type.lower() == "go2":
+            # The real driver sends kp/kd and the motors apply their own torque-speed curve; the
+            # torque budget only switches emergency damping on, so only the curve limits here.
+            return self.motor_model.clip(torques, v) if effort_limit > 0.1 else torques
         vel_at_lim = vel_lim * (1 + effort_limit / sat_effort)
         v_clamp = np.clip(v, -vel_at_lim, vel_at_lim)
         t_top = effort_limit * (1.0 - v_clamp / vel_lim)
