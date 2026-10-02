@@ -34,7 +34,7 @@ def reward_args():
 
 def interface_args():
     return [
-        arg("mux", "true", "run twist_mux: /cmd_vel/{joy,keyboard,skill,nav,llm} -> /cmd_vel"),
+        arg("mux", "true", "run twist_mux: /cmd_vel/{joy,keyboard,phone,skill,nav,llm} -> /cmd_vel"),
         arg("skills", "true", "run the /skill service"),
     ]
 

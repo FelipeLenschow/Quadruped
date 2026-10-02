@@ -9,6 +9,10 @@ twist_mux:
         topic: /cmd_vel/keyboard
         timeout: 0.5
         priority: 90
+      phone:
+        topic: /cmd_vel/phone
+        timeout: 0.5
+        priority: 80
       skill:
         topic: /cmd_vel/skill
         timeout: 0.3
