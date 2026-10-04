@@ -60,3 +60,47 @@ object Settings {
             .apply()
     }
 }
+
+/** The robot's Jetson over SSH. Shortcuts are "Label = command" lines; tapping one types it, without Enter. */
+data class ShellSettings(
+    val host: String = "10.42.0.1",
+    val port: Int = 22,
+    val user: String = "unitree",
+    val shortcuts: String = DEFAULT_SHORTCUTS,
+) {
+    fun shortcutList(): List<Pair<String, String>> = shortcuts.lines().mapNotNull { line ->
+        val i = line.indexOf('=')
+        if (i <= 0) null else line.substring(0, i).trim() to line.substring(i + 1).trim()
+    }
+
+    companion object {
+        val DEFAULT_SHORTCUTS = """
+            tmux = tmux new -A -s robot
+            container = cd ~/Quadruped && quaddocker
+            attach = quadattach
+            launcher = python3 launcher.py
+            real = ros2 launch quadruped_bringup real.launch.py checkpoint:=
+            nav = ros2 launch quadruped_bringup nav.launch.py sim:=false
+        """.trimIndent()
+
+        fun load(ctx: Context): ShellSettings {
+            val p = ctx.getSharedPreferences("console", Context.MODE_PRIVATE)
+            val d = ShellSettings()
+            return ShellSettings(
+                host = p.getString("ssh_host", d.host)!!,
+                port = p.getInt("ssh_port", d.port),
+                user = p.getString("ssh_user", d.user)!!,
+                shortcuts = p.getString("ssh_shortcuts", d.shortcuts)!!,
+            )
+        }
+
+        fun save(ctx: Context, s: ShellSettings) {
+            ctx.getSharedPreferences("console", Context.MODE_PRIVATE).edit()
+                .putString("ssh_host", s.host)
+                .putInt("ssh_port", s.port)
+                .putString("ssh_user", s.user)
+                .putString("ssh_shortcuts", s.shortcuts)
+                .apply()
+        }
+    }
+}

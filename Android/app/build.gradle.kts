@@ -38,6 +38,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    // android.util.Log in code under JVM tests returns instead of throwing.
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 dependencies {
@@ -46,6 +48,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.activity:activity-compose:1.9.2")
+    implementation("com.github.mwiede:jsch:0.2.20")
+    implementation("com.github.termux.termux-app:terminal-emulator:v0.118.1")
+    implementation("com.github.termux.termux-app:terminal-view:v0.118.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

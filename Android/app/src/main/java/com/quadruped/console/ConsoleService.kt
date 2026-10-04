@@ -9,15 +9,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.Process
 import android.util.Log
-import java.net.Inet4Address
 import java.util.concurrent.locks.LockSupport
 
 /**
@@ -77,7 +74,7 @@ class ConsoleService : Service() {
     private fun startLink() {
         val s = Settings.loadLink(this)
         val cm = getSystemService(ConnectivityManager::class.java)
-        val (network, localIp) = pickNetwork(cm) ?: run {
+        val (network, localIp) = RobotNetwork.pick(cm) ?: run {
             linkInfo = "no Wi-Fi/Ethernet network"
             stopSelf()
             return
@@ -150,22 +147,6 @@ class ConsoleService : Service() {
         getSystemService(ConnectivityManager::class.java).bindProcessToNetwork(null)
         releaseLocks()
         linkInfo = "stopped ($reason)"
-    }
-
-    private fun pickNetwork(cm: ConnectivityManager): Pair<Network, String>? {
-        @Suppress("DEPRECATION")
-        for (n in cm.allNetworks) {
-            val caps = cm.getNetworkCapabilities(n) ?: continue
-            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
-                !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-            ) continue
-            val ip = cm.getLinkProperties(n)?.linkAddresses
-                ?.map { it.address }
-                ?.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }
-                ?.hostAddress ?: continue
-            return n to ip
-        }
-        return null
     }
 
     private fun acquireLocks(multicast: Boolean) {

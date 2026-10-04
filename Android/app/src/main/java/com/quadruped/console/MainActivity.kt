@@ -7,6 +7,9 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -27,7 +30,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.displayCutoutPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -40,6 +46,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.LocationOn
@@ -85,6 +92,7 @@ import com.quadruped.console.ui.ConsoleTheme
 import com.quadruped.console.ui.Joystick
 import com.quadruped.console.ui.MapView
 import com.quadruped.console.ui.Robot3D
+import com.quadruped.console.ui.ShellTab
 import com.quadruped.console.ui.Mono
 import com.quadruped.console.ui.Palette
 import kotlinx.coroutines.delay
@@ -96,6 +104,21 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
         setContent { ConsoleTheme { ConsoleApp() } }
+        hideStatusBar()
+    }
+
+    /** The status bar only takes room; a swipe from the top still shows it for a moment. */
+    private fun hideStatusBar() {
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.statusBars())
+        }
+    }
+
+    // Some devices bring it back after the keyboard or a dialog.
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideStatusBar()
     }
 
     /** Nobody is holding the sticks once the screen is gone. */
@@ -110,6 +133,7 @@ private enum class Tab(val label: String, val icon: androidx.compose.ui.graphics
     ROBOT("Robot", Icons.Filled.Face),
     TUNE("Tune", Icons.Filled.Build),
     MAP("Map", Icons.Filled.LocationOn),
+    SHELL("Shell", Icons.AutoMirrored.Filled.KeyboardArrowRight),
     LINK("Link", Icons.Filled.Settings),
 }
 
@@ -147,14 +171,16 @@ fun ConsoleApp() {
         },
     ) { pad ->
         Column(
-            Modifier.fillMaxSize().padding(bottom = pad.calculateBottomPadding()).statusBarsPadding()
-                .padding(horizontal = 16.dp),
+            Modifier.fillMaxSize().padding(bottom = pad.calculateBottomPadding()).consumeWindowInsets(pad)
+                .imePadding().statusBarsPadding().displayCutoutPadding().padding(horizontal = 16.dp),
         ) {
+            val shell = Tab.entries[tab] == Tab.SHELL
             TopBar(status, core != null)
-            Spacer(Modifier.height(12.dp))
-            EstopButton(status, core)
-            Spacer(Modifier.height(12.dp))
-            Column(
+            Spacer(Modifier.height(if (shell) 8.dp else 12.dp))
+            EstopButton(status, core, compact = shell)
+            Spacer(Modifier.height(if (shell) 8.dp else 12.dp))
+            // The terminal needs the remaining height, which a scrolling column cannot give.
+            if (shell) ShellTab(Modifier.weight(1f).padding(bottom = 8.dp)) else Column(
                 Modifier.weight(1f).verticalScroll(
                     rememberScrollState(),
                     // Sticks, the 3D view and the map take drags themselves.
@@ -167,6 +193,7 @@ fun ConsoleApp() {
                 val c = core
                 when (Tab.entries[tab]) {
                     Tab.LINK -> LinkTab(s, info)
+                    Tab.SHELL -> {}
                     Tab.TUNE -> TuneTab(s, c)
                     else -> if (s == null || c == null) OfflineCard(info) else when (Tab.entries[tab]) {
                         Tab.DRIVE -> DriveTab(s, c)
@@ -225,7 +252,7 @@ private fun LinkPill(s: Status?, connected: Boolean) {
 }
 
 @Composable
-private fun EstopButton(s: Status?, core: ConsoleCore?) {
+private fun EstopButton(s: Status?, core: ConsoleCore?, compact: Boolean = false) {
     val haptic = LocalHapticFeedback.current
     val latched = s?.estopLatched == true
     val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
@@ -234,7 +261,7 @@ private fun EstopButton(s: Status?, core: ConsoleCore?) {
     val shape = RoundedCornerShape(20.dp)
     val enabled = core != null
     Box(
-        Modifier.fillMaxWidth().height(if (latched) 96.dp else 84.dp).clip(shape)
+        Modifier.fillMaxWidth().height(if (compact) (if (latched) 64.dp else 52.dp) else if (latched) 96.dp else 84.dp).clip(shape)
             .background(
                 if (!enabled) Brush.verticalGradient(listOf(Palette.Surface2, Palette.Surface))
                 else if (latched) Brush.verticalGradient(listOf(Color(0xFF3A0D14), Color(0xFF240810)))
@@ -251,7 +278,8 @@ private fun EstopButton(s: Status?, core: ConsoleCore?) {
             Text(
                 if (latched) "E-STOP LATCHED" else "STOP",
                 color = if (enabled) Color.White else Palette.Muted,
-                fontSize = if (latched) 24.sp else 34.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp,
+                fontSize = if (latched) (if (compact) 18.sp else 24.sp) else if (compact) 24.sp else 34.sp,
+                fontWeight = FontWeight.Black, letterSpacing = 4.sp,
             )
             if (latched) {
                 Text(

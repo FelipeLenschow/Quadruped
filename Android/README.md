@@ -20,6 +20,11 @@ Android, no bridge on the robot.
   `unset PYTHONPATH; ~/env_isaacsim/bin/python tools/export_urdf.py`.
 - Robot tab: "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
   published once a second by `quadruped_drivers/system_monitor`, which the real launch starts.
+- Shell tab: an SSH terminal on the robot (JSch + Termux's xterm emulator), to start the driver and
+  Nav2 without a laptop. The app's ECDSA key lives in its private storage; log in once with the
+  password and the app adds the key to `~/.ssh/authorized_keys`. Shortcut chips type common commands
+  (editable, no Enter). Start launches inside `tmux new -A -s robot`: a dropped SSH session kills
+  whatever runs outside tmux. Heartbeat and e-stop stay on DDS, independent of the shell.
 - Map tab: `/map`, `/scan`, `/plan` and the robot (TF map -> base_footprint), RViz-style;
   "Goal" mode sends a drag as `/goal_pose`. These streams are subscribed only while shown,
   best-effort, so they never compete with the heartbeat for retransmits.
@@ -44,6 +49,10 @@ the heartbeat gaps. Use a domain nothing else is on:
 
     tools/link_check.sh 77 <server_ip:port> <local_ip> &
     ROS_DOMAIN_ID=77 ROS_DISCOVERY_SERVER=<server_ip:port> ROS_SUPER_CLIENT=TRUE python3 tools/ros_side.py 10
+
+The SSH tests run against a throwaway sshd when `SSH_TEST_PORT` and `SSH_TEST_KEYS` are set
+(an unprivileged `sshd -f <config>` on 127.0.0.1 with its own host key and `AuthorizedKeysFile`
+holding the key in `SSH_TEST_KEYS`); otherwise they are skipped.
 
 ## Before trusting it with torque
 
