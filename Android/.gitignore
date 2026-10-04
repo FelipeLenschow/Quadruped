@@ -1,0 +1,11 @@
+native/src/
+native/build/
+native/fastdds/
+native/*.log
+tools/link_check
+.gradle/
+build/
+app/build/
+app/.cxx/
+local.properties
+tools/viz_check
