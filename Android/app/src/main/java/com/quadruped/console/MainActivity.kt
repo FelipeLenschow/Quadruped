@@ -19,6 +19,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -481,6 +483,95 @@ private fun RobotTab(s: Status, core: ConsoleCore) {
                 Metric("Torque", if (rs.optBoolean("torque_on")) "ON" else "OFF", if (rs.optBoolean("torque_on")) Palette.Ok else Palette.Muted)
                 Metric("Safety", if (rs.optBoolean("safety_blocked")) "BLOCKED" else "OK", if (rs.optBoolean("safety_blocked")) Palette.Danger else Palette.Ok)
             }
+        }
+    }
+
+    SystemCard(s)
+}
+
+private fun loadColor(pct: Double) = when {
+    pct >= 85 -> Palette.Danger
+    pct >= 60 -> Palette.Warn
+    else -> Palette.Accent
+}
+
+/** /system_stats from the robot's system_monitor: CPU per core, GPU, RAM, temperatures. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SystemCard(s: Status) {
+    val st = s.systemStats
+    val stale = s.systemStatsAgeMs !in 0..3000
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionLabel("Robot computer")
+            Spacer(Modifier.weight(1f))
+            Text(
+                when {
+                    st == null -> "no /system_stats"
+                    stale -> "stale ${s.systemStatsAgeMs / 1000}s"
+                    else -> "load ${st.optJSONArray("load")?.optDouble(0)?.f(2) ?: "—"}"
+                },
+                color = if (st == null || stale) Palette.Warn else Palette.Muted, fontSize = 12.sp, fontFamily = Mono,
+            )
+        }
+        if (st == null) {
+            Text("Start the real driver with monitor:=true (the default).", color = Palette.Muted, fontSize = 13.sp)
+            return@Card
+        }
+        val cpu = st.optDouble("cpu", 0.0)
+        val gpu = if (st.isNull("gpu")) null else st.optDouble("gpu")
+        val temp = if (st.isNull("temp_max")) null else st.optDouble("temp_max")
+        val used = st.optDouble("ram_used_mb", 0.0) / 1024
+        val total = st.optDouble("ram_total_mb", 0.0) / 1024
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Metric("CPU", "${cpu.toInt()}%", loadColor(cpu))
+            Metric("GPU", gpu?.let { "${it.toInt()}%" } ?: "—", gpu?.let(::loadColor) ?: Palette.Muted)
+            Metric("Temp", temp?.let { "${it.toInt()}°C" } ?: "—", when {
+                temp == null -> Palette.Muted
+                temp >= 80 -> Palette.Danger
+                temp >= 65 -> Palette.Warn
+                else -> Palette.Text
+            })
+        }
+        Column {
+            Row {
+                Text("RAM", Modifier.weight(1f), color = Palette.Muted, fontSize = 12.sp)
+                Text("${used.f(1)} / ${total.f(1)} GB", fontFamily = Mono, fontSize = 12.sp)
+            }
+            Spacer(Modifier.height(4.dp))
+            val frac = if (total > 0) used / total else 0.0
+            LinearProgressIndicator(
+                { frac.toFloat() }, Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
+                color = loadColor(frac * 100), trackColor = Palette.Surface2,
+            )
+        }
+        val cores = st.optJSONArray("cores")
+        if (cores != null && cores.length() > 0) {
+            Text("CORES", style = MaterialTheme.typography.labelSmall, color = Palette.Muted, fontSize = 10.sp)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (i in 0 until cores.length()) {
+                    val pct = cores.optDouble(i, 0.0)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            Modifier.width(30.dp).height(44.dp).clip(RoundedCornerShape(6.dp)).background(Palette.Surface2),
+                            contentAlignment = Alignment.BottomCenter,
+                        ) {
+                            Box(
+                                Modifier.fillMaxWidth().height((44 * pct / 100).coerceIn(0.0, 44.0).dp)
+                                    .background(loadColor(pct)),
+                            )
+                        }
+                        Text("$i", color = Palette.Muted, fontSize = 10.sp, fontFamily = Mono)
+                    }
+                }
+            }
+        }
+        val temps = st.optJSONObject("temps")
+        if (temps != null && temps.length() > 0) {
+            Text(
+                temps.keys().asSequence().sorted().joinToString("  ") { "$it ${temps.optDouble(it).toInt()}°" },
+                color = Palette.Muted, fontSize = 11.sp, fontFamily = Mono,
+            )
         }
     }
 }

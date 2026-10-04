@@ -255,4 +255,14 @@ class ConsoleCoreTest {
         assertTrue(link.on(ConsoleCore.ESTOP).isEmpty())
         assertEquals(listOf(0f), link.on(ConsoleCore.MAX_TORQUE))
     }
+
+    @Test
+    fun systemStatsAreParsed() {
+        link.receive(ConsoleCore.SYSTEM_STATS, """{"cpu": 45.2, "cores": [40.0, 50.0], "gpu": null, "ram_used_mb": 3100}""")
+        core.tick()
+        val st = core.status().systemStats!!
+        assertEquals(45.2, st.getDouble("cpu"), 1e-9)
+        assertTrue(st.isNull("gpu"))
+        assertEquals(2, st.getJSONArray("cores").length())
+    }
 }

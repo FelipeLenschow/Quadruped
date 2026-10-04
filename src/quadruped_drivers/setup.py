@@ -34,6 +34,7 @@ setup(
     entry_points={"console_scripts": [
         "real_driver = quadruped_drivers.real_driver:main",
         "real_sensors = quadruped_drivers.real_sensors:main",
+        "system_monitor = quadruped_drivers.system_monitor:main",
         "test_joints = quadruped_drivers.test_joints:main",
         "mujoco_driver = quadruped_drivers.mujoco_driver:main",
         "eval_mujoco = quadruped_drivers.eval_mujoco:main",

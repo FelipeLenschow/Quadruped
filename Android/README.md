@@ -18,6 +18,8 @@ Android, no bridge on the robot.
   and `/sensors/joint_states`. The URDF and its meshes (decimated, ~1 MB) live in
   `app/src/main/assets/go2/`; regenerate after changing the URDF with
   `unset PYTHONPATH; ~/env_isaacsim/bin/python tools/export_urdf.py`.
+- Robot tab: "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
+  published once a second by `quadruped_drivers/system_monitor`, which the real launch starts.
 - Map tab: `/map`, `/scan`, `/plan` and the robot (TF map -> base_footprint), RViz-style;
   "Goal" mode sends a drag as `/goal_pose`. These streams are subscribed only while shown,
   best-effort, so they never compete with the heartbeat for retransmits.

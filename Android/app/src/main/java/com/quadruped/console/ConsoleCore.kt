@@ -38,6 +38,8 @@ data class Status(
     val effectiveTorquePercent: Double,
     val maxTorqueNm: Double,
     val robotState: JSONObject?,
+    val systemStats: JSONObject?,
+    val systemStatsAgeMs: Long,
     val events: List<String>,
     val driveEnabled: Boolean,
     val turbo: Boolean,
@@ -75,6 +77,7 @@ class ConsoleCore(
         const val FREEZE_BASE = "/base/freeze"
         const val POSE_STATUS = "/pose/status"
         const val ROBOT_STATE = "/robot_state"
+        const val SYSTEM_STATS = "/system_stats"
         const val EST_VEL = "/estimator/base_lin_vel"
         const val EST_CONTACT = "/estimator/feet_contact"
         // Its own twist_mux input: priority 80, above Nav2 and skills, below the F710 and keyboard.
@@ -87,6 +90,7 @@ class ConsoleCore(
         val SUBSCRIPTIONS = listOf(
             ESTOP_STATE to MsgType.BOOL,
             ROBOT_STATE to MsgType.STRING,
+            SYSTEM_STATS to MsgType.STRING,
             POSE_STATUS to MsgType.STRING,
             EST_VEL to MsgType.VECTOR3,
             EST_CONTACT to MsgType.FLOAT32_MULTI_ARRAY,
@@ -116,6 +120,7 @@ class ConsoleCore(
     private var poseProgress = 0.0
     private var poseLabel = ""
     private var robotState: JSONObject? = null
+    private var systemStats: JSONObject? = null
     private var heartbeatCount = 0L
     private val seen = HashMap<String, Long>()
     private val events = ArrayDeque<String>()
@@ -158,6 +163,12 @@ class ConsoleCore(
                 robotState = js
                 mode = js.optString("mode", mode)
                 if (js.has("estop")) onRobotStateEstop(js.getBoolean("estop"))
+            } catch (_: Exception) {
+            }
+        }
+        if (fresh(SYSTEM_STATS)) {
+            try {
+                systemStats = JSONObject(link.latestText(SYSTEM_STATS) ?: "")
             } catch (_: Exception) {
             }
         }
@@ -377,6 +388,8 @@ class ConsoleCore(
             effectiveTorquePercent = torque,
             maxTorqueNm = torque / 100.0 * motorMaxTorque,
             robotState = robotState,
+            systemStats = systemStats,
+            systemStatsAgeMs = link.latestAgeMs(SYSTEM_STATS),
             events = events.toList(),
             driveEnabled = driveEnabled,
             turbo = turbo,
