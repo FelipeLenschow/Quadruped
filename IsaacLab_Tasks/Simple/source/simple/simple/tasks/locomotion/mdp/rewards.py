@@ -50,6 +50,8 @@ def track_lin_vel_xy_exp_scaled(
     sigma_exp: float,
     command_name: str = "base_velocity",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    grace_s: float = 0.0,
+    grace_floor: float = 0.25,
 ) -> torch.Tensor:
     """Linear-velocity tracking whose tolerance scales with the commanded speed.
 
@@ -77,6 +79,9 @@ def track_lin_vel_xy_exp_scaled(
     lin_vel_error = torch.sum(torch.square(command[:, :2] - asset.data.root_lin_vel_b.torch[:, :2]), dim=1)
     command_speed = torch.norm(command[:, :2], dim=1)
     denominator = torch.clamp(std**2 * command_speed**sigma_exp, min=0.005)
+    if grace_s > 0.0:
+        fade = (1.0 - env.command_manager.get_term(command_name).transition_age / grace_s).clamp(0.0, 1.0)
+        denominator = torch.maximum(denominator, fade * grace_floor)
     return torch.exp(-lin_vel_error / denominator)
 
 
@@ -86,13 +91,22 @@ def track_ang_vel_z_exp_scaled(
     sigma_exp: float,
     command_name: str = "base_velocity",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    grace_s: float = 0.0,
+    grace_floor: float = 0.25,
 ) -> torch.Tensor:
-    """Yaw-rate tracking with the same command-scaled kernel. See track_lin_vel_xy_exp_scaled."""
+    """Yaw-rate tracking with the same command-scaled kernel. See track_lin_vel_xy_exp_scaled.
+
+    With grace_s set, both kernels are widened to at least grace_floor right after a switch between
+    standing and moving, fading back over grace_s, so a start or stop may take a step instead of the
+    robot braking hard to match a zero command at once."""
     asset: RigidObject = env.scene[asset_cfg.name]
     command = env.command_manager.get_command(command_name)
     ang_vel_error = torch.square(command[:, 2] - asset.data.root_ang_vel_b.torch[:, 2])
     command_rate = torch.abs(command[:, 2])
     denominator = torch.clamp(std**2 * command_rate**sigma_exp, min=0.005)
+    if grace_s > 0.0:
+        fade = (1.0 - env.command_manager.get_term(command_name).transition_age / grace_s).clamp(0.0, 1.0)
+        denominator = torch.maximum(denominator, fade * grace_floor)
     return torch.exp(-ang_vel_error / denominator)
 
 
@@ -392,6 +406,22 @@ def clock_swing_height(
     error = (target - foot_z).clamp(-max_error, max_error)
     return torch.sum(torch.square(error) * (1 - term.desired_contact), dim=1)
 
+
+
+def foot_landing_velocity(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg, max_speed: float = 3.0
+) -> torch.Tensor:
+    """Squared downward speed of each foot on the step before its first contact, summed over the feet
+    that touched down this step."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    vz = asset.data.body_lin_vel_w.torch[:, asset_cfg.body_ids, 2]
+    prev = getattr(env, "_foot_landing_vz", None)
+    if prev is None or prev.shape != vz.shape:
+        prev = torch.zeros_like(vz)
+    landed = contact_sensor.compute_first_contact(env.step_dt).torch[:, sensor_cfg.body_ids]
+    env._foot_landing_vz = vz.clone()
+    return torch.sum(torch.square((-prev).clamp(0.0, max_speed)) * landed, dim=1)
 
 def base_height_moving(
     env: ManagerBasedRLEnv,

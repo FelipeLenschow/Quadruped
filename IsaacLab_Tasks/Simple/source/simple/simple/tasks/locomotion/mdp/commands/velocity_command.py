@@ -49,6 +49,8 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         super().__init__(cfg, env)
         self._standby = torch.zeros(self.num_envs, device=self.device)
         self._stop = torch.full((self.num_envs,), float("inf"), device=self.device)
+        self._moving = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._switch_time = torch.full((self.num_envs,), -1e9, device=self.device)
 
     @property
     def command(self) -> torch.Tensor:
@@ -64,7 +66,15 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         active = (t >= self._standby) & (t < self._stop)
         return self.vel_command_b * active.unsqueeze(1).float()
 
+    @property
+    def transition_age(self) -> torch.Tensor:
+        """Seconds since the command last switched between standing and moving (stand_threshold)."""
+        return self._env.episode_length_buf * self._env.step_dt - self._switch_time
+
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        ids = slice(None) if env_ids is None else env_ids
+        self._moving[ids] = False
+        self._switch_time[ids] = -1e9
         extras = super().reset(env_ids)
         low, high = self.cfg.standby_duration_range
         if high > 0.0:
@@ -83,6 +93,10 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         )
         self._error_yaw_sum += torch.abs(command[:, 2] - self.robot.data.root_ang_vel_b.torch[:, 2])
         self._step_count += 1.0
+        moving = torch.norm(command, dim=1) >= self.cfg.stand_threshold
+        switched = moving != self._moving
+        self._switch_time = torch.where(switched, self._env.episode_length_buf * self._env.step_dt, self._switch_time)
+        self._moving = moving
 
     def _resample_command(self, env_ids: Sequence[int]):
         super()._resample_command(env_ids)
@@ -93,6 +107,18 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         self._apply_axis_only(ids)
         self._apply_slow(ids)
         self._apply_foot_speed_limit(ids)
+        self._apply_pause(ids)
+
+    def _apply_pause(self, ids: torch.Tensor):
+        """Turn a share of resamples into a short zero-command pause, so the next command is a start
+        from standstill. Otherwise a policy starts about once per episode, after the standby."""
+        if self.cfg.pause_fraction <= 0.0:
+            return
+        pause = ids[torch.rand(ids.numel(), device=self.device) < self.cfg.pause_fraction]
+        if pause.numel() == 0:
+            return
+        self.is_standing_env[pause] = True
+        self.time_left[pause] = torch.empty(pause.numel(), device=self.device).uniform_(*self.cfg.pause_duration_range)
 
     def _apply_foot_speed_limit(self, ids: torch.Tensor):
         """Scale a command down until its fastest stance foot moves at max_foot_speed."""
@@ -187,6 +213,13 @@ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
     stop_time_range: tuple[float, float] = (0.0, 0.0)
     # Hold the slow share off until the level curriculum has widened lin_vel_x to its limit.
     slow_after_full_range: bool = False
+
+    # Command norm below which the robot counts as standing, for transition_age.
+    stand_threshold: float = 0.02
+
+    # Share of resamples that become a zero-command pause lasting pause_duration_range seconds. 0 disables.
+    pause_fraction: float = 0.0
+    pause_duration_range: tuple[float, float] = (0.5, 2.0)
 
     # Cap on the fastest stance foot's speed, turning included (see foot_sweep_speed). 0 disables.
     max_foot_speed: float = 0.0

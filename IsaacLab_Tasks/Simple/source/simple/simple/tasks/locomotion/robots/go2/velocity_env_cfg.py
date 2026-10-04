@@ -1076,6 +1076,17 @@ CLOCK_MAX_SPEED = float(os.environ.get("PAPER_CLOCK_MAX_SPEED", 0.4 if _WALK els
 CLOCK_MAX_YAW = float(os.environ.get("PAPER_CLOCK_MAX_YAW", 1.6 if _WALK else 1.0))
 CLOCK_SWING_HEIGHT = float(os.environ.get("PAPER_CLOCK_SWING_HEIGHT", 0.08))
 CLOCK_INTEGRATE = os.environ.get("PAPER_CLOCK_INTEGRATE", "1") == "1"
+# The real robot tipped toward FL on the first diagonal stance as MuJoCo did with the CoM 4-5 cm forward.
+CLOCK_COM_X = (float(os.environ.get("PAPER_CLOCK_COM_X_LO", -0.06)), float(os.environ.get("PAPER_CLOCK_COM_X_HI", 0.10)))
+CLOCK_COM_Y = float(os.environ.get("PAPER_CLOCK_COM_Y", 0.05))
+# Tracking kernels widened after a stand/move switch, so starting and stopping may take a step.
+CLOCK_GRACE_S = float(os.environ.get("PAPER_CLOCK_GRACE_S", 0.6))
+CLOCK_GRACE_FLOOR = float(os.environ.get("PAPER_CLOCK_GRACE_FLOOR", 0.25))
+# Feet landed at 0.6-1.6 m/s, and FL caught the first diagonal stance's tip at 100-330 N on hardware.
+CLOCK_W_LANDING = float(os.environ.get("PAPER_CLOCK_W_LANDING", -2.0))
+# Starts from standstill: shorter command segments, a share of them zero-command pauses.
+CLOCK_RESAMPLE = (float(os.environ.get("PAPER_CLOCK_RESAMPLE_LO", 4.0)), float(os.environ.get("PAPER_CLOCK_RESAMPLE_HI", 8.0)))
+CLOCK_PAUSE_FRACTION = float(os.environ.get("PAPER_CLOCK_PAUSE_FRACTION", 0.3))
 CLOCK_W_FORCE = float(os.environ.get("PAPER_CLOCK_W_FORCE", 2.0))
 CLOCK_W_VEL = float(os.environ.get("PAPER_CLOCK_W_VEL", 0.5))
 # At -20 the term cost 2% of the tracking reward and feet cleared 2-6 cm of the 8 asked.
@@ -1099,6 +1110,13 @@ def _apply_clock(cfg) -> None:
         integrate_phase=CLOCK_INTEGRATE,
     )
     cfg.commands.base_velocity.max_foot_speed = CLOCK_MAX_SPEED
+    cfg.events.randomize_com.params["com_range"] = {"x": CLOCK_COM_X, "y": (-CLOCK_COM_Y, CLOCK_COM_Y)}
+    cfg.commands.base_velocity.resampling_time_range = CLOCK_RESAMPLE
+    cfg.commands.base_velocity.pause_fraction = CLOCK_PAUSE_FRACTION
+    print(f"[Clock] commands every {CLOCK_RESAMPLE} s, {CLOCK_PAUSE_FRACTION} of them a 0.5-2 s pause; landing speed weight {CLOCK_W_LANDING}")
+    for name in ("track_lin_vel_xy", "track_ang_vel_z"):
+        getattr(cfg.rewards, name).params.update(grace_s=CLOCK_GRACE_S, grace_floor=CLOCK_GRACE_FLOOR)
+    print(f"[Clock] CoM x {CLOCK_COM_X} y +-{CLOCK_COM_Y}, tracking grace {CLOCK_GRACE_S} s (floor {CLOCK_GRACE_FLOOR})")
     limits = cfg.commands.base_velocity.limit_ranges
     limits.lin_vel_x = (-CLOCK_MAX_SPEED, CLOCK_MAX_SPEED)
     limits.lin_vel_y = (max(limits.lin_vel_y[0], -CLOCK_MAX_SPEED), min(limits.lin_vel_y[1], CLOCK_MAX_SPEED))
@@ -1127,6 +1145,11 @@ def _apply_clock(cfg) -> None:
         func=mdp.clock_swing_height,
         weight=CLOCK_W_SWING,
         params={"asset_cfg": feet_asset, "swing_height": CLOCK_SWING_HEIGHT},
+    )
+    r.foot_landing = RewTerm(
+        func=mdp.foot_landing_velocity,
+        weight=CLOCK_W_LANDING,
+        params={"asset_cfg": feet_asset, "sensor_cfg": feet_sensor},
     )
     r.base_height = RewTerm(
         func=mdp.base_height_moving,
