@@ -75,9 +75,10 @@ data class ShellSettings(
 
     companion object {
         val DEFAULT_SHORTCUTS = """
-            tmux = tmux new -A -s robot
+            tmux = tmux new -A -s robot \; set -g mouse on
             container = cd ~/Quadruped && quaddocker
             attach = quadattach
+            disc = fast-discovery-server -i 0 -l 10.42.0.1 -p 11811
             launcher = python3 launcher.py
             real = ros2 launch quadruped_bringup real.launch.py checkpoint:=
             nav = ros2 launch quadruped_bringup nav.launch.py sim:=false
@@ -90,7 +91,8 @@ data class ShellSettings(
                 host = p.getString("ssh_host", d.host)!!,
                 port = p.getInt("ssh_port", d.port),
                 user = p.getString("ssh_user", d.user)!!,
-                shortcuts = p.getString("ssh_shortcuts", d.shortcuts)!!,
+                shortcuts = p.getString("ssh_shortcuts", d.shortcuts)!!
+                    .replace(Regex("(?m)^tmux = tmux new -A -s robot$"), "tmux = tmux new -A -s robot \\\\; set -g mouse on"),
             )
         }
 

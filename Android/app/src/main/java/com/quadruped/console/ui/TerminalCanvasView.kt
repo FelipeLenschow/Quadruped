@@ -17,12 +17,14 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import com.quadruped.console.ssh.SshTerminal
 import com.termux.terminal.KeyHandler
+import com.termux.terminal.TerminalEmulator
 import com.termux.view.TerminalRenderer
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
  * Draws an [SshTerminal] with Termux's renderer and turns the soft keyboard into bytes.
- * Tap: keyboard. Drag: scrollback. Pinch: text size.
+ * Tap: keyboard. Drag: scrollback (tmux's own with mouse on). Pinch: text size.
  */
 @SuppressLint("ViewConstructor")
 class TerminalCanvasView(context: Context) : View(context) {
@@ -82,8 +84,17 @@ class TerminalCanvasView(context: Context) : View(context) {
             val lines = (scrollRemainder / renderer.fontLineSpacing).toInt()
             if (lines != 0) {
                 scrollRemainder -= lines * renderer.fontLineSpacing
-                topRow += lines
-                invalidate()
+                val emu = terminal?.emulator
+                if (emu != null && emu.isMouseTrackingActive) {
+                    // tmux with mouse on: its own history, as wheel steps.
+                    val col = (e2.x / renderer.fontWidth).toInt() + 1
+                    val row = (e2.y / renderer.fontLineSpacing).toInt() + 1
+                    val button = if (lines < 0) TerminalEmulator.MOUSE_WHEELUP_BUTTON else TerminalEmulator.MOUSE_WHEELDOWN_BUTTON
+                    repeat(abs(lines)) { emu.sendMouseEvent(button, col, row, true) }
+                } else {
+                    topRow += lines
+                    invalidate()
+                }
             }
             return true
         }

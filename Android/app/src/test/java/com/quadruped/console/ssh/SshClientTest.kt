@@ -141,4 +141,50 @@ class SshClientTest {
         ui.shutdown()
         ui.awaitTermination(2, TimeUnit.SECONDS)
     }
+
+    /** The tmux row's "+win" and window keys, and a drag sent as wheel steps into tmux's history. */
+    @Test
+    fun tmuxButtonsAndWheelScroll() {
+        val port = System.getenv("SSH_TEST_PORT")?.toIntOrNull()
+        assumeTrue(port != null)
+        val ui = Executors.newSingleThreadExecutor()
+        val term = SshTerminal(
+            SshTarget("127.0.0.1", port!!, System.getProperty("user.name")), null,
+            File(System.getenv("SSH_TEST_KEYS")!!), post = { ui.execute(it) },
+        )
+        fun screen(): String = ui.submit<String> { term.emulator.screen.transcriptText }.get()
+        fun waitFor(what: String, test: (String) -> Boolean): String {
+            val end = System.currentTimeMillis() + 8000
+            while (System.currentTimeMillis() < end) {
+                val s = screen()
+                if (test(s)) return s
+                Thread.sleep(100)
+            }
+            throw AssertionError("$what:\n${screen()}")
+        }
+        try {
+            val end = System.currentTimeMillis() + 8000
+            while (term.state != SshTerminal.State.CONNECTED && System.currentTimeMillis() < end) Thread.sleep(50)
+            ui.submit { term.resize(80, 24, 800, 480) }.get()
+            term.send("tmux -L apptest -f /dev/null new -A -s robot \\; set -g mouse on\r")
+            waitFor("tmux did not start") { it.contains("[robot]") }
+
+            term.send("\u0002c")
+            waitFor("+win made no window 1") { it.contains("1:") }
+            term.send("\u00020")
+            term.send("seq 1 300\r")
+            waitFor("seq did not run") { it.contains("300") }
+            assertTrue(ui.submit<Boolean> { term.emulator.isMouseTrackingActive }.get())
+
+            ui.submit {
+                repeat(20) { term.emulator.sendMouseEvent(TerminalEmulator.MOUSE_WHEELUP_BUTTON, 10, 10, true) }
+            }.get()
+            waitFor("wheel did not scroll tmux") { Regex("""\[\d+/\d+]""").containsMatchIn(it) }
+        } finally {
+            ProcessBuilder("tmux", "-L", "apptest", "kill-server").start().waitFor()
+            term.close()
+            ui.shutdown()
+            ui.awaitTermination(2, TimeUnit.SECONDS)
+        }
+    }
 }

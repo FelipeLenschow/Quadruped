@@ -183,9 +183,8 @@ fun ConsoleApp() {
             if (shell) ShellTab(Modifier.weight(1f).padding(bottom = 8.dp)) else Column(
                 Modifier.weight(1f).verticalScroll(
                     rememberScrollState(),
-                    // Sticks, the 3D view and the map take drags themselves.
-                    enabled = Tab.entries[tab] != Tab.DRIVE && Tab.entries[tab] != Tab.MAP &&
-                        !(Tab.entries[tab] == Tab.ROBOT && status?.mode == "policy"),
+                    // Sticks and the map take drags themselves; the 3D view only inside its box.
+                    enabled = Tab.entries[tab] != Tab.DRIVE && Tab.entries[tab] != Tab.MAP,
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {

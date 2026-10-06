@@ -24,7 +24,9 @@ Android, no bridge on the robot.
   Nav2 without a laptop. The app's ECDSA key lives in its private storage; log in once with the
   password and the app adds the key to `~/.ssh/authorized_keys`. Shortcut chips type common commands
   (editable, no Enter). Start launches inside `tmux new -A -s robot`: a dropped SSH session kills
-  whatever runs outside tmux. Heartbeat and e-stop stay on DDS, independent of the shell.
+  whatever runs outside tmux. The tmux row has one-tap `+win`, windows `0`-`3`, previous/next;
+  the tmux shortcut turns mouse mode on, so a drag scrolls tmux's history. Heartbeat and e-stop
+  stay on DDS, independent of the shell.
 - Map tab: `/map`, `/scan`, `/plan` and the robot (TF map -> base_footprint), RViz-style;
   "Goal" mode sends a drag as `/goal_pose`. These streams are subscribed only while shown,
   best-effort, so they never compete with the heartbeat for retransmits.

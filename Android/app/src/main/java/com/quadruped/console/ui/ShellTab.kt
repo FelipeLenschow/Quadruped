@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -200,35 +200,38 @@ private fun TerminalWithKeys(t: SshTerminal, modifier: Modifier) {
     ExtraKeys(ctrl, onCtrl = { ctrl = !ctrl }, view = view)
 }
 
+/** Two rows that fit the width: tmux in one tap, then the keys a phone keyboard lacks. */
 @Composable
 private fun ExtraKeys(ctrl: Boolean, onCtrl: () -> Unit, view: TerminalCanvasView?) {
     @Composable
-    fun key(label: String, active: Boolean = false, color: Color = Palette.Text, onClick: () -> Unit) =
+    fun RowScope.key(label: String, active: Boolean = false, color: Color = Palette.Text, onClick: () -> Unit) =
         Box(
-            Modifier.clip(RoundedCornerShape(8.dp)).background(if (active) Palette.Accent else Palette.Surface2)
-                .clickable(onClick = onClick).padding(horizontal = 11.dp, vertical = 9.dp),
+            Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(if (active) Palette.Accent else Palette.Surface2)
+                .clickable(onClick = onClick).padding(vertical = 9.dp),
             contentAlignment = Alignment.Center,
-        ) { Text(label, color = if (active) Palette.Bg else color, fontSize = 13.sp, fontFamily = Mono) }
+        ) { Text(label, color = if (active) Palette.Bg else color, fontSize = 13.sp, fontFamily = Mono, maxLines = 1) }
 
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        key("ESC") { view?.sendKey(KeyEvent.KEYCODE_ESCAPE) }
-        key("TAB") { view?.sendKey(KeyEvent.KEYCODE_TAB) }
-        key("CTRL", active = ctrl, onClick = onCtrl)
-        key("^C", color = Palette.Danger) { view?.sendText("\u0003") }
-        key("^B", color = Palette.Accent) { view?.sendText("\u0002") }
-        key("←") { view?.sendKey(KeyEvent.KEYCODE_DPAD_LEFT) }
-        key("↓") { view?.sendKey(KeyEvent.KEYCODE_DPAD_DOWN) }
-        key("↑") { view?.sendKey(KeyEvent.KEYCODE_DPAD_UP) }
-        key("→") { view?.sendKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
-        key("⏎") { view?.sendText("\r") }
-        key("|") { view?.sendText("|") }
-        key("~") { view?.sendText("~") }
-        key("/") { view?.sendText("/") }
-        key("-") { view?.sendText("-") }
-        key("⌨") { view?.showKeyboard() }
-        Spacer(Modifier.width(4.dp))
+    fun tmux(keys: String) = view?.sendText("\u0002$keys")
+
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            key("+win", color = Palette.Accent) { tmux("c") }
+            for (i in 0..3) key("$i", color = Palette.Accent) { tmux("$i") }
+            key("‹", color = Palette.Accent) { tmux("p") }
+            key("›", color = Palette.Accent) { tmux("n") }
+            key("^B", color = Palette.Accent) { view?.sendText("\u0002") }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            key("ESC") { view?.sendKey(KeyEvent.KEYCODE_ESCAPE) }
+            key("TAB") { view?.sendKey(KeyEvent.KEYCODE_TAB) }
+            key("CTRL", active = ctrl, onClick = onCtrl)
+            key("^C", color = Palette.Danger) { view?.sendText("\u0003") }
+            key("←") { view?.sendKey(KeyEvent.KEYCODE_DPAD_LEFT) }
+            key("↑") { view?.sendKey(KeyEvent.KEYCODE_DPAD_UP) }
+            key("↓") { view?.sendKey(KeyEvent.KEYCODE_DPAD_DOWN) }
+            key("→") { view?.sendKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
+            key("⏎") { view?.sendText("\r") }
+            key("⌨") { view?.showKeyboard() }
+        }
     }
 }
