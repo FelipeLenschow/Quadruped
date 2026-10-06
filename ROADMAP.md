@@ -78,7 +78,7 @@ All skills go through `/skill`.
 ## 3D mapping: lidar-inertial odometry
 
 A parallel track, best started after Phase 1, or sooner if the big loop shows the leg odometry drifting.
-A LIO method combines the L1 with an IMU into accurate odometry and a 3D point-cloud map, and four things
+A LIO method combines the L1 with an IMU into accurate odometry and a 3D point-cloud map, and five things
 build on it.
 
 **Options:**
@@ -138,6 +138,11 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
    - Occasionally, a camera frame or a top-down map render as an image, for bigger decisions.
    - Research angle: a small scene graph (objects, positions, how they relate) as the robot's memory,
      which the LLM queries and updates. Related work: ConceptGraphs, Hydra.
+5. **3D map in the app's 3D tab.** The point cloud drawn around the robot model.
+   - **Robot:** a small node keeps one point per 5–10 cm cube of the LIO map and publishes it about
+     once a second on `/map_cloud`. The raw map and scans are too heavy for Wi-Fi next to the heartbeat.
+   - **App:** read `PointCloud2` in the native DDS code, best-effort and only while the tab is open. Draw
+     the points colored by height, placed with the TF from the LIO frame (`camera_init`) to the base.
 
 ## GPU on the robot: ROS with CUDA torch
 

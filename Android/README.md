@@ -9,17 +9,16 @@ Android, no bridge on the robot.
 - `ConsoleCore.kt`: the console logic (heartbeat, safety params, e-stop latch, policy pre-flight).
 - `ConsoleService.kt`: foreground service with wake + low-latency Wi-Fi locks, runs the heartbeat.
   Disconnect or swiping the app away sends the e-stop, like Ctrl-C on the console.
-- Drive tab: two touch sticks publish `geometry_msgs/Twist` on `/cmd_vel/phone` (twist_mux
-  priority 80: above Nav2 and skills, below the F710 and keyboard) at 20 Hz while the
-  "Phone drive" switch is on, zero when centred, so it holds Nav2 off. Off sends one zero and
-  stops, and twist_mux hands back to Nav2 after 0.5 s. E-stop or leaving the app turns it off.
-
-- Robot tab, policy mode: the Go2 URDF drawn with OpenGL ES 3, posed from `/tf` (odom -> base)
+- Drive tab: Pose/Policy switch, then what the mode uses: poses in Pose; in Policy, two touch
+  sticks publish `geometry_msgs/Twist` on `/cmd_vel/phone` (twist_mux priority 80: above Nav2
+  and skills, below the F710 and keyboard) at 20 Hz while the "Phone drive" switch is on, zero
+  when centred, so it holds Nav2 off. Off sends one zero and stops, and twist_mux hands back to
+  Nav2 after 0.5 s. E-stop, leaving Policy or leaving the app turns it off. Robot state and
+  safety reset below.
+- 3D tab: the Go2 URDF drawn with OpenGL ES 3, posed from `/tf` (odom -> base)
   and `/sensors/joint_states`. The URDF and its meshes (decimated, ~1 MB) live in
   `app/src/main/assets/go2/`; regenerate after changing the URDF with
   `unset PYTHONPATH; ~/env_isaacsim/bin/python tools/export_urdf.py`.
-- Robot tab: "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
-  published once a second by `quadruped_drivers/system_monitor`, which the real launch starts.
 - Shell tab: an SSH terminal on the robot (JSch + Termux's xterm emulator), to start the driver and
   Nav2 without a laptop. The app's ECDSA key lives in its private storage; log in once with the
   password and the app adds the key to `~/.ssh/authorized_keys`. Shortcut chips type common commands
@@ -30,6 +29,9 @@ Android, no bridge on the robot.
 - Map tab: `/map`, `/scan`, `/plan` and the robot (TF map -> base_footprint), RViz-style;
   "Goal" mode sends a drag as `/goal_pose`. These streams are subscribed only while shown,
   best-effort, so they never compete with the heartbeat for retransmits.
+- System tab: "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
+  published once a second by `quadruped_drivers/system_monitor`, which the real launch starts;
+  the DDS link, events, safety & gains, and connection settings.
 
 Network settings follow `config.yaml`: domain 42, discovery server `10.42.0.1:11811`
 used when the phone is on that subnet (`auto`), else multicast.
