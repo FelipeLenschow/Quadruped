@@ -12,7 +12,7 @@ import rclpy
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from rclpy.utilities import remove_ros_args
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import Imu, PointCloud2
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from quadruped_perception.lidar_filter import rotation
@@ -70,6 +70,20 @@ def rpy(R):
     return min((r, p, y), alt, key=lambda v: abs(v[0]) + abs(v[2]))
 
 
+def check_imu(up_lidar, accels):
+    """At rest the accelerometer reads +g along up, so extrinsic_R (IMU <- lidar) maps the floor's up to it."""
+    if len(accels) < 10:
+        print("IMU: no /lidar/imu samples")
+        return
+    a = np.mean(accels, axis=0)
+    up_imu = a / np.linalg.norm(a)
+    print(f"IMU: |accel| {np.linalg.norm(a):.2f}, up in IMU frame {np.round(up_imu, 3).tolist()}, "
+          f"up in lidar frame {np.round(up_lidar, 3).tolist()}")
+    for name, R in (("identity", np.eye(3)), ("180 deg yaw", np.diag([-1.0, -1.0, 1.0]))):
+        err = math.degrees(math.acos(np.clip(up_imu @ (R @ up_lidar), -1, 1)))
+        print(f"  extrinsic_R {name}: {err:.1f} deg off")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--clouds", type=int, default=10)
@@ -77,6 +91,7 @@ def main():
     ap.add_argument("--world_frame", default="odom", help="gravity-aligned frame; base assumes the body is level")
     ap.add_argument("--max_range", type=float, default=4.0)
     ap.add_argument("--max_tilt", type=float, default=45.0, help="deg the floor may be off from the current mount")
+    ap.add_argument("--imu", action="store_true", help="also check the lidar IMU's rotation (Point-LIO extrinsic_R)")
     args = ap.parse_args(remove_ros_args()[1:])
 
     rclpy.init()
@@ -84,6 +99,10 @@ def main():
     tf_buffer = Buffer()
     TransformListener(tf_buffer, node)
     clouds = []
+    accels = []
+    if args.imu:
+        node.create_subscription(Imu, "/lidar/imu", lambda m: accels.append(
+            [m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z]), qos_profile_sensor_data)
 
     def keep(msg):
         if len(clouds) < args.clouds:
@@ -134,6 +153,8 @@ def main():
               f"{'left' if up_now[1] > 0 else 'right'} side down {math.degrees(math.asin(abs(up_now[1]))):.1f} deg")
         print(f"  lidar {d:.3f} m above the floor")
         print(f"level mount rpy: [{roll:.4f}, {pitch:.4f}, {yaw:.4f}]")
+        if args.imu:
+            check_imu(n, accels)
     node.destroy_node()
     rclpy.try_shutdown()
 

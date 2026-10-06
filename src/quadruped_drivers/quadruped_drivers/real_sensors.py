@@ -1,11 +1,20 @@
-"""Real Go2 sensors to ROS 2: the L1 lidar cloud from Unitree's DDS, restamped with this machine's clock."""
+"""Real Go2 sensors to ROS 2: the L1 lidar cloud and IMU from Unitree's DDS, on this machine's clock.
+
+Both keep the robot's own stamps, shifted by one offset onto this clock (RobotClock), so Point-LIO sees the
+cloud and IMU on the same timeline.
+"""
 
 import argparse
 import array
 import os
 import sys
 import time
+from collections import deque
+from dataclasses import dataclass
 
+import cyclonedds.idl as idl
+import cyclonedds.idl.annotations as annotate
+import cyclonedds.idl.types as types
 import numpy as np
 import rclpy
 from cyclonedds.core import Policy, Qos
@@ -15,11 +24,13 @@ from cyclonedds.sub import DataReader
 from cyclonedds.topic import Topic
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.time import Time
 from rclpy.utilities import remove_ros_args
-from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs.msg import Imu, PointCloud2, PointField
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher
+from unitree_sdk2py.idl.geometry_msgs.msg.dds_ import Quaternion_, Vector3_
 from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_
-from unitree_sdk2py.idl.std_msgs.msg.dds_ import String_
+from unitree_sdk2py.idl.std_msgs.msg.dds_ import Header_, String_
 
 from quadruped_core.config_loader import load_config
 from quadruped_drivers.sensor_mounts import MOUNTS, publish_static_tf
@@ -27,6 +38,43 @@ from quadruped_drivers.sensor_mounts import MOUNTS, publish_static_tf
 LIDAR_SWITCH_TOPIC = "rt/utlidar/switch"
 STALE_S = 1.0
 MIN_RANGE = 0.05  # the L1's own minimum range; nearer after the range correction is not a real return
+CLOCK_WINDOW_S = 10.0
+
+
+@dataclass
+@annotate.final
+@annotate.autoid("sequential")
+class Imu_(idl.IdlStruct, typename="sensor_msgs.msg.dds_.Imu_"):
+    header: Header_
+    orientation: Quaternion_
+    orientation_covariance: types.array[types.float64, 9]
+    angular_velocity: Vector3_
+    angular_velocity_covariance: types.array[types.float64, 9]
+    linear_acceleration: Vector3_
+    linear_acceleration_covariance: types.array[types.float64, 9]
+
+
+class RobotClock:
+    """Maps the robot's stamps onto this clock: offset = the smallest (arrival - stamp) seen in the last
+    CLOCK_WINDOW_S, i.e. the stamp plus the least transport delay. The window follows slow clock drift."""
+
+    def __init__(self, node):
+        self.node = node
+        self.deltas = deque()
+
+    def stamp(self, header):
+        now = self.node.get_clock().now()
+        robot_ns = header.stamp.sec * 10**9 + header.stamp.nanosec
+        if robot_ns == 0:
+            return now.to_msg()
+        t = now.nanoseconds * 1e-9
+        delta = now.nanoseconds - robot_ns
+        while self.deltas and self.deltas[-1][1] >= delta:
+            self.deltas.pop()
+        self.deltas.append((t, delta))
+        while self.deltas[0][0] < t - CLOCK_WINDOW_S:
+            self.deltas.popleft()
+        return Time(nanoseconds=robot_ns + self.deltas[0][1]).to_msg()
 
 
 class RealSensors(Node):
@@ -34,6 +82,8 @@ class RealSensors(Node):
         super().__init__("real_sensors")
         self.frame = args.frame
         self.cloud_pub = self.create_publisher(PointCloud2, "/lidar/points", 5)
+        self.imu_pub = self.create_publisher(Imu, "/lidar/imu", 200)
+        self.clock = RobotClock(self)
         xyz, rpy = MOUNTS["radar"]
         lidar_cfg = cfg.get("real_lidar") or {}
         mount = (tuple(lidar_cfg.get("xyz", xyz)), tuple(lidar_cfg.get("rpy", rpy)))
@@ -46,6 +96,9 @@ class RealSensors(Node):
         self._participant = participant
         self.reader = DataReader(participant, Topic(participant, args.topic, PointCloud2_),
                                  qos=Qos(Policy.History.KeepLast(1)))
+        self.imu_reader = DataReader(participant, Topic(participant, args.imu_topic, Imu_),
+                                     qos=Qos(Policy.History.KeepLast(100)))
+        self.imu_count = 0
         self.switch = None
         if args.switch_on:
             self.switch = ChannelPublisher(LIDAR_SWITCH_TOPIC, String_)
@@ -55,10 +108,16 @@ class RealSensors(Node):
         self.stale = False
         self.last_switch = 0.0
         self.create_timer(0.02, self._poll)
-        self.get_logger().info(f"{args.topic} -> /lidar/points ({self.frame})")
+        self.imu_frame = args.imu_frame
+        self.started = time.monotonic()
+        self.create_timer(5.0, self._report_imu)
+        self.get_logger().info(f"{args.topic} -> /lidar/points ({self.frame}), {args.imu_topic} -> /lidar/imu")
 
     def _poll(self):
         now = time.monotonic()
+        for m in self.imu_reader.take(N=100):
+            if not isinstance(m, InvalidSample):
+                self._publish_imu(m)
         samples = self.reader.take(1)
         if samples and not isinstance(samples[0], InvalidSample):
             if self.last_cloud is None:
@@ -77,9 +136,32 @@ class RealSensors(Node):
             self.last_switch = now
             self.switch.Write(String_("ON"))
 
+    def _report_imu(self):
+        rate = self.imu_count / 5.0
+        if self.imu_count == 0:
+            self.get_logger().warn("no lidar IMU samples (Point-LIO needs them)", once=True)
+        elif not getattr(self, "_imu_reported", False):
+            self._imu_reported = True
+            self.get_logger().info(f"lidar IMU {rate:.0f} Hz")
+        self.imu_count = 0
+
+    def _publish_imu(self, m):
+        self.imu_count += 1
+        msg = Imu()
+        msg.header.stamp = self.clock.stamp(m.header)
+        msg.header.frame_id = self.imu_frame
+        q, w, a = m.orientation, m.angular_velocity, m.linear_acceleration
+        msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w = q.x, q.y, q.z, q.w
+        msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = w.x, w.y, w.z
+        msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = a.x, a.y, a.z
+        msg.orientation_covariance = list(m.orientation_covariance)
+        msg.angular_velocity_covariance = list(m.angular_velocity_covariance)
+        msg.linear_acceleration_covariance = list(m.linear_acceleration_covariance)
+        self.imu_pub.publish(msg)
+
     def _publish(self, m):
         msg = PointCloud2()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = self.clock.stamp(m.header)
         msg.header.frame_id = self.frame
         msg.height, msg.width = m.height, m.width
         msg.fields = [PointField(name=f.name, offset=f.offset, datatype=f.datatype, count=f.count) for f in m.fields]
@@ -112,6 +194,8 @@ def main():
     ap.add_argument("--interface", default=None)
     ap.add_argument("--topic", default="rt/utlidar/cloud")
     ap.add_argument("--frame", default="radar", help="frame the cloud is published in")
+    ap.add_argument("--imu_topic", default="rt/utlidar/imu")
+    ap.add_argument("--imu_frame", default="radar_imu")
     ap.add_argument("--base_frame", default="base")
     ap.add_argument("--no_switch_on", dest="switch_on", action="store_false", help="don't turn the lidar on")
     args = ap.parse_args(remove_ros_args()[1:])

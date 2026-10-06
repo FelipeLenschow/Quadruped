@@ -56,6 +56,15 @@ RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=fa
     ros-humble-pointcloud-to-laserscan \
     && rm -rf /var/lib/apt/lists/*
 
+# 3.7 Point-LIO (third_party/point_lio_ros2): PCL and Eigen for the C++ build
+RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false && \
+    apt-get install -y \
+    ros-humble-pcl-ros \
+    ros-humble-pcl-conversions \
+    libeigen3-dev \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # 4. Create a workspace
 WORKDIR /app
 

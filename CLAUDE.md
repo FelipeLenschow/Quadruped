@@ -73,6 +73,7 @@ In Docker run colcon as `python3 -m colcon ...` from the venv, so node scripts g
   - `quadruped_description`: MuJoCo menagerie, Gazebo worlds (`scene`: flat, `nav`: walls, obstacles, 4 cones; `scripts/sdf_to_map.py` makes its Nav2 map), Go2/Go1/A1 models (the Go2 carries an L1-style lidar and a front camera), kinematics yaml, bundled policies.
   - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`, `twist_mux.yaml`, `nav2.yaml`, `slam.yaml`).
   - `unitree_sdk2py`: wraps the `third_party/unitree_sdk2_python` submodule.
+  - `point_lio`: symlink to the `third_party/point_lio_ros2` submodule (Point-LIO, C++), config `point_lio_go2.yaml`.
 - `Android/`: phone app replacing the console, a native Fast DDS participant (no bridge). See `Android/README.md`.
 - `IsaacSim/isaac_driver.py`: stays outside the packages (Isaac Sim's Python 3.12); imports `quadruped_core` from `src/`.
 
