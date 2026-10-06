@@ -51,6 +51,8 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         self._stop = torch.full((self.num_envs,), float("inf"), device=self.device)
         self._moving = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._switch_time = torch.full((self.num_envs,), -1e9, device=self.device)
+        self.commanded_path = torch.zeros(self.num_envs, device=self.device)
+        self.tracked_path = torch.zeros(self.num_envs, device=self.device)
 
     @property
     def command(self) -> torch.Tensor:
@@ -75,6 +77,8 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         ids = slice(None) if env_ids is None else env_ids
         self._moving[ids] = False
         self._switch_time[ids] = -1e9
+        self.commanded_path[ids] = 0.0
+        self.tracked_path[ids] = 0.0
         extras = super().reset(env_ids)
         low, high = self.cfg.standby_duration_range
         if high > 0.0:
@@ -97,6 +101,10 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         switched = moving != self._moving
         self._switch_time = torch.where(switched, self._env.episode_length_buf * self._env.step_dt, self._switch_time)
         self._moving = moving
+        speed = torch.linalg.norm(command[:, :2], dim=-1)
+        along = torch.sum(self.robot.data.root_lin_vel_b.torch[:, :2] * command[:, :2], dim=-1) / speed.clamp(min=1e-6)
+        self.commanded_path += speed * self._env.step_dt
+        self.tracked_path += torch.minimum(along.clamp(min=0.0), speed) * self._env.step_dt
 
     def _resample_command(self, env_ids: Sequence[int]):
         super()._resample_command(env_ids)

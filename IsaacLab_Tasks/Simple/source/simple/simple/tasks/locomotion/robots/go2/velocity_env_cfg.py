@@ -1181,6 +1181,91 @@ class RobotClockPlayEnvCfg(RobotClockEnvCfg):
         _apply_play_overrides(self)
 
 
+# ── Clock Rough ────────────────────────────────────────────────────────────────────────────
+# Clock on terrain tall enough to catch a swinging foot, so the blind actor learns to lift higher
+# after a trip. Swing height is measured from where each foot last stood and overshooting it is cheap;
+# stumbling into a vertical face and shin or thigh hits are penalized. The critic gets the height scan.
+ROUGH_CLOCK_NOISE = float(os.environ.get("PAPER_ROUGH_CLOCK_NOISE", 0.04))
+ROUGH_CLOCK_BOX = (float(os.environ.get("PAPER_ROUGH_CLOCK_BOX_LO", 0.02)), float(os.environ.get("PAPER_ROUGH_CLOCK_BOX_HI", 0.10)))
+ROUGH_CLOCK_STEP = (float(os.environ.get("PAPER_ROUGH_CLOCK_STEP_LO", 0.03)), float(os.environ.get("PAPER_ROUGH_CLOCK_STEP_HI", 0.12)))
+ROUGH_CLOCK_ABOVE_SCALE = float(os.environ.get("PAPER_ROUGH_CLOCK_ABOVE_SCALE", 0.1))
+ROUGH_CLOCK_W_STUMBLE = float(os.environ.get("PAPER_ROUGH_CLOCK_W_STUMBLE", -2.0))
+ROUGH_CLOCK_W_CONTACTS = float(os.environ.get("PAPER_ROUGH_CLOCK_W_CONTACTS", -2.0))
+
+
+def _apply_clock_rough(cfg) -> None:
+    cfg.scene.terrain.terrain_generator = cfg.scene.terrain.terrain_generator.replace(
+        sub_terrains={
+            "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
+            "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
+                proportion=0.3, noise_range=(0.0, ROUGH_CLOCK_NOISE), noise_step=0.005, border_width=0.25
+            ),
+            "boxes": terrain_gen.MeshRandomGridTerrainCfg(
+                proportion=0.3, grid_width=0.45, grid_height_range=ROUGH_CLOCK_BOX, platform_width=2.0
+            ),
+            "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
+                proportion=0.15, step_height_range=ROUGH_CLOCK_STEP, step_width=0.3,
+                platform_width=3.0, border_width=1.0, holes=False,
+            ),
+            "pyramid_stairs_inv": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
+                proportion=0.15, step_height_range=ROUGH_CLOCK_STEP, step_width=0.3,
+                platform_width=3.0, border_width=1.0, holes=False,
+            ),
+        }
+    )
+    feet_sensor = SceneEntityCfg("contact_forces", body_names=CLOCK_FEET, preserve_order=True)
+    r = cfg.rewards
+    r.clock_swing_height.params.update(sensor_cfg=feet_sensor, above_scale=ROUGH_CLOCK_ABOVE_SCALE)
+    r.feet_stumble = RewTerm(
+        func=mdp.feet_stumble, weight=ROUGH_CLOCK_W_STUMBLE, params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=CLOCK_FEET)}
+    )
+    r.undesired_contacts.weight = ROUGH_CLOCK_W_CONTACTS
+    cfg.terminations.physics_blowup = DoneTerm(func=mdp.physics_blowup)
+    cfg.curriculum.terrain_levels = CurrTerm(func=mdp.terrain_levels_tracking)
+    cfg.observations.critic.height_scan = ObsTerm(
+        func=mdp.height_scan, params={"sensor_cfg": SceneEntityCfg("height_scanner")}, clip=(-1.0, 1.0)
+    )
+    print(
+        f"[ClockRough] noise 0-{ROUGH_CLOCK_NOISE} m, boxes {ROUGH_CLOCK_BOX} m, steps {ROUGH_CLOCK_STEP} m;"
+        f" swing above-target scale {ROUGH_CLOCK_ABOVE_SCALE}, stumble {ROUGH_CLOCK_W_STUMBLE},"
+        f" body contacts {ROUGH_CLOCK_W_CONTACTS}, critic height scan"
+    )
+
+
+@configclass
+class RobotClockRoughEnvCfg(RobotClockEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_clock_rough(self)
+
+
+# Env 0, the one the video camera follows, always gets the first terrain type, so play keeps one type.
+# The slopes are not in training; they are here to see how the policy copes with them.
+PLAY_ROUGH_TERRAIN = os.environ.get("PLAY_ROUGH_TERRAIN", "boxes")
+PLAY_ROUGH_DIFFICULTY = (float(os.environ.get("PLAY_ROUGH_DIFFICULTY_LO", 0.6)), float(os.environ.get("PLAY_ROUGH_DIFFICULTY_HI", 1.0)))
+
+
+@configclass
+class RobotClockRoughPlayEnvCfg(RobotClockRoughEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_play_overrides(self)
+        gen = self.scene.terrain.terrain_generator
+        extra = {
+            "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
+                proportion=1.0, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+            ),
+            "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
+                proportion=1.0, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
+            ),
+        }
+        terrain = {**gen.sub_terrains, **extra}[PLAY_ROUGH_TERRAIN].replace(proportion=1.0)
+        self.scene.terrain.terrain_generator = gen.replace(
+            sub_terrains={PLAY_ROUGH_TERRAIN: terrain}, difficulty_range=PLAY_ROUGH_DIFFICULTY
+        )
+        print(f"[ClockRough] play on {PLAY_ROUGH_TERRAIN}, difficulty {PLAY_ROUGH_DIFFICULTY}")
+
+
 # ── Gallop ─────────────────────────────────────────────────────────────────────────────────
 # Clock with a cheetah's rotary gallop taken from a video, as a gait phase: touchdowns RH, LH, LF,
 # RF at 0, 0.12, 0.48, 0.6 of the stride, duty 0.12 / 0.16 / 0.2 / 0.2 (FL, FR, RL, RR). Frequency

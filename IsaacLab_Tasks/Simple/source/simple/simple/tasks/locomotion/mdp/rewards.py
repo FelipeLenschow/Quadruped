@@ -394,18 +394,31 @@ def clock_swing_height(
     foot_radius: float = 0.02,
     max_error: float = 0.1,
     command_name: str = "clock",
+    sensor_cfg: SceneEntityCfg | None = None,
+    above_scale: float = 1.0,
 ) -> torch.Tensor:
     """Squared error to a sin^2 swing profile, zero vertical speed at lift-off and touchdown, peaking at
-    swing_height mid-swing, above the env origin. Clipped to max_error so a fallen robot is not paid to
-    end the episode."""
+    swing_height mid-swing. Clipped to max_error so a fallen robot is not paid to end the episode.
+    Measured above the env origin, or with sensor_cfg above where each foot last stood. Feet above the
+    profile cost above_scale times as much, so below 1 a foot may lift higher over an obstacle."""
     asset: Articulation = env.scene[asset_cfg.name]
     term = env.command_manager.get_term(command_name)
     swing = torch.square(torch.sin(math.pi * torch.clip(term.foot_phase * 2.0 - 1.0, 0.0, 1.0)))
     target = swing_height * swing + foot_radius
-    foot_z = asset.data.body_pos_w.torch[:, asset_cfg.body_ids, 2] - env.scene.env_origins[:, 2].unsqueeze(1)
-    error = (target - foot_z).clamp(-max_error, max_error)
+    foot_z = asset.data.body_pos_w.torch[:, asset_cfg.body_ids, 2]
+    ground = env.scene.env_origins[:, 2].unsqueeze(1).expand_as(foot_z)
+    if sensor_cfg is not None:
+        stood = getattr(env, "_foot_ground_z", None)
+        if stood is None or stood.shape != foot_z.shape:
+            stood = ground.clone()
+        stood = torch.where((env.episode_length_buf <= 1).unsqueeze(1), ground, stood)
+        forces = env.scene.sensors[sensor_cfg.name].data.net_forces_w.torch[:, sensor_cfg.body_ids]
+        stood = torch.where(torch.norm(forces, dim=-1) > 1.0, foot_z - foot_radius, stood)
+        env._foot_ground_z = stood
+        ground = stood
+    error = (target - (foot_z - ground)).clamp(-max_error, max_error)
+    error = torch.where(error < 0, error * math.sqrt(above_scale), error)
     return torch.sum(torch.square(error) * (1 - term.desired_contact), dim=1)
-
 
 
 def foot_landing_velocity(

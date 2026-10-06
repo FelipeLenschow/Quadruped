@@ -104,3 +104,31 @@ def lin_vel_x_max_levels(
             ranges.lin_vel_x = (ranges.lin_vel_x[0], min(ranges.lin_vel_x[1] + step, limit))
 
     return torch.tensor(ranges.lin_vel_x[1], device=env.device)
+
+
+def terrain_levels_tracking(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    command_name: str = "base_velocity",
+    up: float = 0.6,
+    down: float = 0.35,
+    min_path: float = 0.5,
+    after_full_speed: bool = True,
+) -> torch.Tensor:
+    """Terrain levels from the share of the commanded path the robot covered, for commands that change
+    direction and pause mid-episode, where net distance from the origin says little. Up above `up`, down
+    below `down` or on a fall; episodes commanded less than min_path stay put unless they fell. With
+    after_full_speed nothing moves up until the speed curriculum has opened the full range, so harder
+    terrain does not hold tracking under its bar."""
+    term = env.command_manager.get_term(command_name)
+    commanded = term.commanded_path[env_ids]
+    ratio = term.tracked_path[env_ids] / commanded.clamp(min=1e-6)
+    fell = env.termination_manager.terminated[env_ids]
+    enough = commanded > min_path
+    move_up = enough & (ratio > up) & ~fell
+    if after_full_speed and term.cfg.ranges.lin_vel_x[1] < term.cfg.limit_ranges.lin_vel_x[1] - 1e-6:
+        move_up[:] = False
+    move_down = fell | (enough & (ratio < down))
+    terrain = env.scene.terrain
+    terrain.update_env_origins(env_ids, move_up, move_down)
+    return torch.mean(terrain.terrain_levels.float())

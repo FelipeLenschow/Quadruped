@@ -30,6 +30,10 @@ def load_checkpoint(runner, path):
     import torch
 
     data = torch.load(path, weights_only=False, map_location="cpu")
+    if "actor_state_dict" in data and _widen_inputs(runner, data):
+        runner.alg.load(data, {"actor": True, "critic": True}, True)
+        print("[rsl_rl] Inputs appended since this checkpoint start at zero weight; optimizer state not restored.")
+        return
     if "actor_state_dict" in data or "model_state_dict" not in data:
         runner.load(path)
         return
@@ -44,6 +48,28 @@ def load_checkpoint(runner, path):
     runner.alg.load({"actor_state_dict": actor, "critic_state_dict": critic}, {"actor": True, "critic": True}, True)
     runner.current_learning_iteration = data["iter"]
     print(f"[rsl_rl] Loaded legacy checkpoint (iteration {data['iter']}); optimizer state not restored.")
+
+
+def _widen_inputs(runner, data) -> bool:
+    """Zero-pad first-layer weights of a checkpoint whose actor or critic had fewer inputs, for observation
+    terms appended since (the Clock-Rough critic's height scan). Returns whether anything was padded."""
+    import torch
+
+    widened = False
+    for key, model in (("actor_state_dict", runner.alg._raw_actor), ("critic_state_dict", runner.alg._raw_critic)):
+        target = model.state_dict()
+        for name, value in data[key].items():
+            want = target.get(name)
+            if want is None or want.shape == value.shape:
+                continue
+            if value.dim() != 2 or value.shape[0] != want.shape[0] or value.shape[1] > want.shape[1]:
+                raise RuntimeError(f"{key}.{name}: checkpoint {tuple(value.shape)} cannot widen to {tuple(want.shape)}")
+            padded = torch.zeros(want.shape, dtype=value.dtype)
+            padded[:, : value.shape[1]] = value
+            data[key][name] = padded
+            widened = True
+            print(f"[rsl_rl] {key}.{name}: {value.shape[1]} -> {want.shape[1]} inputs")
+    return widened
 
 
 def runner_cfg_for_installed_rsl_rl(agent_cfg) -> dict:

@@ -19,7 +19,7 @@ sys.path.pop(0)
 
 tasks = []
 for task_spec in gym.registry.values():
-    if "Unitree" in task_spec.id and "Isaac" not in task_spec.id:
+    if str(task_spec.kwargs.get("rsl_rl_cfg_entry_point", "")).startswith("simple."):
         tasks.append(task_spec.id)
 
 import argparse
@@ -30,6 +30,7 @@ from isaaclab.app import AppLauncher
 
 # local imports
 import cli_args  # isort: skip
+from nan_guard import install_nan_guard  # isort: skip
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
@@ -217,6 +218,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    install_nan_guard(env)
 
     # create runner from rsl-rl
     agent_cfg = cli_args.migrate_rsl_rl_cfg(agent_cfg)
