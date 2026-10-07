@@ -54,12 +54,12 @@
             gravity_align: true
             gravity: [0.0, 0.0, -9.810]
             gravity_init: [0.0, 0.0, -9.810]
-            # IMU to lidar. Identity is the standalone L1's; CMU's Go2 stack implies a 180 deg yaw
-            # ([-1,0,0, 0,-1,0, 0,0,1]). lidar_level --imu tells which one this robot has.
+            # Lidar -> IMU, from lidar_imu_calib (gyro fit to the body IMU, 0.039 rad/s RMS): about identity,
+            # as in Unitree's standalone L1 config.
             extrinsic_T: [0.007698, 0.014655, -0.00667]
-            extrinsic_R: [1.0, 0.0, 0.0,
-                          0.0, 1.0, 0.0,
-                          0.0, 0.0, 1.0]
+            extrinsic_R: [0.9992, -0.0396, -0.0033,
+                          0.0396,  0.9992,  0.0070,
+                          0.0031, -0.0071,  1.0000]
 
         odometry:
             publish_odometry_without_downsample: true

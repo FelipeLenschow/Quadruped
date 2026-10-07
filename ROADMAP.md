@@ -105,9 +105,13 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
 **Prerequisites:**
 - [x] **Matching timestamps.** `real_sensors` keeps the robot's stamps on cloud and IMU, shifted by one offset.
 - [x] **IMU rate:** 250 Hz, `imu_time_inte: 0.004`.
-- [ ] **IMU rotation.** `ros2 run quadruped_perception lidar_imu_calib` fits the lidar IMU's gyro to the body
+- [x] **IMU rotation.** `ros2 run quadruped_perception lidar_imu_calib` fits the lidar IMU's gyro to the body
       IMU's while the robot turns and walks, and prints `extrinsic_R`. The first try (mount rotation without
-      tilt) made forward walking drift sideways and diverge.
+      tilt) made forward walking drift sideways and diverge. Measured: the gyro is in the cloud's axes
+      (identity, 2 deg).
+- [ ] **Accelerometer axes.** The L1 reports its accelerometer in other axes than its gyro (still, its "up" was
+      149 deg from the floor's), which turned Point-LIO's map upside down and made it drift standing still.
+      `lidar_imu_calib` now also fits the accelerometer and prints `real_lidar.imu_acc_R` for `real_sensors`.
 - [ ] **Per-point times.** Check that the cloud's `time` field holds each point's time within the scan;
       it's what undoes the smear while walking.
 - [ ] **Raw scans.** Unitree's clouds carry about 59k points/s against the L1's 21.6k, so they overlap or are

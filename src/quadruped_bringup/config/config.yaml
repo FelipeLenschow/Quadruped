@@ -58,6 +58,11 @@ real_lidar:
   # The L1 reports every range this much too long (m); real_sensors pulls each point back along its ray.
   # Fitted to a wall at a tape-measured 1.60 m and the floor under the standing robot's feet (leg FK).
   range_offset: 0.12
+  # The L1 reports its accelerometer in other axes than its gyro; this maps it into the gyro's (row-major),
+  # since Point-LIO needs both in one frame. From lidar_imu_calib.
+  imu_acc_R: [1.0, 0.0, 0.0,
+              0.0, 1.0, 0.0,
+              0.0, 0.0, 1.0]
 
 # --- Motor Physical Parameters ---
 motor:

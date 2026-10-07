@@ -88,6 +88,7 @@ class RealSensors(Node):
         lidar_cfg = cfg.get("real_lidar") or {}
         mount = (tuple(lidar_cfg.get("xyz", xyz)), tuple(lidar_cfg.get("rpy", rpy)))
         self.range_offset = float(lidar_cfg.get("range_offset", 0.0))
+        self.acc_R = np.array(lidar_cfg.get("imu_acc_R", np.eye(3).ravel().tolist()), float).reshape(3, 3)
         self.tf = publish_static_tf(self, args.base_frame, {"radar": mount})
         self.get_logger().info(f"lidar mount xyz {list(mount[0])} rpy {list(mount[1])}, "
                                f"range offset {self.range_offset:.3f} m")
@@ -153,7 +154,8 @@ class RealSensors(Node):
         q, w, a = m.orientation, m.angular_velocity, m.linear_acceleration
         msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w = q.x, q.y, q.z, q.w
         msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = w.x, w.y, w.z
-        msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = a.x, a.y, a.z
+        ax, ay, az = self.acc_R @ (a.x, a.y, a.z)
+        msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = ax, ay, az
         msg.orientation_covariance = list(m.orientation_covariance)
         msg.angular_velocity_covariance = list(m.angular_velocity_covariance)
         msg.linear_acceleration_covariance = list(m.linear_acceleration_covariance)
