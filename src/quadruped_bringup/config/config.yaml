@@ -61,7 +61,8 @@ real_lidar:
   # On this firmware only the L1 IMU's gyro is real (it matches the body IMU to 0.044 rad/s). Its acceleration
   # keeps z at ~9.8 and y at ~0 whatever the pose, while x climbs ~0.6 m/s^2 per second (lying, nose up 90 deg
   # and on its side: x 4.1, 10.3, 16.3), and its orientation turned 28 deg for a 90 deg tilt. So /lidar/imu
-  # carries zero acceleration and Point-LIO runs on the gyro alone, as CMU's Go2 stack does.
+  # carries zero acceleration, its gyro turned into the body's axes, and Point-LIO runs on the gyro alone,
+  # as CMU's Go2 stack does. point_lio_go2.yaml's extrinsic repeats xyz and rpy: change both together.
   imu_accel: false
 
 # --- Motor Physical Parameters ---

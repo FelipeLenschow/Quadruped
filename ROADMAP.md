@@ -114,7 +114,7 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
       tilt. Same pattern reported in autonomy_stack_go2 issue #27 (old firmware: usable, in the cloud's axes). It
       turned Point-LIO's map upside down and made it drift standing still. Like CMU's Go2 stack, `/lidar/imu`
       now carries zero acceleration and Point-LIO runs gyro-only without gravity
-      (`real_lidar.imu_accel: false`); `lio_world → lio_odom` shows its map upright.
+      (`real_lidar.imu_accel: false`). `real_sensors` turns the gyro into the body's axes, so Point-LIO's world starts upright with x forward (`lio_odom`), and its extrinsic is the lidar mount.
 - [ ] **Per-point times.** Check that the cloud's `time` field holds each point's time within the scan;
       it's what undoes the smear while walking.
 - [ ] **Raw scans.** Unitree's clouds carry about 59k points/s against the L1's 21.6k, so they overlap or are

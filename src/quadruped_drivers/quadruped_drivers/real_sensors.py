@@ -33,7 +33,7 @@ from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_
 from unitree_sdk2py.idl.std_msgs.msg.dds_ import Header_, String_
 
 from quadruped_core.config_loader import load_config
-from quadruped_drivers.sensor_mounts import MOUNTS, publish_static_tf, transform
+from quadruped_drivers.sensor_mounts import MOUNTS, matrix, publish_static_tf
 
 LIDAR_SWITCH_TOPIC = "rt/utlidar/switch"
 STALE_S = 1.0
@@ -89,9 +89,9 @@ class RealSensors(Node):
         mount = (tuple(lidar_cfg.get("xyz", xyz)), tuple(lidar_cfg.get("rpy", rpy)))
         self.range_offset = float(lidar_cfg.get("range_offset", 0.0))
         self.imu_accel = bool(lidar_cfg.get("imu_accel", False))
-        # Point-LIO's world is the lidar's axes at its start; lio_world puts it upright for viewing.
-        self.tf = publish_static_tf(self, args.base_frame, {"radar": mount},
-                                    [transform("lio_world", "lio_odom", *mount)])
+        self.tf = publish_static_tf(self, args.base_frame, {"radar": mount})
+        # The L1's gyro reads in the cloud's axes; turned into the body's, Point-LIO's world starts upright.
+        self.gyro_R = np.array(matrix(*mount[1]))
         self.get_logger().info(f"lidar mount xyz {list(mount[0])} rpy {list(mount[1])}, "
                                f"range offset {self.range_offset:.3f} m")
 
@@ -111,7 +111,7 @@ class RealSensors(Node):
         self.stale = False
         self.last_switch = 0.0
         self.create_timer(0.02, self._poll)
-        self.imu_frame = args.imu_frame
+        self.imu_frame = args.base_frame
         self.started = time.monotonic()
         self.create_timer(5.0, self._report_imu)
         self.get_logger().info(f"{args.topic} -> /lidar/points ({self.frame}), {args.imu_topic} -> /lidar/imu")
@@ -153,14 +153,12 @@ class RealSensors(Node):
         msg = Imu()
         msg.header.stamp = self.clock.stamp(m.header)
         msg.header.frame_id = self.imu_frame
-        q, w, a = m.orientation, m.angular_velocity, m.linear_acceleration
-        msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w = q.x, q.y, q.z, q.w
-        msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = w.x, w.y, w.z
+        w, a = m.angular_velocity, m.linear_acceleration
+        msg.orientation_covariance[0] = -1.0
+        msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = self.gyro_R @ (w.x, w.y, w.z)
         if self.imu_accel:
-            msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = a.x, a.y, a.z
-        msg.orientation_covariance = list(m.orientation_covariance)
-        msg.angular_velocity_covariance = list(m.angular_velocity_covariance)
-        msg.linear_acceleration_covariance = list(m.linear_acceleration_covariance)
+            ax, ay, az = self.gyro_R @ (a.x, a.y, a.z)
+            msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = ax, ay, az
         self.imu_pub.publish(msg)
 
     def _publish(self, m):
@@ -199,7 +197,6 @@ def main():
     ap.add_argument("--topic", default="rt/utlidar/cloud")
     ap.add_argument("--frame", default="radar", help="frame the cloud is published in")
     ap.add_argument("--imu_topic", default="rt/utlidar/imu")
-    ap.add_argument("--imu_frame", default="radar_imu")
     ap.add_argument("--base_frame", default="base")
     ap.add_argument("--no_switch_on", dest="switch_on", action="store_false", help="don't turn the lidar on")
     args = ap.parse_args(remove_ros_args()[1:])

@@ -30,13 +30,21 @@ def transform(parent, child, xyz, rpy):
     return t
 
 
-def publish_static_tf(node, base_frame, mounts=None, extra=()):
-    """Returns the broadcaster; keep it alive with the node. extra: more TransformStamped, sent in the same
-    message (a second sendTransform would replace the first for late subscribers)."""
+def matrix(roll, pitch, yaw):
+    """Rotation matrix (rows) for roll, pitch, yaw: Rz(yaw) Ry(pitch) Rx(roll), as the TF above."""
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return [[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr]]
+
+
+def publish_static_tf(node, base_frame, mounts=None):
+    """Returns the broadcaster; keep it alive with the node."""
     mounts = {**MOUNTS, **(mounts or {})}
     transforms = [transform(base_frame, child, xyz, rpy) for child, (xyz, rpy) in mounts.items()]
     transforms.append(transform("front_camera", OPTICAL_FRAME, (0.0, 0.0, 0.0), (-math.pi / 2, 0.0, -math.pi / 2)))
-    transforms += list(extra)
     broadcaster = StaticTransformBroadcaster(node)
     broadcaster.sendTransform(transforms)
     return broadcaster

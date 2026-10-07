@@ -51,17 +51,17 @@
             match_s: 81.0
             fov_degree: 180.0
             det_range: 100.0
-            # Gyro only (config.yaml real_lidar.imu_accel: false): no gravity, so the world is the lidar's
-            # axes at start. real_sensors publishes lio_world -> lio_odom to show it upright.
+            # Gyro only (config.yaml real_lidar.imu_accel: false): no gravity, so the world is the IMU's axes
+            # at start. real_sensors turns the gyro into the body's axes, so that is the body: upright, x forward.
             gravity_align: false
             gravity: [0.0, 0.0, 0.0]
             gravity_init: [0.0, 0.0, 0.0]
-            # Lidar -> IMU, from lidar_imu_calib (gyro fit to the body IMU, 0.039 rad/s RMS): about identity,
-            # as in Unitree's standalone L1 config.
-            extrinsic_T: [0.007698, 0.014655, -0.00667]
-            extrinsic_R: [0.9992, -0.0396, -0.0033,
-                          0.0396,  0.9992,  0.0070,
-                          0.0031, -0.0071,  1.0000]
+            # Lidar -> IMU: the IMU is in the body's axes, so this is config.yaml's real_lidar mount
+            # (xyz, rpy [0.2171, 3.268, 2.0766]). Update both together; lidar_imu_calib prints it from the gyro too.
+            extrinsic_T: [0.28945, 0.0, -0.046825]
+            extrinsic_R: [ 0.4806, -0.8411,  0.2481,
+                          -0.8678, -0.4969, -0.0033,
+                           0.1261, -0.2137, -0.9687]
 
         odometry:
             publish_odometry_without_downsample: true
