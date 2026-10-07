@@ -490,3 +490,32 @@ def sprint_speed(
     vel = quat_apply_inverse(yaw_quat(asset.data.root_quat_w.torch), asset.data.root_lin_vel_w.torch)
     run = env.command_manager.get_command(command_name)[:, 0] > 0.0
     return torch.where(run, vel[:, 0].clamp(-1.0, max_speed), -torch.norm(vel[:, :2], dim=1))
+
+
+
+def base_height_l2_ground(
+    env: ManagerBasedRLEnv,
+    target_height: float,
+    sensor_cfg: SceneEntityCfg,
+    max_error: float = 0.3,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Squared base height error above the mean of the scan rays that hit, clipped to max_error."""
+    hits = env.scene.sensors[sensor_cfg.name].data.ray_hits_w.torch[..., 2]
+    ground = torch.where(torch.isfinite(hits), hits, torch.nan).nanmean(dim=1).nan_to_num(0.0)
+    error = env.scene[asset_cfg.name].data.root_pos_w.torch[:, 2] - ground - target_height
+    return torch.square(error.clamp(-max_error, max_error))
+
+
+def joint_vel_over(
+    env: ManagerBasedRLEnv, limit: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Sum of squared joint speed above limit."""
+    speed = env.scene[asset_cfg.name].data.joint_vel.torch[:, asset_cfg.joint_ids].abs()
+    return torch.sum(torch.square((speed - limit).clamp(min=0.0)), dim=1)
+
+def phase_gated(env: ManagerBasedRLEnv, term, getup_s: float, getup: bool, term_params: dict) -> torch.Tensor:
+    """term(env, **term_params), kept only during the first getup_s of the episode (getup) or after it."""
+    value = term(env, **term_params)
+    during = env.episode_length_buf * env.step_dt < getup_s
+    return value * (during if getup else ~during)

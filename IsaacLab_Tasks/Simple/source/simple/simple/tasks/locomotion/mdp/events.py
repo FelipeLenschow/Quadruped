@@ -50,7 +50,8 @@ def reset_start_pose(
     env_ids: torch.Tensor,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     lying_fraction: float = 0.0,
-    lying_joint_pos: dict[str, float] | None = None,
+    lying_joint_pos: dict[str, float] | list[dict[str, float]] | None = None,
+    lying_blend: bool = False,
     lying_height: float = 0.16,
     drop_fraction: float = 0.0,
     drop_height_range: tuple[float, float] = (0.1, 0.3),
@@ -59,6 +60,8 @@ def reset_start_pose(
     xy_range: float = 0.5,
 ) -> None:
     """Start a share of episodes lying on folded legs, and a share dropped from above standing height.
+    lying_joint_pos may be a list of poses; each lying start picks one, and with lying_blend lands a random
+    share of the way from the first pose to it.
 
     Runs after reset_base / reset_robot_joints and overwrites only the environments it picks, so
     the rest keep the nominal start. Root pose is rebuilt here from the default rather than read
@@ -98,11 +101,21 @@ def reset_start_pose(
     asset.write_root_velocity_to_sim_index(root_velocity=torch.zeros(k, 6, device=device), env_ids=ids)
 
     joint_pos = asset.data.default_joint_pos.torch[ids].clone()
-    if lying_joint_pos:
-        lying_row = joint_pos[0].clone()
-        for pattern, value in lying_joint_pos.items():
-            lying_row[asset.find_joints(pattern)[0]] = value
-        joint_pos[lying] = lying_row
+    if lying_joint_pos and bool(lying.any()):
+        poses = lying_joint_pos if isinstance(lying_joint_pos, (list, tuple)) else [lying_joint_pos]
+        rows = []
+        for pose in poses:
+            row = joint_pos[0].clone()
+            for pattern, value in pose.items():
+                row[asset.find_joints(pattern)[0]] = value
+            rows.append(row)
+        rows = torch.stack(rows)
+        pick = torch.randint(len(rows), (int(lying.sum()),), device=device)
+        lying_pos = rows[pick]
+        if lying_blend:
+            blend = torch.rand(len(pick), 1, device=device)
+            lying_pos = rows[0] + blend * (lying_pos - rows[0])
+        joint_pos[lying] = lying_pos
     joint_pos += math_utils.sample_uniform(-joint_noise, joint_noise, joint_pos.shape, device)
     limits = asset.data.soft_joint_pos_limits.torch[ids]
     joint_pos = joint_pos.clamp(limits[..., 0], limits[..., 1])

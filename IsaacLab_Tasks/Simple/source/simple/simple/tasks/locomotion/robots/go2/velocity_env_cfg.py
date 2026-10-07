@@ -1266,6 +1266,103 @@ class RobotClockRoughPlayEnvCfg(RobotClockRoughEnvCfg):
         print(f"[ClockRough] play on {PLAY_ROUGH_TERRAIN}, difficulty {PLAY_ROUGH_DIFFICULTY}")
 
 
+# ── Clock Recovery ─────────────────────────────────────────────────────────────────────────
+# Clock-Rough with more lying starts, in three leg poses, beside the drops with a little roll and pitch
+# it already has. Fine-tune it from a Clock-Rough checkpoint: the command range starts full.
+RECOVERY_LYING_FRACTION = float(os.environ.get("PAPER_RECOVERY_LYING_FRACTION", 0.3))
+RECOVERY_DROP_FRACTION = float(os.environ.get("PAPER_RECOVERY_DROP_FRACTION", 0.2))
+RECOVERY_DROP_TILT = float(os.environ.get("PAPER_RECOVERY_DROP_TILT", 0.3))
+# LYING_JOINT_POS with the thighs at the other end of their range: legs up over the body, feet on the back.
+LYING_FEET_ON_BACK = {".*L_hip_joint": 0.1, ".*R_hip_joint": -0.1, ".*_thigh_joint": 3.2, ".*_calf_joint": -2.55}
+LYING_LEGS_STRAIGHT = {".*_hip_joint": 0.0, "F[L,R]_thigh_joint": -1.3, "R[L,R]_thigh_joint": 1.6, ".*_calf_joint": -0.95}
+
+
+# Every episode opens with GETUP_S at zero command on top of the usual 20 s, paid only for reaching
+# the standing pose slowly; the walking rewards start after it. These terms stay on in both phases.
+GETUP_S = float(os.environ.get("PAPER_GETUP_S", 7.0))
+GETUP_ALWAYS = ("termination", "dof_pos_limits", "action_rate", "joint_acc", "joint_torques", "energy")
+GETUP_W_POSE = float(os.environ.get("PAPER_GETUP_W_POSE", -1.0))
+GETUP_W_HEIGHT = float(os.environ.get("PAPER_GETUP_W_HEIGHT", -40.0))
+GETUP_W_ORIENTATION = float(os.environ.get("PAPER_GETUP_W_ORIENTATION", -2.5))
+# Joint speed above GETUP_MAX_JOINT_VEL is what costs; the pose and height terms alone stood the robot up
+# in 0.5 s at 14 rad/s, and an L2 speed term small enough not to stall it did not slow it.
+GETUP_MAX_JOINT_VEL = float(os.environ.get("PAPER_GETUP_MAX_JOINT_VEL", 2.0))
+GETUP_W_JOINT_VEL = float(os.environ.get("PAPER_GETUP_W_JOINT_VEL", -1.0))
+
+
+def _apply_getup_phase(cfg) -> None:
+    r = cfg.rewards
+    for name in list(vars(r)):
+        term = getattr(r, name)
+        if isinstance(term, RewTerm) and name not in GETUP_ALWAYS:
+            term.params = {"term": term.func, "getup_s": GETUP_S, "getup": False, "term_params": term.params}
+            term.func = mdp.phase_gated
+    getup_terms = {
+        "getup_pose": (mdp.joint_deviation_l1, GETUP_W_POSE, {}),
+        "getup_height": (
+            mdp.base_height_l2_ground,
+            GETUP_W_HEIGHT,
+            {"target_height": CLOCK_BASE_HEIGHT, "sensor_cfg": SceneEntityCfg("height_scanner")},
+        ),
+        "getup_orientation": (mdp.flat_orientation_l2, GETUP_W_ORIENTATION, {}),
+        "getup_joint_vel": (mdp.joint_vel_over, GETUP_W_JOINT_VEL, {"limit": GETUP_MAX_JOINT_VEL}),
+    }
+    for name, (func, weight, params) in getup_terms.items():
+        setattr(r, name, RewTerm(func=mdp.phase_gated, weight=weight, params={"term": func, "getup_s": GETUP_S, "getup": True, "term_params": params}))
+    cfg.episode_length_s += GETUP_S
+    cfg.commands.base_velocity.standby_duration_range = (GETUP_S, GETUP_S)
+    cfg.terminations.base_contact.params["grace_s"] = GETUP_S
+    print(
+        f"[GetUp] first {GETUP_S} s of a {cfg.episode_length_s} s episode at zero command, rewards: pose {GETUP_W_POSE},"
+        f" height {GETUP_W_HEIGHT}, orientation {GETUP_W_ORIENTATION}, joint vel over {GETUP_MAX_JOINT_VEL} rad/s {GETUP_W_JOINT_VEL};"
+        f" always on {GETUP_ALWAYS}"
+    )
+
+
+# Joint targets held inside the deploy safety processor's limits (90% of the URDF range about its
+# middle). Unclipped, the policy drove every joint into its hard stop from the feet-on-back start.
+RECOVERY_TARGET_CLIP = {
+    ".*_hip_joint": (-0.942, 0.942),
+    "F[L,R]_thigh_joint": (-1.318, 3.238),
+    "R[L,R]_thigh_joint": (-0.271, 4.285),
+    ".*_calf_joint": (-2.612, -0.611),
+}
+
+
+def _apply_recovery(cfg) -> None:
+    cfg.actions.JointPositionAction.clip = RECOVERY_TARGET_CLIP
+    # Each lying start lands a random share of the way from folded to its pose: the full feet-on-back and
+    # legs-straight poses alone were too far out for the policy, which never got up from them.
+    cfg.events.reset_start_pose.params.update(
+        lying_fraction=RECOVERY_LYING_FRACTION,
+        lying_joint_pos=[LYING_JOINT_POS, LYING_FEET_ON_BACK, LYING_LEGS_STRAIGHT],
+        lying_blend=True,
+        drop_fraction=RECOVERY_DROP_FRACTION,
+        drop_tilt=RECOVERY_DROP_TILT,
+    )
+    # Meant to fine-tune a policy that already walks at full speed.
+    _drop_level_curriculum(cfg)
+    _apply_getup_phase(cfg)
+    print(
+        f"[Recovery] lying {RECOVERY_LYING_FRACTION} (folded, feet on back, legs straight),"
+        f" dropped {RECOVERY_DROP_FRACTION} with tilt up to {RECOVERY_DROP_TILT} rad"
+    )
+
+
+@configclass
+class RobotClockRecoveryEnvCfg(RobotClockRoughEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_recovery(self)
+
+
+@configclass
+class RobotClockRecoveryPlayEnvCfg(RobotClockRoughPlayEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_recovery(self)
+
+
 # ── Gallop ─────────────────────────────────────────────────────────────────────────────────
 # Clock with a cheetah's rotary gallop taken from a video, as a gait phase: touchdowns RH, LH, LF,
 # RF at 0, 0.12, 0.48, 0.6 of the stride, duty 0.12 / 0.16 / 0.2 / 0.2 (FL, FR, RL, RR). Frequency
