@@ -69,3 +69,6 @@ Tools/.viewer_cache/
 /build/
 /install/
 /log/
+
+# Recorded rosbags for offline tests (lidar, IMU)
+lio_bag/

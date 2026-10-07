@@ -64,7 +64,7 @@
                            0.1261, -0.2137, -0.9687]
 
         odometry:
-            publish_odometry_without_downsample: true
+            publish_odometry_without_downsample: false   # true publishes pose and /tf for every point (~5 kHz): floods DDS and Wi-Fi
 
         publish:
             path_en: true
@@ -72,5 +72,5 @@
             scan_bodyframe_pub_en: false
 
         pcd_save:
-            pcd_save_en: false             # real.launch.py lio_save:=true writes third_party/point_lio_ros2/PCD/scans.pcd
+            pcd_save_en: true
             interval: -1
