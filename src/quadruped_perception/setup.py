@@ -19,5 +19,6 @@ setup(
     entry_points={"console_scripts": [
         "lidar_filter = quadruped_perception.lidar_filter:main",
         "lidar_level = quadruped_perception.lidar_level:main",
+        "lidar_imu_calib = quadruped_perception.lidar_imu_calib:main",
     ]},
 )
