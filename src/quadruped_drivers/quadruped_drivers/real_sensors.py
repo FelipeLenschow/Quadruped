@@ -61,14 +61,16 @@ class RobotClock:
     def __init__(self, node):
         self.node = node
         self.deltas = deque()
+        self.least = {}
 
-    def stamp(self, header):
+    def stamp(self, header, stream):
         now = self.node.get_clock().now()
         robot_ns = header.stamp.sec * 10**9 + header.stamp.nanosec
         if robot_ns == 0:
             return now.to_msg()
         t = now.nanoseconds * 1e-9
         delta = now.nanoseconds - robot_ns
+        self.least[stream] = min(self.least.get(stream, delta), delta)
         while self.deltas and self.deltas[-1][1] >= delta:
             self.deltas.pop()
         self.deltas.append((t, delta))
@@ -126,7 +128,7 @@ class RealSensors(Node):
             if self.last_cloud is None:
                 m = samples[0]
                 self.get_logger().info(f"first cloud: frame '{m.header.frame_id}', {m.width * m.height} points, "
-                                       f"fields {[f.name for f in m.fields]}")
+                                       f"fields {[f.name for f in m.fields]}{self._time_range(m)}")
             elif self.stale:
                 self.get_logger().info("lidar cloud resumed")
             self.last_cloud, self.stale = now, False
@@ -147,11 +149,19 @@ class RealSensors(Node):
             self._imu_reported = True
             self.get_logger().info(f"lidar IMU {rate:.0f} Hz")
         self.imu_count = 0
+        least = self.clock.least
+        if "cloud" in least and "imu" in least:
+            gap = (least["cloud"] - least["imu"]) * 1e-6
+            if abs(gap - getattr(self, "_gap", 1e9)) > 5.0:
+                self._gap = gap
+                self.get_logger().info(f"clock: arrival - stamp, least over 5 s: cloud {least['cloud'] * 1e-6:.1f} ms, "
+                                       f"IMU {least['imu'] * 1e-6:.1f} ms, gap {gap:.1f} ms (same robot clock if small)")
+        self.clock.least = {}
 
     def _publish_imu(self, m):
         self.imu_count += 1
         msg = Imu()
-        msg.header.stamp = self.clock.stamp(m.header)
+        msg.header.stamp = self.clock.stamp(m.header, "imu")
         msg.header.frame_id = self.imu_frame
         w, a = m.angular_velocity, m.linear_acceleration
         msg.orientation_covariance[0] = -1.0
@@ -163,7 +173,7 @@ class RealSensors(Node):
 
     def _publish(self, m):
         msg = PointCloud2()
-        msg.header.stamp = self.clock.stamp(m.header)
+        msg.header.stamp = self.clock.stamp(m.header, "cloud")
         msg.header.frame_id = self.frame
         msg.height, msg.width = m.height, m.width
         msg.fields = [PointField(name=f.name, offset=f.offset, datatype=f.datatype, count=f.count) for f in m.fields]
@@ -174,6 +184,18 @@ class RealSensors(Node):
         msg.is_dense = m.is_dense and dense
         msg.data = array.array("B", data)
         self.cloud_pub.publish(msg)
+
+    @staticmethod
+    def _time_range(m):
+        """Per-point 'time' field range: Point-LIO reads it as seconds after the header stamp."""
+        field = next((f for f in m.fields if f.name == "time"), None)
+        kind = {7: "f4", 8: "f8"}.get(field.datatype) if field else None
+        if kind is None:
+            return ""
+        t = np.frombuffer(bytes(m.data), np.dtype({"names": ["t"], "formats": [(">" if m.is_bigendian else "<") + kind],
+                                                   "offsets": [field.offset], "itemsize": m.point_step}),
+                          count=m.width * m.height)["t"]
+        return f", point time {t.min():.4f} .. {t.max():.4f}"
 
     def _correct_range(self, m, data):
         """The L1 reports every range range_offset too long: pulls each point back along its ray, in place.
