@@ -30,11 +30,13 @@ def transform(parent, child, xyz, rpy):
     return t
 
 
-def publish_static_tf(node, base_frame, mounts=None):
-    """Returns the broadcaster; keep it alive with the node."""
+def publish_static_tf(node, base_frame, mounts=None, extra=()):
+    """Returns the broadcaster; keep it alive with the node. extra: more TransformStamped, sent in the same
+    message (a second sendTransform would replace the first for late subscribers)."""
     mounts = {**MOUNTS, **(mounts or {})}
     transforms = [transform(base_frame, child, xyz, rpy) for child, (xyz, rpy) in mounts.items()]
     transforms.append(transform("front_camera", OPTICAL_FRAME, (0.0, 0.0, 0.0), (-math.pi / 2, 0.0, -math.pi / 2)))
+    transforms += list(extra)
     broadcaster = StaticTransformBroadcaster(node)
     broadcaster.sendTransform(transforms)
     return broadcaster

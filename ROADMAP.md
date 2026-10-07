@@ -109,9 +109,12 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
       IMU's while the robot turns and walks, and prints `extrinsic_R`. The first try (mount rotation without
       tilt) made forward walking drift sideways and diverge. Measured: the gyro is in the cloud's axes
       (identity, 2 deg).
-- [ ] **Accelerometer axes.** The L1 reports its accelerometer in other axes than its gyro (still, its "up" was
-      149 deg from the floor's), which turned Point-LIO's map upside down and made it drift standing still.
-      `lidar_imu_calib` now also fits the accelerometer and prints `real_lidar.imu_acc_R` for `real_sensors`.
+- [x] **Accelerometer.** On this (newer) firmware the L1 IMU's acceleration isn't a measurement: z stays ~9.8
+      and y ~0 in any pose while x climbs ~0.6 m/s^2 per second, and its orientation turned 28 deg for a 90 deg
+      tilt. Same pattern reported in autonomy_stack_go2 issue #27 (old firmware: usable, in the cloud's axes). It
+      turned Point-LIO's map upside down and made it drift standing still. Like CMU's Go2 stack, `/lidar/imu`
+      now carries zero acceleration and Point-LIO runs gyro-only without gravity
+      (`real_lidar.imu_accel: false`); `lio_world → lio_odom` shows its map upright.
 - [ ] **Per-point times.** Check that the cloud's `time` field holds each point's time within the scan;
       it's what undoes the smear while walking.
 - [ ] **Raw scans.** Unitree's clouds carry about 59k points/s against the L1's 21.6k, so they overlap or are

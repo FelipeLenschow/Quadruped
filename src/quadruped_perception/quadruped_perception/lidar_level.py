@@ -76,6 +76,9 @@ def check_imu(up_lidar, accels):
         print("IMU: no /lidar/imu samples")
         return
     a = np.mean(accels, axis=0)
+    if np.linalg.norm(a) < 1.0:
+        print("IMU: /lidar/imu carries no acceleration (config.yaml real_lidar.imu_accel: false)")
+        return
     up_imu = a / np.linalg.norm(a)
     print(f"IMU: |accel| {np.linalg.norm(a):.2f}, up in IMU frame {np.round(up_imu, 3).tolist()}, "
           f"up in lidar frame {np.round(up_lidar, 3).tolist()}")

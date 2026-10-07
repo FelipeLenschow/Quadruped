@@ -51,9 +51,11 @@
             match_s: 81.0
             fov_degree: 180.0
             det_range: 100.0
-            gravity_align: true
-            gravity: [0.0, 0.0, -9.810]
-            gravity_init: [0.0, 0.0, -9.810]
+            # Gyro only (config.yaml real_lidar.imu_accel: false): no gravity, so the world is the lidar's
+            # axes at start. real_sensors publishes lio_world -> lio_odom to show it upright.
+            gravity_align: false
+            gravity: [0.0, 0.0, 0.0]
+            gravity_init: [0.0, 0.0, 0.0]
             # Lidar -> IMU, from lidar_imu_calib (gyro fit to the body IMU, 0.039 rad/s RMS): about identity,
             # as in Unitree's standalone L1 config.
             extrinsic_T: [0.007698, 0.014655, -0.00667]
