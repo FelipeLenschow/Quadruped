@@ -1192,7 +1192,15 @@ def run_cli_menu():
 
     if action == "lio":
         save = input("Save the 3D map to third_party/point_lio_ros2/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
-        sweep_opts = {"save": save}
+        voxel_cm = input("Voxel size for the app's 3D map, cm [5]: ").strip()
+        try:
+            voxel = float(voxel_cm) / 100 if voxel_cm else None
+            if voxel is not None and voxel <= 0:
+                raise ValueError
+        except ValueError:
+            print(f"'{voxel_cm}' is not a positive number: using 5 cm.")
+            voxel = None
+        sweep_opts = {"save": save, "voxel": voxel}
 
     return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, no_ground_truth, show_ghost, record_session, training_phase, auto_eval, sweep_opts
 
@@ -1559,7 +1567,7 @@ def main():
 
         elif action == "lio":
             # Needs the real driver running (its real_sensors publishes the lidar and its IMU).
-            cmd = ros2_launch("lio.launch.py", save=sweep_opts.get("save", False))
+            cmd = ros2_launch("lio.launch.py", save=sweep_opts.get("save", False), voxel=sweep_opts.get("voxel"))
 
         elif action == "mcap_record":
             cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name))

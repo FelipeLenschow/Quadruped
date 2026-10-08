@@ -51,6 +51,7 @@ import kotlin.math.sin
 private const val JOINTS = "/sensors/joint_states"
 const val LIO_SNAPSHOT = "/lio/map_voxels"
 const val LIO_DELTA = "/lio/map_voxels/delta"
+const val LIO_VOXEL_SIZE = "/lio/map_voxels/size"
 const val LIO_ODOM = "/lio/odom"
 
 /** Nothing for this long and the mapper is taken to be off; it is optional. */
@@ -83,7 +84,7 @@ fun Robot3D(modifier: Modifier = Modifier) {
 
     DisposableEffect(Unit) {
         onDispose {
-            for (t in listOf(JOINTS, "/tf", LIO_SNAPSHOT, LIO_DELTA, LIO_ODOM)) NativeLink.unsubscribe(t)
+            for (t in listOf(JOINTS, "/tf", LIO_SNAPSHOT, LIO_DELTA, LIO_VOXEL_SIZE, LIO_ODOM)) NativeLink.unsubscribe(t)
         }
     }
     LaunchedEffect(Unit) {
@@ -97,7 +98,13 @@ fun Robot3D(modifier: Modifier = Modifier) {
                 NativeLink.subscribe(LIO_SNAPSHOT, MsgType.POINT_CLOUD2, reliable = true, transientLocal = true)
                 NativeLink.subscribe(LIO_DELTA, MsgType.POINT_CLOUD2, reliable = true, queue = true)
                 NativeLink.subscribe(LIO_ODOM, MsgType.ODOMETRY, reliable = false)
+                NativeLink.subscribe(LIO_VOXEL_SIZE, MsgType.FLOAT32, reliable = true, transientLocal = true)
                 val t = System.currentTimeMillis()
+
+                NativeLink.latestValues(LIO_VOXEL_SIZE)?.firstOrNull()?.takeIf { it > 0.0 && it != map.voxel }?.let {
+                    map.setVoxel(it)
+                    snapshotCount = 0L
+                }
 
                 val n = NativeLink.latestCount(LIO_SNAPSHOT)
                 if (n != snapshotCount) {

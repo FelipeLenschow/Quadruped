@@ -100,7 +100,7 @@ top of Point-LIO's position, once the GPU Docker works, for the 3D map and low o
 **Setup:** `third_party/point_lio_ros2` (dfloreaa's ROS 2 port of Unitree's `point_lio_unilidar`, pinned at a8e2d0d),
 linked as `src/point_lio`. `real_sensors` bridges the L1 IMU to `/lidar/imu`, and `lio.launch.py` (launcher [L]) starts it
 with `config/point_lio_go2.yaml`, publishing `/lio/odom`, `/lio/cloud`, `/lio/map` in `lio_odom → lio_imu`.
-`lio_map_stream` turns `/lio/cloud` into 10 cm voxels for the app: `/lio/map_voxels` (snapshot, every 10 s)
+`lio_map_stream` turns `/lio/cloud` into voxels for the app (5 cm default, [L] asks): `/lio/map_voxels` (snapshot, every 10 s)
 and `/lio/map_voxels/delta` (new voxels, every 1 s); about 1 kB/s on the test bag. The floor (within
 `--ground_band` 10 cm of the floor under the robot) is a height map, one voxel per column: the L1's floor is
 2-8 cm thick (thicker at grazing range), which stacked it 2-3 voxels deep. Floor-only columns with one voxel:

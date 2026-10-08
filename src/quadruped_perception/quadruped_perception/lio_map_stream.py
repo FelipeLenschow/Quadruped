@@ -3,6 +3,7 @@
 /lio/map_voxels: every occupied voxel's centre, transient_local, every --snapshot_period s. A receiver
 replaces its map with it (a smaller one means the mapper restarted).
 /lio/map_voxels/delta: only voxels occupied since the last delta, every --delta_period s. Added to the map.
+/lio/map_voxels/size: the voxel edge in m (Float32, transient_local), for drawing and keying them.
 
 Both are PointCloud2 with x, y, z float32 (12 bytes a point) in lio_odom. A voxel counts once --min_hits
 scans have hit it, which drops one-off returns. A gap of --reset_gap s in /lio/cloud means Point-LIO
@@ -28,6 +29,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2, PointField
+from std_msgs.msg import Float32
 
 FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate("xyz")]
 BITS = 21
@@ -84,6 +86,8 @@ class LioMapStream(Node):
                              durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.snapshot_pub = self.create_publisher(PointCloud2, "/lio/map_voxels", latched)
         self.delta_pub = self.create_publisher(PointCloud2, "/lio/map_voxels/delta", 10)
+        self.size_pub = self.create_publisher(Float32, "/lio/map_voxels/size", latched)
+        self.size_pub.publish(Float32(data=float(args.voxel)))
         self.create_subscription(PointCloud2, "/lio/cloud", self._cloud_cb, 20)
         self.create_subscription(Odometry, "/lio/odom", self._odom_cb, 50)
         self.create_timer(args.delta_period, self._send_delta)
@@ -206,7 +210,7 @@ class LioMapStream(Node):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--voxel", type=float, default=0.10)
+    ap.add_argument("--voxel", type=float, default=0.05)
     ap.add_argument("--min_hits", type=int, default=2)
     ap.add_argument("--delta_period", type=float, default=1.0)
     ap.add_argument("--snapshot_period", type=float, default=10.0)

@@ -66,7 +66,7 @@
             publish_odometry_without_downsample: false   # true publishes pose and /tf for every point (~5 kHz): floods DDS and Wi-Fi
 
         publish:
-            path_en: true
+            path_en: false                 # republishes the whole path every scan: grows without end (720 kB/s after 1 min)
             scan_publish_en: true
             scan_bodyframe_pub_en: false
 

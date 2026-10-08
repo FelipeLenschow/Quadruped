@@ -17,7 +17,8 @@ Android, no bridge on the robot.
   safety reset below.
 - 3D tab: the Go2 URDF drawn with OpenGL ES 3, legs from `/sensors/joint_states`, standing in
   Point-LIO's voxel map: `/lio/map_voxels` (latched snapshot) replaces the map, `/lio/map_voxels/delta`
-  appends, one 10 cm box per voxel (instanced, up to 300k), coloured by height with turbo. The base
+  appends, one box per voxel (instanced, up to 300k), coloured by height with turbo. The box size comes from
+  `/lio/map_voxels/size` (latched; [L] asks for it, 5 cm default), and a new size clears the map. The base
   sits at `/lio/odom`; without it, at `/tf` odom -> base over a grid (`/tf` is only taken then).
   Streams are best-effort and only while shown. One finger orbits, two pan and pinch, "Follow"
   re-centres. The URDF and its meshes (decimated, ~1 MB) live in `app/src/main/assets/go2/`;

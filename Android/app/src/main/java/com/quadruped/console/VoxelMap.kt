@@ -10,9 +10,13 @@ import kotlin.math.floor
  * one point per voxel. Points only ever get appended between snapshots, so the renderer
  * uploads just the tail ([generation] changes on a replace). Thread-safe.
  */
-class VoxelMap(val capacity: Int = 300_000, val voxel: Double = 0.1) {
+class VoxelMap(val capacity: Int = 300_000, voxel: Double = 0.1) {
     private val keys = LongSet(capacity)
     private val xyz = FloatArray(capacity * 3)
+
+    /** Voxel edge in m, as /lio/map_voxels/size announces it. Keys depend on it, so a change clears the map. */
+    @Volatile var voxel = voxel
+        private set
 
     @Volatile var size = 0
         private set
@@ -37,6 +41,13 @@ class VoxelMap(val capacity: Int = 300_000, val voxel: Double = 0.1) {
         val before = size
         append(points)
         return size - before
+    }
+
+    @Synchronized
+    fun setVoxel(size: Double) {
+        if (size == voxel) return
+        voxel = size
+        clear()
     }
 
     @Synchronized
