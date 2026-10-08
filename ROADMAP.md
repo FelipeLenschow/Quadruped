@@ -100,8 +100,10 @@ top of Point-LIO's position, once the GPU Docker works, for the 3D map and low o
 **Setup:** `third_party/point_lio_ros2` (dfloreaa's ROS 2 port of Unitree's `point_lio_unilidar`, pinned at a8e2d0d),
 linked as `src/point_lio`. `real_sensors` bridges the L1 IMU to `/lidar/imu`, and `lio.launch.py` (launcher [L]) starts it
 with `config/point_lio_go2.yaml`, publishing `/lio/odom`, `/lio/cloud`, `/lio/map` in `lio_odom → lio_imu`.
-`lio_map_stream` turns `/lio/cloud` into voxels for the app (5 cm default, [L] asks): `/lio/map_voxels` (snapshot, every 10 s)
-and `/lio/map_voxels/delta` (new voxels, every 1 s); about 1 kB/s on the test bag. The floor (within
+`lio_map_stream` turns `/lio/cloud` into voxels for the app (5 cm default, [L] asks): `/lio/map_voxels` (snapshot, on a
+Point-LIO restart or a new receiver) and `/lio/map_voxels/delta` (new voxels, every 1 s), never more than 8000 voxels
+(96 kB) a message: a whole map at once held the Wi-Fi long enough to starve the heartbeat (>2 s, robot cut twice).
+About 7 kB/s on the test bag at 5 cm. The floor (within
 `--ground_band` 10 cm of the floor under the robot) is a height map, one voxel per column: the L1's floor is
 2-8 cm thick (thicker at grazing range), which stacked it 2-3 voxels deep. Floor-only columns with one voxel:
 73% → 92% on the walking bag, 97% with a 15 cm band (but then lower obstacles merge into the floor).

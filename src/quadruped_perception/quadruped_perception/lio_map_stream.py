@@ -1,18 +1,23 @@
 """Point-LIO's map, small enough for Wi-Fi: occupied voxels of /lio/cloud, sent once each.
 
-/lio/map_voxels: every occupied voxel's centre, transient_local, every --snapshot_period s. A receiver
-replaces its map with it (a smaller one means the mapper restarted).
-/lio/map_voxels/delta: only voxels occupied since the last delta, every --delta_period s. Added to the map.
+/lio/map_voxels: transient_local. A receiver replaces its map with it. Sent when Point-LIO restarts, when a
+new receiver subscribes, and every --snapshot_period s if set.
+/lio/map_voxels/delta: voxels to add to the map, every --delta_period s.
 /lio/map_voxels/size: the voxel edge in m (Float32, transient_local), for drawing and keying them.
 
 Both are PointCloud2 with x, y, z float32 (12 bytes a point) in lio_odom. A voxel counts once --min_hits
 scans have hit it, which drops one-off returns. A gap of --reset_gap s in /lio/cloud means Point-LIO
 restarted in a new frame: the map starts over.
 
+Nothing goes out faster than --max_send voxels per --delta_period: a whole map in one message held the Wi-Fi
+for seconds and starved the safety heartbeat. A snapshot carries the voxels nearest the robot, and the rest
+follow in the deltas.
+
 The L1's floor is a few cm thick (more at grazing range), so voxels would stack it 2-3 deep. Points within
 --ground_band of the floor under the robot (from /lio/odom and the nearby cloud) are kept as a height map
-instead: one voxel per column, at the column's mean height. Lower obstacles merge into it. When a column's
-mean moves to another voxel, the delta adds the new one and the next snapshot drops the old.
+instead: one voxel per column, at the column's mean height. Lower obstacles merge into it. A column moves to
+another voxel only once its mean is well past the edge; the delta adds the new one and the next snapshot drops
+the old.
 """
 
 import argparse
@@ -40,6 +45,8 @@ FLOOR_RADIUS = 1.0
 FLOOR_BELOW = (0.15, 1.0)
 FLOOR_MIN_POINTS = 20
 ODOM_MATCH_S = 0.2
+SUBSCRIBER_POLL_S = 0.2
+FLOOR_KEEP = 0.8  # a floor column moves to another voxel once its mean is this many voxels from the centre
 
 
 def keys_of(idx):
@@ -90,11 +97,14 @@ class LioMapStream(Node):
         self.size_pub.publish(Float32(data=float(args.voxel)))
         self.create_subscription(PointCloud2, "/lio/cloud", self._cloud_cb, 20)
         self.create_subscription(Odometry, "/lio/odom", self._odom_cb, 50)
+        self.subscribers = 0
         self.create_timer(args.delta_period, self._send_delta)
-        self.create_timer(args.snapshot_period, self._send_snapshot)
+        self.create_timer(SUBSCRIBER_POLL_S, self._watch_subscribers)
+        if args.snapshot_period > 0:
+            self.create_timer(args.snapshot_period, self._send_snapshot)
         self.get_logger().info(f"/lio/cloud -> /lio/map_voxels(+/delta), {args.voxel:.2f} m voxels, "
                                f"{args.min_hits} hits, deltas every {args.delta_period:g} s, "
-                               f"snapshots every {args.snapshot_period:g} s, floor band {args.ground_band:g} m")
+                               f"at most {args.max_send} voxels each, floor band {args.ground_band:g} m")
 
     def _odom_cb(self, msg):
         p = msg.pose.pose.position
@@ -134,8 +144,12 @@ class LioMapStream(Node):
             self.ground[k] = total
             if total[1] < self.args.min_hits:
                 continue
-            key = int(keys_of(np.array([[cols[i, 0], cols[i, 1], math.floor(total[0] / total[1] / v)]]))[0])
-            if self.ground_voxel.get(k) != key:
+            mean = total[0] / total[1]
+            old = self.ground_voxel.get(k)
+            if old is not None and abs(mean - centres_of([old], v)[0, 2]) < FLOOR_KEEP * v:
+                continue
+            key = int(keys_of(np.array([[cols[i, 0], cols[i, 1], math.floor(mean / v)]]))[0])
+            if old != key:
                 if k not in self.ground_voxel and self._full():
                     continue
                 self.ground_voxel[k] = key
@@ -201,11 +215,25 @@ class LioMapStream(Node):
 
     def _send_delta(self):
         if self.pending:
-            self.delta_pub.publish(self._cloud(self.pending))
-            self.pending = []
+            n = self.args.max_send
+            self.delta_pub.publish(self._cloud(self.pending[:n]))
+            self.pending = self.pending[n:]
 
     def _send_snapshot(self):
-        self.snapshot_pub.publish(self._cloud(list(self.occupied | set(self.ground_voxel.values()))))
+        keys = np.fromiter(self.occupied | set(self.ground_voxel.values()), np.int64)
+        if len(keys) and self.poses:
+            _, x, y, _ = self.poses[-1]
+            c = centres_of(keys, self.args.voxel)
+            keys = keys[np.argsort(np.hypot(c[:, 0] - x, c[:, 1] - y))]
+        n = self.args.max_send
+        self.snapshot_pub.publish(self._cloud(keys[:n].tolist()))
+        self.pending = keys[n:].tolist() + self.pending
+
+    def _watch_subscribers(self):
+        n = self.snapshot_pub.get_subscription_count()
+        if n > self.subscribers:
+            self._send_snapshot()
+        self.subscribers = n
 
 
 def main():
@@ -213,7 +241,8 @@ def main():
     ap.add_argument("--voxel", type=float, default=0.05)
     ap.add_argument("--min_hits", type=int, default=2)
     ap.add_argument("--delta_period", type=float, default=1.0)
-    ap.add_argument("--snapshot_period", type=float, default=10.0)
+    ap.add_argument("--snapshot_period", type=float, default=0.0, help="s; 0: only on restart or a new receiver")
+    ap.add_argument("--max_send", type=int, default=8000, help="voxels per message (12 bytes each)")
     ap.add_argument("--reset_gap", type=float, default=5.0)
     ap.add_argument("--max_voxels", type=int, default=300_000)
     ap.add_argument("--ground_band", type=float, default=0.10, help="m around the floor kept as a height map; 0: off")
