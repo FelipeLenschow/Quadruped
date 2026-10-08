@@ -20,5 +20,6 @@ setup(
         "lidar_filter = quadruped_perception.lidar_filter:main",
         "lidar_level = quadruped_perception.lidar_level:main",
         "lidar_imu_calib = quadruped_perception.lidar_imu_calib:main",
+        "lio_map_stream = quadruped_perception.lio_map_stream:main",
     ]},
 )

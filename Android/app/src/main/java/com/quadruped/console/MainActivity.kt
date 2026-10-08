@@ -505,10 +505,6 @@ private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> U
 private fun ViewTab(s: Status, modifier: Modifier) {
     Box(modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Palette.Surface)) {
         Robot3D(Modifier.fillMaxSize())
-        Text(
-            "${s.mode.uppercase()}  ·  drag to orbit · pinch to zoom",
-            Modifier.align(Alignment.TopCenter).padding(10.dp), color = Palette.Muted, fontSize = 11.sp,
-        )
     }
     RobotMetrics(s)
 }

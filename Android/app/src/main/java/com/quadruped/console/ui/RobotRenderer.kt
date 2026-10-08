@@ -8,6 +8,7 @@ import android.util.Log
 import com.quadruped.console.Pose3
 import com.quadruped.console.Urdf
 import com.quadruped.console.Vec3
+import com.quadruped.console.VoxelMap
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -19,14 +20,21 @@ import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.sin
 
-/** What to draw: every visual link's pose in the world (odom) frame, plus the base's trail. */
-class RobotScene(val base: Pose3, val links: Map<String, Pose3>, val trail: List<Vec3>)
+/**
+ * What to draw: every visual link's pose in the world frame, plus the base's trail.
+ * Without [grid] (a 3D map has its own floor) the trail follows the base's height.
+ */
+class RobotScene(
+    val base: Pose3, val links: Map<String, Pose3>, val trail: List<Vec3>,
+    val grid: Boolean = true, val cloud: VoxelMap? = null,
+)
 
-/** Orbit camera around the base; written from the UI thread. */
+/** Orbit camera around [focus], or the base when it is null; written from the UI thread. */
 class OrbitCamera {
     @Volatile var yaw = -2.3f
     @Volatile var pitch = 0.4f
     @Volatile var dist = 1.4f
+    @Volatile var focus: Vec3? = null
 }
 
 /** Draws the URDF's meshes (exported by tools/export_urdf.py) with OpenGL ES 3. */
@@ -42,6 +50,14 @@ class RobotRenderer(
     private val meshes = HashMap<String, List<Part>>()
     private var litProgram = 0
     private var lineProgram = 0
+    private var boxProgram = 0
+    private var boxVao = 0
+    private var centreVbo = 0
+    private var boxCapacity = 0
+    private var uploaded = 0
+    private var uploadedGeneration = -1
+    private var centreData: FloatBuffer? = null
+    private var aspect = 1f
     private var lineVao = 0
     private var lineVbo = 0
     private val proj = FloatArray(16)
@@ -59,6 +75,10 @@ class RobotRenderer(
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         litProgram = program(LIT_VS, LIT_FS)
         lineProgram = program(LINE_VS, LINE_FS)
+        boxProgram = program(BOX_VS, BOX_FS)
+        // A new GL context: the old buffers are gone.
+        boxVao = 0
+        uploadedGeneration = -1
         meshes.clear()
         urdf.visuals.values.flatten().map { it.mesh }.toSet().forEach { name ->
             try {
@@ -82,15 +102,16 @@ class RobotRenderer(
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         glViewport(0, 0, width, height)
-        // A near plane this far out keeps depth precision for the overlapping shell parts.
-        Matrix.perspectiveM(proj, 0, 38f, width.toFloat() / height, 0.1f, 40f)
+        aspect = width.toFloat() / height
     }
 
     override fun onDrawFrame(gl: GL10?) {
         glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT)
         val s = scene ?: return
-        val target = s.base.t
         val c = camera
+        val target = c.focus ?: s.base.t
+        // A near plane this far out keeps depth precision for the overlapping shell parts.
+        Matrix.perspectiveM(proj, 0, 38f, aspect, 0.1f, maxOf(40f, c.dist * 4))
         val eye = target + Vec3(cos(c.pitch) * cos(c.yaw).toDouble(), cos(c.pitch) * sin(c.yaw).toDouble(), sin(c.pitch).toDouble()) * c.dist.toDouble()
         Matrix.setLookAtM(
             view, 0, eye.x.toFloat(), eye.y.toFloat(), eye.z.toFloat(),
@@ -98,8 +119,9 @@ class RobotRenderer(
         )
         Matrix.multiplyMM(viewProj, 0, proj, 0, view, 0)
 
-        drawGrid(target)
-        drawTrail(s.trail)
+        if (s.grid) drawGrid(target)
+        s.cloud?.let(::drawCloud)
+        drawTrail(s.trail, flat = s.grid)
 
         glUseProgram(litProgram)
         glUniform3f(glGetUniformLocation(litProgram, "uLight"), 0.36f, 0.48f, 0.80f)
@@ -140,10 +162,66 @@ class RobotRenderer(
         drawLines(GL_LINES, floatArrayOf(0x2A / 255f, 0x31 / 255f, 0x40 / 255f, 1f))
     }
 
-    private fun drawTrail(trail: List<Vec3>) {
+    /**
+     * One cube per voxel, instanced: a unit cube's 24 vertices, and the voxel centres as a
+     * per-instance attribute. Appends only what is new since the last frame; a new snapshot
+     * re-uploads everything.
+     */
+    private fun drawCloud(map: VoxelMap) {
+        if (boxVao == 0 || boxCapacity != map.capacity) {
+            val ids = IntArray(4)
+            glGenVertexArrays(1, ids, 0)
+            glGenBuffers(3, ids, 1)
+            boxVao = ids[0]
+            centreVbo = ids[3]
+            boxCapacity = map.capacity
+            centreData = ByteBuffer.allocateDirect(4 * 3 * map.capacity).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            glBindVertexArray(boxVao)
+            glBindBuffer(GL_ARRAY_BUFFER, ids[1])
+            glBufferData(GL_ARRAY_BUFFER, CUBE.size * 4, floatBuffer(CUBE), GL_STATIC_DRAW)
+            glEnableVertexAttribArray(0)
+            glVertexAttribPointer(0, 3, GL_FLOAT, false, 24, 0)
+            glEnableVertexAttribArray(2)
+            glVertexAttribPointer(2, 3, GL_FLOAT, false, 24, 12)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ids[2])
+            val idx = ByteBuffer.allocateDirect(CUBE_INDICES.size * 2).order(ByteOrder.nativeOrder()).asShortBuffer()
+            idx.put(CUBE_INDICES).flip()
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, CUBE_INDICES.size * 2, idx, GL_STATIC_DRAW)
+            glBindBuffer(GL_ARRAY_BUFFER, centreVbo)
+            glBufferData(GL_ARRAY_BUFFER, 4 * 3 * map.capacity, null, GL_DYNAMIC_DRAW)
+            glEnableVertexAttribArray(1)
+            glVertexAttribPointer(1, 3, GL_FLOAT, false, 12, 0)
+            glVertexAttribDivisor(1, 1)
+            glBindVertexArray(0)
+            uploadedGeneration = -1
+        }
+        if (map.generation != uploadedGeneration || map.size != uploaded) {
+            val data = centreData!!
+            val t = map.copyNew(uploadedGeneration, uploaded, data)
+            glBindBuffer(GL_ARRAY_BUFFER, centreVbo)
+            if (t.to > t.from) glBufferSubData(GL_ARRAY_BUFFER, t.from * 12, (t.to - t.from) * 12, data)
+            uploadedGeneration = t.generation
+            uploaded = t.to
+        }
+        if (uploaded == 0) return
+        glUseProgram(boxProgram)
+        glUniformMatrix4fv(glGetUniformLocation(boxProgram, "uMVP"), 1, false, viewProj, 0)
+        glUniform1f(glGetUniformLocation(boxProgram, "uSize"), map.voxel.toFloat())
+        glUniform3f(glGetUniformLocation(boxProgram, "uLight"), 0.36f, 0.48f, 0.80f)
+        glBindVertexArray(boxVao)
+        glDrawElementsInstanced(GL_TRIANGLES, CUBE_INDICES.size, GL_UNSIGNED_SHORT, 0, uploaded)
+        glBindVertexArray(0)
+    }
+
+    private fun floatBuffer(a: FloatArray): FloatBuffer =
+        ByteBuffer.allocateDirect(a.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().put(a).also { it.flip() }
+
+    private fun drawTrail(trail: List<Vec3>, flat: Boolean) {
         if (trail.size < 2) return
         lineData.clear()
-        for (p in trail.takeLast(lineData.capacity() / 3)) lineData.put(floatArrayOf(p.x.toFloat(), p.y.toFloat(), 0.002f))
+        for (p in trail.takeLast(lineData.capacity() / 3)) {
+            lineData.put(floatArrayOf(p.x.toFloat(), p.y.toFloat(), if (flat) 0.002f else p.z.toFloat()))
+        }
         drawLines(GL_LINE_STRIP, floatArrayOf(0x3D / 255f, 0xD6 / 255f, 0xC6 / 255f, 0.8f))
     }
 
@@ -252,6 +330,71 @@ void main() {
     float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0);
     vec3 albedo = max(uColor.rgb, vec3(0.11));
     vec3 c = albedo * (0.3 + 0.7 * d) + 0.12 * s + vec3(0.24, 0.84, 0.78) * 0.22 * rim;
+    outColor = vec4(c, 1.0);
+}"""
+
+        /** Unit cube, 4 vertices per face (position, normal), so each face shades flat. */
+        private val CUBE: FloatArray = run {
+            val out = ArrayList<Float>()
+            for (axis in 0..2) for (sign in listOf(-1f, 1f)) {
+                val u = (axis + 1) % 3
+                val v = (axis + 2) % 3
+                for ((a, b) in listOf(-1f to -1f, 1f to -1f, 1f to 1f, -1f to 1f)) {
+                    val p = FloatArray(3)
+                    val n = FloatArray(3)
+                    p[axis] = 0.5f * sign
+                    p[u] = 0.5f * a * sign
+                    p[v] = 0.5f * b
+                    n[axis] = sign
+                    out += p.toList() + n.toList()
+                }
+            }
+            out.toFloatArray()
+        }
+        private val CUBE_INDICES = ShortArray(36) { i -> (i / 6 * 4 + intArrayOf(0, 1, 2, 0, 2, 3)[i % 6]).toShort() }
+
+        private const val BOX_VS = """#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aCentre;
+layout(location = 2) in vec3 aNormal;
+uniform mat4 uMVP;
+uniform float uSize;
+out vec3 vLocal;
+out vec3 vN;
+out float vZ;
+void main() {
+    vLocal = aPos;
+    vN = aNormal;
+    vZ = aCentre.z;
+    gl_Position = uMVP * vec4(aCentre + aPos * uSize, 1.0);
+}"""
+
+        // Height in -0.5..2.0 m through Google's polynomial fit of the turbo colormap, shaded
+        // per face, with darker edges so neighbouring boxes stay apart.
+        private const val BOX_FS = """#version 300 es
+precision highp float;
+in vec3 vLocal;
+in vec3 vN;
+in float vZ;
+uniform vec3 uLight;
+out vec4 outColor;
+vec3 turbo(float x) {
+    const vec4 r4 = vec4(0.13572138, 4.61539260, -42.66032258, 132.13108234);
+    const vec4 g4 = vec4(0.09140261, 2.19418839, 4.84296658, -14.18503333);
+    const vec4 b4 = vec4(0.10667330, 12.64194608, -60.58204836, 110.36276771);
+    const vec2 r2 = vec2(-152.94239396, 59.28637943);
+    const vec2 g2 = vec2(4.27729857, 2.82956604);
+    const vec2 b2 = vec2(-89.90310912, 27.34824973);
+    vec4 v4 = vec4(1.0, x, x * x, x * x * x);
+    vec2 v2 = v4.zw * v4.z;
+    return vec3(dot(v4, r4) + dot(v2, r2), dot(v4, g4) + dot(v2, g2), dot(v4, b4) + dot(v2, b2));
+}
+void main() {
+    vec3 a = abs(vLocal) * 2.0;
+    float mid = a.x + a.y + a.z - max(a.x, max(a.y, a.z)) - min(a.x, min(a.y, a.z));
+    float edge = smoothstep(0.80, 0.94, mid);
+    float light = 0.55 + 0.45 * max(dot(vN, normalize(uLight)), 0.0);
+    vec3 c = turbo(clamp((vZ + 0.5) / 2.5, 0.0, 1.0)) * light * (1.0 - 0.45 * edge);
     outColor = vec4(c, 1.0);
 }"""
 

@@ -15,9 +15,13 @@ Android, no bridge on the robot.
   when centred, so it holds Nav2 off. Off sends one zero and stops, and twist_mux hands back to
   Nav2 after 0.5 s. E-stop, leaving Policy or leaving the app turns it off. Robot state and
   safety reset below.
-- 3D tab: the Go2 URDF drawn with OpenGL ES 3, posed from `/tf` (odom -> base)
-  and `/sensors/joint_states`. The URDF and its meshes (decimated, ~1 MB) live in
-  `app/src/main/assets/go2/`; regenerate after changing the URDF with
+- 3D tab: the Go2 URDF drawn with OpenGL ES 3, legs from `/sensors/joint_states`, standing in
+  Point-LIO's voxel map: `/lio/map_voxels` (latched snapshot) replaces the map, `/lio/map_voxels/delta`
+  appends, one 10 cm box per voxel (instanced, up to 300k), coloured by height with turbo. The base
+  sits at `/lio/odom`; without it, at `/tf` odom -> base over a grid (`/tf` is only taken then).
+  Streams are best-effort and only while shown. One finger orbits, two pan and pinch, "Follow"
+  re-centres. The URDF and its meshes (decimated, ~1 MB) live in `app/src/main/assets/go2/`;
+  regenerate after changing the URDF with
   `unset PYTHONPATH; ~/env_isaacsim/bin/python tools/export_urdf.py`.
 - Shell tab: an SSH terminal on the robot (JSch + Termux's xterm emulator), to start the driver and
   Nav2 without a laptop. The app's ECDSA key lives in its private storage; log in once with the
@@ -48,11 +52,21 @@ Toolchain (once): JDK 17, Android SDK 34, NDK 26.3.11579264, CMake 3.22.1 in `~/
 ## Checking the DDS side on a PC
 
 `tools/link_check.sh` builds the same `ros_link.cpp` against `/opt/ros/humble` and runs it;
-`tools/ros_side.py` plays the robot (`viz_check.cpp` / `viz_side.py` do the same for the map and 3D topics) (fake `/robot_state` etc.) and reports what arrived and
+`tools/ros_side.py` plays the robot (fake `/robot_state` etc.) and reports what arrived and
 the heartbeat gaps. Use a domain nothing else is on:
 
     tools/link_check.sh 77 <server_ip:port> <local_ip> &
     ROS_DOMAIN_ID=77 ROS_DISCOVERY_SERVER=<server_ip:port> ROS_SUPER_CLIENT=TRUE python3 tools/ros_side.py 10
+
+`viz_side.py` does the same for the map, 3D and LIO topics (a 5 x 4 m box room, a box growing
+by deltas, odometry on a 1 m circle; `--big N` pads the snapshot to N points); `viz_check`
+prints what decoded:
+
+    ROS_DOMAIN_ID=79 python3 tools/viz_side.py &
+    tools/link_check.sh viz 79
+
+With the phone on the same network and `--seconds 600 --big 250000` on the app's domain, it
+also feeds the 3D map view without the robot.
 
 The SSH tests run against a throwaway sshd when `SSH_TEST_PORT` and `SSH_TEST_KEYS` are set
 (an unprivileged `sshd -f <config>` on 127.0.0.1 with its own host key and `AuthorizedKeysFile`

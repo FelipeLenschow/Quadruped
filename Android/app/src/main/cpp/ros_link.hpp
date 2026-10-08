@@ -12,7 +12,7 @@ namespace roslink {
 enum class MsgType {
     Float32, Bool, String, Vector3, Float32MultiArray,
     JointState, TFMessage, OccupancyGrid, Path, LaserScan,
-    Twist, PoseStamped,
+    Twist, PoseStamped, PointCloud2, Odometry,
 };
 
 struct LinkConfig {
@@ -30,6 +30,8 @@ struct LinkConfig {
 //   OccupancyGrid: text = frame, values = [width, height, resolution, ox, oy, oz, qx, qy, qz, qw], bytes = cells
 //   Path: text = frame, values = [x0, y0, x1, y1, ...]
 //   LaserScan: text = frame, values = [angle_min, angle_increment, range_min, range_max, ranges...]
+//   PointCloud2: text = frame, values = [points], bytes = x,y,z float32 little-endian per point
+//   Odometry: text = "frame child", values = [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
 //   TFMessage: nothing here, see tf_snapshot()
 struct Latest {
     std::string text;
@@ -58,10 +60,15 @@ public:
     bool publish_pose2d(const std::string& topic, const std::string& frame, double x, double y, double yaw);
 
     // reliable=false for streams (no retransmits competing with the heartbeat);
-    // transient_local for latched topics such as /map and /tf_static.
-    bool subscribe(const std::string& topic, MsgType type, bool reliable = true, bool transient_local = false);
+    // transient_local for latched topics such as /map and /tf_static;
+    // queue: also keep every sample's bytes until take_queued(), for topics where each one counts.
+    bool subscribe(const std::string& topic, MsgType type, bool reliable = true, bool transient_local = false,
+                   bool queue = false);
     void unsubscribe(const std::string& topic);
     Latest latest(const std::string& topic) const;
+    // The bytes of every sample since the last call, concatenated, and how many were dropped
+    // because the queue was full.
+    std::vector<int8_t> take_queued(const std::string& topic, uint64_t* dropped = nullptr);
     // One line per known frame: "child parent tx ty tz qx qy qz qw age_ms"
     std::string tf_snapshot() const;
     // Readers matched to our writer on this topic, -1 if we have no writer on it.

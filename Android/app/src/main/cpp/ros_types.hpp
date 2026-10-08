@@ -193,6 +193,56 @@ struct LaserScan {
     size_t bound() const { return 0; }
 };
 
+struct PointField {
+    std::string name;
+    uint32_t offset = 0;
+    uint8_t datatype = 0;  // 7 = FLOAT32, 8 = FLOAT64
+    uint32_t count = 0;
+};
+
+struct PointCloud2 {
+    static constexpr const char* kName = "sensor_msgs::msg::dds_::PointCloud2_";
+    Header header;
+    uint32_t height = 0, width = 0;
+    std::vector<PointField> fields;
+    bool is_bigendian = false;
+    uint32_t point_step = 0, row_step = 0;
+    std::vector<uint8_t> data;
+    bool is_dense = false;
+    void deser(eprosima::fastcdr::Cdr& c) {
+        header.deser(c);
+        c >> height >> width;
+        uint32_t n = 0;
+        c >> n;
+        fields.resize(n);
+        for (auto& f : fields) c >> f.name >> f.offset >> f.datatype >> f.count;
+        c >> is_bigendian >> point_step >> row_step >> data >> is_dense;
+    }
+    void ser(eprosima::fastcdr::Cdr&) const {}
+    size_t bound() const { return 0; }
+};
+
+struct Odometry {
+    static constexpr const char* kName = "nav_msgs::msg::dds_::Odometry_";
+    Header header;
+    std::string child_frame_id;
+    Pose pose;
+    double pose_cov[36] = {};
+    Vector3 linear, angular;
+    double twist_cov[36] = {};
+    void deser(eprosima::fastcdr::Cdr& c) {
+        header.deser(c);
+        c >> child_frame_id;
+        pose.deser(c);
+        c.deserializeArray(pose_cov, 36);
+        linear.deser(c);
+        angular.deser(c);
+        c.deserializeArray(twist_cov, 36);
+    }
+    void ser(eprosima::fastcdr::Cdr&) const {}
+    size_t bound() const { return 0; }
+};
+
 template <class T>
 class RosType : public eprosima::fastdds::dds::TopicDataType {
 public:

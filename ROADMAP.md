@@ -100,6 +100,8 @@ top of Point-LIO's position, once the GPU Docker works, for the 3D map and low o
 **Setup:** `third_party/point_lio_ros2` (dfloreaa's ROS 2 port of Unitree's `point_lio_unilidar`, pinned at a8e2d0d),
 linked as `src/point_lio`. `real_sensors` bridges the L1 IMU to `/lidar/imu`, and `real.launch.py lio:=true` starts it
 with `config/point_lio_go2.yaml`, publishing `/lio/odom`, `/lio/cloud`, `/lio/map` in `lio_odom → lio_imu`.
+`lio_map_stream` turns `/lio/cloud` into 10 cm voxels for the app: `/lio/map_voxels` (snapshot, every 10 s)
+and `/lio/map_voxels/delta` (new voxels, every 1 s); about 3.5 kB/s on the test bag.
 Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_lidar` (Unitree's uses `toSec()`).
 
 **Prerequisites:**
@@ -127,7 +129,23 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
       `/odom`'s velocity if LIO leaves it empty. Gazebo keeps leg odometry, since its lidar has no point times.
 
 **What builds on it:**
-1. **Odometry for Nav2.** LIO replaces the leg odometry in `odom → base`, so the 2D map and goals improve.
+1. **Odometry for Nav2: fuse, don't replace.** A filter blends legs + IMU with Point-LIO when it runs, and
+   carries on with legs + IMU when it doesn't:
+   ```
+   map --(SLAM)--> odom --(filter: legs + IMU, + Point-LIO when present)--> base
+   ```
+   - **Point-LIO goes in as motion**, the change between consecutive `/lio/odom` poses, not as a position:
+     `lio_odom` starts elsewhere than `odom` and resets to zero when Point-LIO restarts. It mostly fixes the
+     legs' yaw drift. The output stays smooth, with no jumps for Nav2's controller.
+   - **SLAM stays on top**, correcting `map → odom` as now. It reads `odom → base` to match scans, so feeding
+     its answer back into the filter would loop, and its jumps would reach the controller.
+   - **Build:** a `robot_localization` EKF node for navigation only (legs, IMU, Point-LIO as relative motion
+     in; `odom → base` out). The LKF stays as is for the policy's velocity, so walking is untouched and
+     turning the filter off gives today's behaviour. Check that `robot_localization` is in the robot's Docker.
+   - **Only one publisher of `odom → base`:** turn the telemetry's TF off while the filter runs.
+   - **A fixed `base → lio_imu` offset**, measured from where the IMU sits. Without it, `/lio/odom`'s motion
+     is the IMU's, not the base's, and the app draws the robot floating.
+   - Then the app's Map and 3D tabs agree on where the robot is.
 2. **Low obstacles.** A 3D obstacle layer for what the `/scan` slice misses: a low box, a table edge, a step.
 3. **Terrain-aware policies.** An elevation map, a grid of ground heights around the robot built from the
    3D map, becomes the policy's height-scan input, so it can see steps and slopes before touching them.

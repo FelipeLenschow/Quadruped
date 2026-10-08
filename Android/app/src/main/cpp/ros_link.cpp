@@ -14,8 +14,10 @@
 #include <fastdds/rtps/transport/UDPv4TransportDescriptor.h>
 #include <fastrtps/utils/IPLocator.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -34,10 +36,19 @@ struct Tf {
     int64_t recv_ns;
 };
 
+struct Queue {
+    std::vector<int8_t> bytes;
+    uint64_t dropped = 0;
+};
+
+// A burst after a Wi-Fi stall must not grow without bound if nobody drains it.
+constexpr size_t kQueueMaxBytes = 16u << 20;
+
 struct Store {
     std::mutex mtx;
     std::map<std::string, Latest> latest;
     std::map<std::string, Tf> tf;
+    std::map<std::string, Queue> queues;
 };
 
 void to_latest(const Float32& m, Latest& l, Store&) { l.values = {m.data}; }
@@ -82,6 +93,50 @@ void to_latest(const LaserScan& m, Latest& l, Store&) {
     l.values.insert(l.values.end(), m.ranges.begin(), m.ranges.end());
 }
 
+double field(const uint8_t* p, uint8_t datatype, bool big) {
+    uint8_t b[8];
+    size_t n = datatype == 8 ? 8 : 4;
+    std::memcpy(b, p, n);
+    if (big) std::reverse(b, b + n);
+    if (n == 8) {
+        double d;
+        std::memcpy(&d, b, 8);
+        return d;
+    }
+    float f;
+    std::memcpy(&f, b, 4);
+    return f;
+}
+
+void to_latest(const PointCloud2& m, Latest& l, Store&) {
+    l.text = m.header.frame_id;
+    const PointField* xyz[3] = {};
+    for (const auto& f : m.fields) {
+        if (f.datatype != 7 && f.datatype != 8) continue;
+        if (f.name == "x") xyz[0] = &f;
+        if (f.name == "y") xyz[1] = &f;
+        if (f.name == "z") xyz[2] = &f;
+    }
+    size_t n = size_t(m.width) * m.height;
+    if (!xyz[0] || !xyz[1] || !xyz[2] || m.point_step == 0 || m.data.size() < n * m.point_step) n = 0;
+    auto out = std::make_shared<std::vector<int8_t>>(n * 12);
+    float* dst = reinterpret_cast<float*>(out->data());
+    for (size_t i = 0; i < n; ++i) {
+        // Row padding (row_step > width * point_step) only matters for organised clouds.
+        const uint8_t* p = m.data.data() + (i / m.width) * m.row_step + (i % m.width) * m.point_step;
+        for (int k = 0; k < 3; ++k) dst[i * 3 + k] = float(field(p + xyz[k]->offset, xyz[k]->datatype, m.is_bigendian));
+    }
+    l.values = {double(n)};
+    l.bytes = out;
+}
+
+void to_latest(const Odometry& m, Latest& l, Store&) {
+    l.text = m.header.frame_id + " " + m.child_frame_id;
+    const Pose& p = m.pose;
+    l.values = {p.px, p.py, p.pz, p.qx, p.qy, p.qz, p.qw,
+                m.linear.x, m.linear.y, m.linear.z, m.angular.x, m.angular.y, m.angular.z};
+}
+
 // The ROS 2 defaults (rmw_qos_profile_default): reliable, volatile, keep last 10.
 template <class Q>
 void ros_qos(Q& q, bool reliable = true, bool transient_local = false) {
@@ -124,6 +179,15 @@ struct Link::Impl {
                 to_latest(msg, l, *store);
                 l.recv_ns = Link::now_ns();
                 l.count++;
+                auto q = store->queues.find(topic);
+                if (q != store->queues.end() && l.bytes) {
+                    auto& b = q->second.bytes;
+                    if (b.size() + l.bytes->size() > kQueueMaxBytes) {
+                        q->second.dropped++;
+                    } else {
+                        b.insert(b.end(), l.bytes->begin(), l.bytes->end());
+                    }
+                }
             }
         }
     };
@@ -170,8 +234,12 @@ struct Link::Impl {
     }
 
     template <class T>
-    bool subscribe(const std::string& name, bool reliable, bool transient_local) {
+    bool subscribe(const std::string& name, bool reliable, bool transient_local, bool queue) {
         if (readers.count(name)) return true;
+        if (queue) {
+            std::lock_guard<std::mutex> lk(store.mtx);
+            store.queues[name];
+        }
         Topic* t = topic(name, T::kName);
         if (!t) return false;
         auto l = std::make_unique<Listener<T>>();
@@ -243,7 +311,8 @@ bool Link::start(const LinkConfig& cfg, std::string* error) {
                            TypeSupport(new RosType<Twist>()), TypeSupport(new RosType<Float32MultiArray>()),
                            TypeSupport(new RosType<PoseStamped>()), TypeSupport(new RosType<JointState>()),
                            TypeSupport(new RosType<TFMessage>()), TypeSupport(new RosType<OccupancyGrid>()),
-                           TypeSupport(new RosType<Path>()), TypeSupport(new RosType<LaserScan>())}) {
+                           TypeSupport(new RosType<Path>()), TypeSupport(new RosType<LaserScan>()),
+                           TypeSupport(new RosType<PointCloud2>()), TypeSupport(new RosType<Odometry>())}) {
         ts.register_type(impl_->participant);
     }
     impl_->publisher = impl_->participant->create_publisher(PUBLISHER_QOS_DEFAULT);
@@ -266,6 +335,7 @@ void Link::stop() {
     std::lock_guard<std::mutex> lk2(impl_->store.mtx);
     impl_->store.latest.clear();
     impl_->store.tf.clear();
+    impl_->store.queues.clear();
 }
 
 bool Link::running() const {
@@ -324,20 +394,24 @@ bool Link::publish_pose2d(const std::string& topic, const std::string& frame, do
     return impl_->publish(topic, m);
 }
 
-bool Link::subscribe(const std::string& topic, MsgType type, bool reliable, bool transient_local) {
+bool Link::subscribe(const std::string& topic, MsgType type, bool reliable, bool transient_local, bool queue) {
     std::lock_guard<std::mutex> lk(impl_->mtx);
     if (!impl_->participant) return false;
+    auto& i = *impl_;
+    bool r = reliable, t = transient_local, q = queue;
     switch (type) {
-        case MsgType::Float32: return impl_->subscribe<Float32>(topic, reliable, transient_local);
-        case MsgType::Bool: return impl_->subscribe<Bool>(topic, reliable, transient_local);
-        case MsgType::String: return impl_->subscribe<String>(topic, reliable, transient_local);
-        case MsgType::Vector3: return impl_->subscribe<Vector3>(topic, reliable, transient_local);
-        case MsgType::Float32MultiArray: return impl_->subscribe<Float32MultiArray>(topic, reliable, transient_local);
-        case MsgType::JointState: return impl_->subscribe<JointState>(topic, reliable, transient_local);
-        case MsgType::TFMessage: return impl_->subscribe<TFMessage>(topic, reliable, transient_local);
-        case MsgType::OccupancyGrid: return impl_->subscribe<OccupancyGrid>(topic, reliable, transient_local);
-        case MsgType::Path: return impl_->subscribe<Path>(topic, reliable, transient_local);
-        case MsgType::LaserScan: return impl_->subscribe<LaserScan>(topic, reliable, transient_local);
+        case MsgType::Float32: return i.subscribe<Float32>(topic, r, t, q);
+        case MsgType::Bool: return i.subscribe<Bool>(topic, r, t, q);
+        case MsgType::String: return i.subscribe<String>(topic, r, t, q);
+        case MsgType::Vector3: return i.subscribe<Vector3>(topic, r, t, q);
+        case MsgType::Float32MultiArray: return i.subscribe<Float32MultiArray>(topic, r, t, q);
+        case MsgType::JointState: return i.subscribe<JointState>(topic, r, t, q);
+        case MsgType::TFMessage: return i.subscribe<TFMessage>(topic, r, t, q);
+        case MsgType::OccupancyGrid: return i.subscribe<OccupancyGrid>(topic, r, t, q);
+        case MsgType::Path: return i.subscribe<Path>(topic, r, t, q);
+        case MsgType::LaserScan: return i.subscribe<LaserScan>(topic, r, t, q);
+        case MsgType::PointCloud2: return i.subscribe<PointCloud2>(topic, r, t, q);
+        case MsgType::Odometry: return i.subscribe<Odometry>(topic, r, t, q);
         default: return false;
     }
 }
@@ -350,6 +424,17 @@ void Link::unsubscribe(const std::string& topic) {
     impl_->readers.erase(it);
     std::lock_guard<std::mutex> lk2(impl_->store.mtx);
     impl_->store.latest.erase(topic);
+    impl_->store.queues.erase(topic);
+}
+
+std::vector<int8_t> Link::take_queued(const std::string& topic, uint64_t* dropped) {
+    std::lock_guard<std::mutex> lk(impl_->store.mtx);
+    std::vector<int8_t> out;
+    auto it = impl_->store.queues.find(topic);
+    if (it == impl_->store.queues.end()) return out;
+    out.swap(it->second.bytes);
+    if (dropped) *dropped = it->second.dropped;
+    return out;
 }
 
 Latest Link::latest(const std::string& topic) const {

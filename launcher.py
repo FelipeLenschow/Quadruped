@@ -511,6 +511,24 @@ def start_auto_eval_watcher(log_root, start_ts, robot_key, every, env):
         return None
 
 
+def start_video_watcher(module_path, log_root, start_ts, env):
+    """Modules with scripts/rsl_rl/video_watcher.py (Recovery) record each checkpoint with play.py
+    beside training instead of train.py --video, which runs ~20x slower on this machine."""
+    script = os.path.join(module_path, "scripts", "rsl_rl", "video_watcher.py")
+    if not os.path.exists(script):
+        return None
+    os.makedirs(log_root, exist_ok=True)
+    cmd = [sys.executable, "-u", script, "--log-root", os.path.abspath(log_root),
+           "--after", f"{start_ts:.0f}", "--parent-pid", str(os.getpid())]
+    try:
+        proc = subprocess.Popen(cmd, env=env, cwd=module_path)
+        print(f"[Launcher] Clips of every 500th checkpoint go to <run>/videos/progress (PID {proc.pid}).")
+        return proc
+    except Exception as e:
+        print(f"[WARNING] Could not start the video watcher: {e}")
+        return None
+
+
 def stop_auto_eval_watcher(proc):
     """Stop it before the run folder is renamed -- an evaluation in flight writes its report next
     to the checkpoint it was given, and that path would no longer exist."""
@@ -580,6 +598,7 @@ def run_cli_menu():
         print("  " + "-" * 45)
         print("  --- ROS 2 Tools ---")
         print("  [N] Navigation (SLAM + Nav2 + rviz)")
+        print("  [L] 3D Mapping (Point-LIO + the app's voxel map)")
         print("  [K] Remote Teleop / Eval Sweep")
         print("  [V] Visualizers")
         print("  [P] PlotJuggler")
@@ -598,6 +617,7 @@ def run_cli_menu():
         print("  " + "-" * 45)
         print("  --- ROS 2 Tools ---")
         print("  [X] Navigation (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] 3D Mapping (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Remote Teleop (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Visualizers (REQUIRES DOCKER OR PY3.10)")
         print("  [X] PlotJuggler (REQUIRES DOCKER OR PY3.10)")
@@ -617,6 +637,8 @@ def run_cli_menu():
         "7": "eval_policy",
         "n": "nav",
         "N": "nav",
+        "l": "lio",
+        "L": "lio",
         "k": "teleop",
         "K": "teleop",
         "v": "visualizers",
@@ -641,7 +663,7 @@ def run_cli_menu():
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-7, N, K, V, C, T, P, M, R, F, D] (default {default_action}): ").strip() or default_action
+    choice = input(f"Enter choice [0-7, N, L, K, V, C, T, P, M, R, F, D] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice.lower(), "None")
     
     if action == "hardware_tools":
@@ -687,7 +709,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "nav", "discovery_server"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "nav", "lio", "discovery_server"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -748,7 +770,7 @@ def run_cli_menu():
     
     # teleop_sweep is not in this list on purpose: it asks for the checkpoint the robot is running,
     # only to file the report under it later. sweep_report reads that back from the recording.
-    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "discovery_server"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "discovery_server"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         # Simple and WalkTheseWays (cut from unitree_rl_lab) live here so their logs sit alongside
         # the others (the eval viewer and the checkpoint list both read them in place), but they
@@ -812,7 +834,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "discovery_server"]:
+    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "discovery_server"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -1168,6 +1190,10 @@ def run_cli_menu():
             auto_localize = input("Localize automatically once in policy mode? [Y/n] (default Y): ").lower().strip() != "n"
         sweep_opts = {"map": chosen_map, "initial_pose": initial_pose, "auto_localize": auto_localize}
 
+    if action == "lio":
+        save = input("Save the 3D map to third_party/point_lio_ros2/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
+        sweep_opts = {"save": save}
+
     return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, no_ground_truth, show_ghost, record_session, training_phase, auto_eval, sweep_opts
 
 def main():
@@ -1338,19 +1364,24 @@ def main():
             cmd.append(f"--run_name={run_name}")
         if headless:
             cmd.append("--headless")
-        if video:
+        has_video_watcher = os.path.exists(os.path.join(module_path, "scripts", "rsl_rl", "video_watcher.py"))
+        if video and not has_video_watcher:
             cmd += ["--video", "--video_length=200", "--video_interval=5000"]
         source_path = os.path.abspath(os.path.join(module_path, "source", rsl_rl_package(module_path)))
         env["PYTHONPATH"] = f"{source_path}:{env['PYTHONPATH']}" if env.get("PYTHONPATH") else source_path
         start_ts = time.time()
         watcher = start_auto_eval_watcher(log_root, start_ts, robot_key, auto_eval, env) if auto_eval else None
+        video_watcher = start_video_watcher(module_path, log_root, start_ts, env) if video else None
         try:
             subprocess.run(cmd, env=env, cwd=module_path)
         except KeyboardInterrupt:
             print("\n[Launcher] Training interrupted by user.")
             stop_auto_eval_watcher(watcher)
+            stop_auto_eval_watcher(video_watcher)
         if watcher and watcher.poll() is None:
             print("[Launcher] Background evaluation continues until pending checkpoints are done.")
+        if video_watcher and video_watcher.poll() is None:
+            print("[Launcher] The video watcher records the last checkpoint, then exits.")
 
     elif action == "train":
         script_path = os.path.join("scripts", "skrl", "train.py")
@@ -1435,7 +1466,7 @@ def main():
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "discovery_server"):
+    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "lio", "discovery_server"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable
@@ -1525,6 +1556,10 @@ def main():
             cmd = ros2_launch("nav.launch.py", sim=not IS_ROBOT, rviz=not IS_ROBOT, map=sweep_opts.get("map", ""),
                               initial_pose=sweep_opts.get("initial_pose", "0,0,0"),
                               auto_localize=sweep_opts.get("auto_localize", True))
+
+        elif action == "lio":
+            # Needs the real driver running (its real_sensors publishes the lidar and its IMU).
+            cmd = ros2_launch("lio.launch.py", save=sweep_opts.get("save", False))
 
         elif action == "mcap_record":
             cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name))

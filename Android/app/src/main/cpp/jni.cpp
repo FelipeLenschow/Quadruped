@@ -56,8 +56,9 @@ FN(jboolean, nativeAdvertise)(JNIEnv* env, jobject, jstring topic, jint type) {
     return g_link.advertise(str(env, topic), static_cast<roslink::MsgType>(type));
 }
 
-FN(jboolean, nativeSubscribe)(JNIEnv* env, jobject, jstring topic, jint type, jboolean reliable, jboolean transientLocal) {
-    return g_link.subscribe(str(env, topic), static_cast<roslink::MsgType>(type), reliable, transientLocal);
+FN(jboolean, nativeSubscribe)(JNIEnv* env, jobject, jstring topic, jint type, jboolean reliable, jboolean transientLocal,
+                              jboolean queue) {
+    return g_link.subscribe(str(env, topic), static_cast<roslink::MsgType>(type), reliable, transientLocal, queue);
 }
 
 FN(void, unsubscribe)(JNIEnv* env, jobject, jstring topic) { g_link.unsubscribe(str(env, topic)); }
@@ -67,6 +68,14 @@ FN(jbyteArray, latestBytes)(JNIEnv* env, jobject, jstring topic) {
     if (!l.bytes) return nullptr;
     jbyteArray a = env->NewByteArray(static_cast<jsize>(l.bytes->size()));
     env->SetByteArrayRegion(a, 0, static_cast<jsize>(l.bytes->size()), reinterpret_cast<const jbyte*>(l.bytes->data()));
+    return a;
+}
+
+FN(jbyteArray, takeQueued)(JNIEnv* env, jobject, jstring topic) {
+    auto b = g_link.take_queued(str(env, topic));
+    if (b.empty()) return nullptr;
+    jbyteArray a = env->NewByteArray(static_cast<jsize>(b.size()));
+    env->SetByteArrayRegion(a, 0, static_cast<jsize>(b.size()), reinterpret_cast<const jbyte*>(b.data()));
     return a;
 }
 
