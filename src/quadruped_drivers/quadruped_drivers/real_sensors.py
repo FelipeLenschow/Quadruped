@@ -93,9 +93,12 @@ class RealSensors(Node):
         lidar_cfg = cfg.get("real_lidar") or {}
         mount = (tuple(lidar_cfg.get("xyz", xyz)), tuple(lidar_cfg.get("rpy", rpy)))
         self.range_offset = float(lidar_cfg.get("range_offset", 0.0))
+        box = lidar_cfg.get("body_box")
+        self.body_box = np.array([box[c] for c in "xyz"], float) if box else None
+        self.mount_T = np.array(mount[0], float)
         self.tf = publish_static_tf(self, args.base_frame, {"radar": mount})
         # The L1's gyro reads in the cloud's axes; turned into the body's, Point-LIO's world starts upright.
-        self.gyro_R = np.array(matrix(*mount[1]))
+        self.mount_R = np.array(matrix(*mount[1]))
         self.get_logger().info(f"lidar mount xyz {list(mount[0])} rpy {list(mount[1])}, "
                                f"range offset {self.range_offset:.3f} m")
 
@@ -178,7 +181,7 @@ class RealSensors(Node):
         msg.header.frame_id = self.imu_frame
         w = m.angular_velocity
         msg.orientation_covariance[0] = -1.0
-        msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = self.gyro_R @ (w.x, w.y, w.z)
+        msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = self.mount_R @ (w.x, w.y, w.z)
         msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = self.body_acc
         self.imu_pub.publish(msg)
 
@@ -192,6 +195,8 @@ class RealSensors(Node):
         msg.point_step, msg.row_step = m.point_step, m.row_step
         data = bytearray(m.data)
         dense = self._correct_range(m, data) if self.range_offset else True
+        if self.body_box is not None:
+            dense = self._crop_body(m, data) and dense
         msg.is_dense = m.is_dense and dense
         msg.data = array.array("B", data)
         self.cloud_pub.publish(msg)
@@ -208,14 +213,26 @@ class RealSensors(Node):
                           count=m.width * m.height)["t"]
         return f", point time {t.min():.4f} .. {t.max():.4f}"
 
+    def _xyz_view(self, m, data):
+        off = {f.name: f.offset for f in m.fields}
+        f4 = ">f4" if m.is_bigendian else "<f4"
+        return np.frombuffer(data, np.dtype({"names": ["x", "y", "z"], "formats": [f4] * 3,
+                                             "offsets": [off["x"], off["y"], off["z"]], "itemsize": m.point_step}),
+                             count=m.width * m.height)
+
+    def _crop_body(self, m, data):
+        """Points inside body_box (base frame) are the robot itself: NaN, in place. Returns False if any were."""
+        pts = self._xyz_view(m, data)
+        b = np.column_stack([pts[c] for c in "xyz"]).astype(np.float64) @ self.mount_R.T + self.mount_T
+        inside = np.all((b >= self.body_box[:, 0]) & (b <= self.body_box[:, 1]), axis=1)
+        for c in "xyz":
+            pts[c][inside] = np.nan
+        return not inside.any()
+
     def _correct_range(self, m, data):
         """The L1 reports every range range_offset too long: pulls each point back along its ray, in place.
         Points left nearer than MIN_RANGE become NaN. Returns False if any did."""
-        off = {f.name: f.offset for f in m.fields}
-        f4 = ">f4" if m.is_bigendian else "<f4"
-        pts = np.frombuffer(data, np.dtype({"names": ["x", "y", "z"], "formats": [f4] * 3,
-                                            "offsets": [off["x"], off["y"], off["z"]], "itemsize": m.point_step}),
-                            count=m.width * m.height)
+        pts = self._xyz_view(m, data)
         r = np.sqrt(pts["x"].astype(np.float64) ** 2 + pts["y"] ** 2 + pts["z"] ** 2)
         with np.errstate(invalid="ignore", divide="ignore"):
             k = np.where(r - self.range_offset >= MIN_RANGE, 1.0 - self.range_offset / r, np.nan)

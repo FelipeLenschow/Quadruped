@@ -58,6 +58,12 @@ real_lidar:
   # The L1 reports every range this much too long (m); real_sensors pulls each point back along its ray.
   # Fitted to a wall at a tape-measured 1.60 m and the floor under the standing robot's feet (leg FK).
   range_offset: 0.12
+  # The robot's own hips and legs (base frame, m): real_sensors blanks these points, so Point-LIO's blind can be
+  # short and keep the floor next to the robot. z stops ~6 cm above the standing floor (-0.32).
+  body_box:
+    x: [-0.45, 0.32]
+    y: [-0.35, 0.35]
+    z: [-0.26, 0.15]
   # On this firmware only the L1 IMU's gyro is real (it matches the body IMU to 0.044 rad/s). Its acceleration
   # keeps z at ~9.8 and y at ~0 whatever the pose, while x climbs ~0.6 m/s^2 per second (lying, nose up 90 deg
   # and on its side: x 4.1, 10.3, 16.3), and its orientation turned 28 deg for a 90 deg tilt. So /lidar/imu is

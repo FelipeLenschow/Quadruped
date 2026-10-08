@@ -28,7 +28,7 @@
             lidar_type: 5
             scan_line: 18
             timestamp_unit: 0
-            blind: 0.5                     # also drops most of the robot's own body and front legs
+            blind: 0.1                     # real_sensors blanks the body (config.yaml real_lidar.body_box); 0.5 lost the floor within ~0.4 m
 
         mapping:
             imu_en: true
