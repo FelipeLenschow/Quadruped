@@ -1,7 +1,8 @@
 """Real Go2 sensors to ROS 2: the L1 lidar cloud and IMU from Unitree's DDS, on this machine's clock.
 
 Both keep the robot's own stamps, shifted by one offset onto this clock (RobotClock), so Point-LIO sees the
-cloud and IMU on the same timeline.
+cloud and IMU on the same timeline. /lidar/imu is the L1's gyro with the body IMU's accelerometer (the L1's
+own is not real), both in the body's axes.
 """
 
 import argparse
@@ -31,11 +32,13 @@ from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublish
 from unitree_sdk2py.idl.geometry_msgs.msg.dds_ import Quaternion_, Vector3_
 from unitree_sdk2py.idl.sensor_msgs.msg.dds_ import PointCloud2_
 from unitree_sdk2py.idl.std_msgs.msg.dds_ import Header_, String_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
 
 from quadruped_core.config_loader import load_config
 from quadruped_drivers.sensor_mounts import MOUNTS, matrix, publish_static_tf
 
 LIDAR_SWITCH_TOPIC = "rt/utlidar/switch"
+LOWSTATE_TOPIC = "rt/lowstate"
 STALE_S = 1.0
 MIN_RANGE = 0.05  # the L1's own minimum range; nearer after the range correction is not a real return
 CLOCK_WINDOW_S = 10.0
@@ -90,7 +93,6 @@ class RealSensors(Node):
         lidar_cfg = cfg.get("real_lidar") or {}
         mount = (tuple(lidar_cfg.get("xyz", xyz)), tuple(lidar_cfg.get("rpy", rpy)))
         self.range_offset = float(lidar_cfg.get("range_offset", 0.0))
-        self.imu_accel = bool(lidar_cfg.get("imu_accel", False))
         self.tf = publish_static_tf(self, args.base_frame, {"radar": mount})
         # The L1's gyro reads in the cloud's axes; turned into the body's, Point-LIO's world starts upright.
         self.gyro_R = np.array(matrix(*mount[1]))
@@ -103,6 +105,10 @@ class RealSensors(Node):
                                  qos=Qos(Policy.History.KeepLast(1)))
         self.imu_reader = DataReader(participant, Topic(participant, args.imu_topic, Imu_),
                                      qos=Qos(Policy.History.KeepLast(100)))
+        # The newest LowState at each poll: decoding all 500 Hz costs too much CPU, and 50 Hz is plenty for gravity.
+        self.lowstate_reader = DataReader(participant, Topic(participant, LOWSTATE_TOPIC, LowState_),
+                                          qos=Qos(Policy.History.KeepLast(1)))
+        self.body_acc = None
         self.imu_count = 0
         self.switch = None
         if args.switch_on:
@@ -120,6 +126,9 @@ class RealSensors(Node):
 
     def _poll(self):
         now = time.monotonic()
+        state = self.lowstate_reader.take(1)
+        if state and not isinstance(state[0], InvalidSample):
+            self.body_acc = tuple(float(v) for v in state[0].imu_state.accelerometer)
         for m in self.imu_reader.take(N=100):
             if not isinstance(m, InvalidSample):
                 self._publish_imu(m)
@@ -145,6 +154,8 @@ class RealSensors(Node):
         rate = self.imu_count / 5.0
         if self.imu_count == 0:
             self.get_logger().warn("no lidar IMU samples (Point-LIO needs them)", once=True)
+        if self.body_acc is None:
+            self.get_logger().warn(f"no {LOWSTATE_TOPIC}: /lidar/imu waits for the body accelerometer", once=True)
         elif not getattr(self, "_imu_reported", False):
             self._imu_reported = True
             self.get_logger().info(f"lidar IMU {rate:.0f} Hz")
@@ -159,16 +170,16 @@ class RealSensors(Node):
         self.clock.least = {}
 
     def _publish_imu(self, m):
+        if self.body_acc is None:
+            return
         self.imu_count += 1
         msg = Imu()
         msg.header.stamp = self.clock.stamp(m.header, "imu")
         msg.header.frame_id = self.imu_frame
-        w, a = m.angular_velocity, m.linear_acceleration
+        w = m.angular_velocity
         msg.orientation_covariance[0] = -1.0
         msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z = self.gyro_R @ (w.x, w.y, w.z)
-        if self.imu_accel:
-            ax, ay, az = self.gyro_R @ (a.x, a.y, a.z)
-            msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = ax, ay, az
+        msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z = self.body_acc
         self.imu_pub.publish(msg)
 
     def _publish(self, m):

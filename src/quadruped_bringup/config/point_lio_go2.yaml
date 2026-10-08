@@ -1,4 +1,4 @@
-# Point-LIO (third_party/point_lio_ros2) on the Go2's built-in L1: real.launch.py lio:=true.
+# Point-LIO (third_party/point_lio_ros2) on the Go2's built-in L1: lio.launch.py (launcher [L]).
 # Started from the port's unilidar_l1.yaml (Unitree's L1 values); the Go2-specific lines are commented.
 /**:
     ros__parameters:
@@ -7,7 +7,7 @@
         use_imu_as_input: false
         prop_at_freq_of_imu: true
         check_satu: true
-        init_map_size: 10
+        init_map_size: 3000              # first map from ~0.3 s of scans; one scan (mostly floor) let yaw spin. Start standing still
         point_filter_num: 1
         space_down_sample: true
         filter_size_surf: 0.1
@@ -37,7 +37,7 @@
             imu_time_inte: 0.004           # 1 / IMU rate; real_sensors logs the rate, set it from that
             satu_acc: 30.0
             satu_gyro: 35.0
-            acc_norm: 9.81
+            acc_norm: 9.52                 # the Go2 body IMU's |g| at rest
             lidar_meas_cov: 0.01
             acc_cov_output: 500.0
             gyr_cov_output: 1000.0
@@ -51,11 +51,10 @@
             match_s: 81.0
             fov_degree: 180.0
             det_range: 100.0
-            # Gyro only (config.yaml real_lidar.imu_accel: false): no gravity, so the world is the IMU's axes
-            # at start. real_sensors turns the gyro into the body's axes, so that is the body: upright, x forward.
-            gravity_align: false
-            gravity: [0.0, 0.0, 0.0]
-            gravity_init: [0.0, 0.0, 0.0]
+            # /lidar/imu: the L1 gyro and the body IMU's accelerometer, in the body's axes. lio_odom is level, x forward.
+            gravity_align: true
+            gravity: [0.0, 0.0, -9.81]
+            gravity_init: [0.0, 0.0, -9.81]
             # Lidar -> IMU: the IMU is in the body's axes, so this is config.yaml's real_lidar mount
             # (xyz, rpy [0.2171, 3.268, 2.0766]). Update both together; lidar_imu_calib prints it from the gyro too.
             extrinsic_T: [0.28945, 0.0, -0.046825]

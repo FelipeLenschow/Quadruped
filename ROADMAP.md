@@ -98,10 +98,13 @@ Start with Point-LIO for the robot's position and keep `slam_toolbox` for Nav2's
 top of Point-LIO's position, once the GPU Docker works, for the 3D map and low obstacles.
 
 **Setup:** `third_party/point_lio_ros2` (dfloreaa's ROS 2 port of Unitree's `point_lio_unilidar`, pinned at a8e2d0d),
-linked as `src/point_lio`. `real_sensors` bridges the L1 IMU to `/lidar/imu`, and `real.launch.py lio:=true` starts it
+linked as `src/point_lio`. `real_sensors` bridges the L1 IMU to `/lidar/imu`, and `lio.launch.py` (launcher [L]) starts it
 with `config/point_lio_go2.yaml`, publishing `/lio/odom`, `/lio/cloud`, `/lio/map` in `lio_odom → lio_imu`.
 `lio_map_stream` turns `/lio/cloud` into 10 cm voxels for the app: `/lio/map_voxels` (snapshot, every 10 s)
-and `/lio/map_voxels/delta` (new voxels, every 1 s); about 3.5 kB/s on the test bag.
+and `/lio/map_voxels/delta` (new voxels, every 1 s); about 1 kB/s on the test bag. The floor (within
+`--ground_band` 10 cm of the floor under the robot) is a height map, one voxel per column: the L1's floor is
+2-8 cm thick (thicker at grazing range), which stacked it 2-3 voxels deep. Floor-only columns with one voxel:
+73% → 92% on the walking bag, 97% with a 15 cm band (but then lower obstacles merge into the floor).
 Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_lidar` (Unitree's uses `toSec()`).
 
 **Prerequisites:**
@@ -114,9 +117,14 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
 - [x] **Accelerometer.** On this (newer) firmware the L1 IMU's acceleration isn't a measurement: z stays ~9.8
       and y ~0 in any pose while x climbs ~0.6 m/s^2 per second, and its orientation turned 28 deg for a 90 deg
       tilt. Same pattern reported in autonomy_stack_go2 issue #27 (old firmware: usable, in the cloud's axes). It
-      turned Point-LIO's map upside down and made it drift standing still. Like CMU's Go2 stack, `/lidar/imu`
-      now carries zero acceleration and Point-LIO runs gyro-only without gravity
-      (`real_lidar.imu_accel: false`). `real_sensors` turns the gyro into the body's axes, so Point-LIO's world starts upright with x forward (`lio_odom`), and its extrinsic is the lidar mount.
+      turned Point-LIO's map upside down and made it drift standing still. `/lidar/imu` is the L1's gyro, turned
+      into the body's axes, with the body IMU's accelerometer (`rt/lowstate`, newest sample at 50 Hz), so its
+      extrinsic is the lidar mount and `lio_odom` is level with x forward. Gyro-only (no gravity, as CMU's Go2
+      stack runs) worked too, but its world was the body's lean at start (~1-2 deg), tilting the floor.
+- [x] **Start spin.** With `init_map_size: 10` the first map was one scan, ~90% floor within 1 m: yaw was
+      barely held, the first match was ~14 deg off, and while the lidar pulled it back the filter learned a
+      0.3 rad/s gyro bias, so the map kept turning (2 of 3 starts on 2026-10-08). `init_map_size: 3000`
+      builds it from ~0.3 s of scans: all three starts hold within 1.5 deg. Start with the robot still.
 - [ ] **Per-point times.** Check that the cloud's `time` field holds each point's time within the scan;
       it's what undoes the smear while walking.
 - [ ] **Raw scans.** Unitree's clouds carry about 59k points/s against the L1's 21.6k, so they overlap or are
