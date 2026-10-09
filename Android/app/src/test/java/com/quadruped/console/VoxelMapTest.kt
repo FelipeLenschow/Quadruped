@@ -1,7 +1,6 @@
 package com.quadruped.console
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.ByteBuffer
@@ -52,8 +51,50 @@ class VoxelMapTest {
     @Test
     fun nonFinitePointsAreSkipped() {
         val m = VoxelMap()
-        m.add(pts(Float.NaN, 0f, 0f, 0f, Float.POSITIVE_INFINITY, 0f, 1f, 1f, 1f))
+        m.add(pts(0f, Float.NaN, 0f, 0f, Float.POSITIVE_INFINITY, 0f, Float.POSITIVE_INFINITY, 0f, 0f, 1f, 1f, 1f))
         assertEquals(1, m.size)
+    }
+
+    private val removeMark = floatArrayOf(Float.NaN, 0f, 0f)
+    private val addMark = floatArrayOf(Float.NaN, 1f, 0f)
+    private fun delta(removed: FloatArray, added: FloatArray): FloatBuffer =
+        FloatBuffer.wrap(removeMark + removed + addMark + added)
+
+    @Test
+    fun deltasRemoveThenAdd() {
+        val m = VoxelMap()
+        m.add(pts(0.05f, 0.05f, 0.05f, 1.05f, 0.05f, 0.05f, 2.05f, 0.05f, 0.05f))
+        val gen = m.generation
+        assertEquals(1, m.add(delta(floatArrayOf(0.05f, 0.05f, 0.05f), floatArrayOf(3.05f, 0.05f, 0.05f))))
+        assertEquals(3, m.size)
+        assertTrue(m.generation != gen)
+        // The removed voxel is new again; the others, including the one moved into its slot, are still known.
+        assertEquals(1, m.add(pts(0.05f, 0.05f, 0.05f, 1.05f, 0.05f, 0.05f, 2.05f, 0.05f, 0.05f, 3.05f, 0.05f, 0.05f)))
+        assertEquals(4, m.size)
+    }
+
+    @Test
+    fun removingWhatIsNotThereChangesNothing() {
+        val m = VoxelMap()
+        m.add(pts(0.05f, 0.05f, 0.05f))
+        val gen = m.generation
+        m.add(delta(floatArrayOf(5.05f, 5.05f, 5.05f), floatArrayOf()))
+        assertEquals(1, m.size)
+        assertEquals(gen, m.generation)
+    }
+
+    @Test
+    fun removalsKeepTheRestIntact() {
+        val m = VoxelMap()
+        val all = (0 until 50).flatMap { listOf((it + 0.5f) * 0.1f, 0.05f, 0.05f) }.toFloatArray()
+        m.add(FloatBuffer.wrap(all))
+        val odd = (1 until 50 step 2).flatMap { listOf((it + 0.5f) * 0.1f, 0.05f, 0.05f) }.toFloatArray()
+        m.add(delta(odd, floatArrayOf()))
+        assertEquals(25, m.size)
+        val buf = out(m.capacity)
+        m.copyNew(-1, 0, buf)
+        val xs = List(25) { buf.get(it * 3) }.map { Math.round(it * 10 - 0.5f) }.sorted()
+        assertEquals((0 until 50 step 2).toList(), xs)
     }
 
     @Test
@@ -90,16 +131,20 @@ class VoxelMapTest {
     }
 
     @Test
-    fun longSetGrowsAndHandlesZeroAndNegatives() {
-        val s = LongSet(4)
-        assertTrue(s.add(0L))
-        assertFalse(s.add(0L))
-        for (i in 1..10_000L) assertTrue(s.add(-i * 7919))
-        for (i in 1..10_000L) assertTrue(s.contains(-i * 7919))
-        assertFalse(s.contains(5L))
+    fun longIntMapGrowsRemovesAndHandlesZeroAndNegatives() {
+        val s = LongIntMap(4)
+        s.put(0L, 7)
+        assertEquals(7, s.get(0L))
+        for (i in 1..10_000L) s.put(-i * 7919, i.toInt())
         assertEquals(10_001, s.size)
+        for (i in 1..10_000L step 3) assertEquals(i.toInt(), s.remove(-i * 7919))
+        for (i in 1..10_000L) assertEquals(if ((i - 1) % 3 == 0L) -1 else i.toInt(), s.get(-i * 7919))
+        assertEquals(-1, s.get(5L))
+        assertEquals(7, s.remove(0L))
+        assertEquals(-1, s.get(0L))
+        assertEquals(10_000 - 3334, s.size)
         s.clear()
-        assertFalse(s.contains(0L))
+        assertEquals(-1, s.get(-2 * 7919L))
         assertEquals(0, s.size)
     }
 

@@ -6,12 +6,14 @@ import java.nio.FloatBuffer
 import kotlin.math.floor
 
 /**
- * Point-LIO's voxel map as the app keeps it: a snapshot replaces everything, deltas append,
- * one point per voxel. Points only ever get appended between snapshots, so the renderer
- * uploads just the tail ([generation] changes on a replace). Thread-safe.
+ * Point-LIO's voxel map as the app keeps it: a snapshot replaces everything, deltas add and
+ * remove, one point per voxel. A delta from lio_map_stream is a remove mark, the voxels to
+ * remove, an add mark, the voxels to add; the marks have x = NaN and y = 0 (remove) or 1 (add).
+ * Additions append, so the renderer uploads just the tail; [generation] changes on a replace or
+ * a removal, which moves points. Thread-safe.
  */
 class VoxelMap(val capacity: Int = 300_000, voxel: Double = 0.1) {
-    private val keys = LongSet(capacity)
+    private val index = LongIntMap(capacity)
     private val xyz = FloatArray(capacity * 3)
 
     /** Voxel edge in m, as /lio/map_voxels/size announces it. Keys depend on it, so a change clears the map. */
@@ -28,20 +30,16 @@ class VoxelMap(val capacity: Int = 300_000, voxel: Double = 0.1) {
 
     @Synchronized
     fun replace(points: FloatBuffer) {
-        keys.clear()
+        index.clear()
         size = 0
         overflow = 0
         generation++
-        append(points)
+        apply(points)
     }
 
     /** Returns how many points were new. */
     @Synchronized
-    fun add(points: FloatBuffer): Int {
-        val before = size
-        append(points)
-        return size - before
-    }
+    fun add(points: FloatBuffer): Int = apply(points)
 
     @Synchronized
     fun setVoxel(size: Double) {
@@ -52,7 +50,7 @@ class VoxelMap(val capacity: Int = 300_000, voxel: Double = 0.1) {
 
     @Synchronized
     fun clear() {
-        keys.clear()
+        index.clear()
         size = 0
         overflow = 0
         generation++
@@ -74,23 +72,51 @@ class VoxelMap(val capacity: Int = 300_000, voxel: Double = 0.1) {
         return Tail(this.generation, from, size)
     }
 
-    private fun append(points: FloatBuffer) {
+    private fun apply(points: FloatBuffer): Int {
+        var adding = true
+        var added = 0
+        var removed = false
         while (points.remaining() >= 3) {
             val x = points.get()
             val y = points.get()
             val z = points.get()
-            if (!x.isFinite() || !y.isFinite() || !z.isFinite()) continue
-            val k = key(x, y, z)
-            if (size == capacity) {
-                if (!keys.contains(k)) overflow++
+            if (x.isNaN()) {
+                adding = y > 0.5f
                 continue
             }
-            if (!keys.add(k)) continue
+            if (!x.isFinite() || !y.isFinite() || !z.isFinite()) continue
+            val k = key(x, y, z)
+            if (!adding) {
+                removed = remove(k) || removed
+                continue
+            }
+            if (index.get(k) >= 0) continue
+            if (size == capacity) {
+                overflow++
+                continue
+            }
+            index.put(k, size)
             xyz[size * 3] = x
             xyz[size * 3 + 1] = y
             xyz[size * 3 + 2] = z
             size++
+            added++
         }
+        if (removed) generation++
+        return added
+    }
+
+    /** The last point moves into the hole. */
+    private fun remove(k: Long): Boolean {
+        val i = index.remove(k)
+        if (i < 0) return false
+        val last = size - 1
+        if (i != last) {
+            System.arraycopy(xyz, last * 3, xyz, i * 3, 3)
+            index.put(key(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]), i)
+        }
+        size--
+        return true
     }
 
     /**
@@ -108,60 +134,104 @@ class VoxelMap(val capacity: Int = 300_000, voxel: Double = 0.1) {
     }
 }
 
-/** Open-addressing set of longs: a few hundred thousand keys without boxing. */
-class LongSet(expected: Int) {
-    private var table = LongArray(Integer.highestOneBit(maxOf(expected, 8) * 2 - 1) shl 1)
-    private var hasZero = false
+/** Open-addressing map of long keys to non-negative ints, with deletion: a few hundred thousand keys without boxing. */
+class LongIntMap(expected: Int) {
+    private var keys = LongArray(Integer.highestOneBit(maxOf(expected, 8) * 2 - 1) shl 1)
+    private var vals = IntArray(keys.size)
+    private var zeroValue = -1
     var size = 0
         private set
 
-    fun add(k: Long): Boolean {
-        if (k == 0L) {
-            if (hasZero) return false
-            hasZero = true
-            size++
-            return true
-        }
-        if ((size + 1) * 2 > table.size) grow()
-        return insert(table, k).also { if (it) size++ }
-    }
-
-    fun contains(k: Long): Boolean {
-        if (k == 0L) return hasZero
-        val mask = table.size - 1
+    /** The value for [k], or -1. */
+    fun get(k: Long): Int {
+        if (k == 0L) return zeroValue
+        val mask = keys.size - 1
         var i = mix(k) and mask
         while (true) {
-            val v = table[i]
-            if (v == 0L) return false
-            if (v == k) return true
+            val v = keys[i]
+            if (v == 0L) return -1
+            if (v == k) return vals[i]
             i = (i + 1) and mask
         }
     }
 
+    fun put(k: Long, value: Int) {
+        if (k == 0L) {
+            if (zeroValue < 0) size++
+            zeroValue = value
+            return
+        }
+        if ((size + 1) * 2 > keys.size) grow()
+        if (insert(keys, vals, k, value)) size++
+    }
+
+    /** Removes [k]; returns its value, or -1. */
+    fun remove(k: Long): Int {
+        if (k == 0L) {
+            val v = zeroValue
+            if (v >= 0) {
+                zeroValue = -1
+                size--
+            }
+            return v
+        }
+        val mask = keys.size - 1
+        var i = mix(k) and mask
+        while (keys[i] != k) {
+            if (keys[i] == 0L) return -1
+            i = (i + 1) and mask
+        }
+        val out = vals[i]
+        // Backward shift: later keys of the same probe run that may move into the hole do.
+        var hole = i
+        var j = i
+        while (true) {
+            j = (j + 1) and mask
+            val kj = keys[j]
+            if (kj == 0L) break
+            val home = mix(kj) and mask
+            val stays = if (hole <= j) home in hole + 1..j else home > hole || home <= j
+            if (!stays) {
+                keys[hole] = kj
+                vals[hole] = vals[j]
+                hole = j
+            }
+        }
+        keys[hole] = 0L
+        size--
+        return out
+    }
+
     fun clear() {
-        table.fill(0L)
-        hasZero = false
+        keys.fill(0L)
+        zeroValue = -1
         size = 0
     }
 
-    private fun insert(t: LongArray, k: Long): Boolean {
+    private fun insert(t: LongArray, v: IntArray, k: Long, value: Int): Boolean {
         val mask = t.size - 1
         var i = mix(k) and mask
         while (true) {
-            val v = t[i]
-            if (v == 0L) {
+            val e = t[i]
+            if (e == 0L) {
                 t[i] = k
+                v[i] = value
                 return true
             }
-            if (v == k) return false
+            if (e == k) {
+                v[i] = value
+                return false
+            }
             i = (i + 1) and mask
         }
     }
 
     private fun grow() {
-        val next = LongArray(table.size * 2)
-        for (v in table) if (v != 0L) insert(next, v)
-        table = next
+        val nk = LongArray(keys.size * 2)
+        val nv = IntArray(nk.size)
+        for (i in keys.indices) if (keys[i] != 0L) insert(nk, nv, keys[i], vals[i])
+        keys = nk
+        vals = nv
     }
 
     private fun mix(k: Long): Int {

@@ -103,7 +103,10 @@ with `config/point_lio_go2.yaml`, publishing `/lio/odom`, `/lio/cloud`, `/lio/ma
 `lio_map_stream` turns `/lio/cloud` into voxels for the app (5 cm default, [L] asks): `/lio/map_voxels` (snapshot, on a
 Point-LIO restart or a new receiver) and `/lio/map_voxels/delta` (new voxels, every 1 s), never more than 8000 voxels
 (96 kB) a message: a whole map at once held the Wi-Fi long enough to starve the heartbeat (>2 s, robot cut twice).
-About 7 kB/s on the test bag at 5 cm. The floor (within
+About 7 kB/s on the test bag at 5 cm. Voxels keep a hit/miss score as in OctoMap (numpy, ~3 ms a scan on the
+laptop): beams passing through clear them, so an opened door goes in ~5 s and the L1's range noise no longer
+thickens walls over minutes (standing still, growth down ~60%); a hit just behind a voxel already solid on its
+beam counts for that voxel. Deltas carry removals too. The floor (within
 `--ground_band` 10 cm of the floor under the robot) is a height map, one voxel per column: the L1's floor is
 2-8 cm thick (thicker at grazing range), which stacked it 2-3 voxels deep. Floor-only columns with one voxel:
 73% → 92% on the walking bag, 97% with a 15 cm band (but then lower obstacles merge into the floor).
@@ -127,8 +130,8 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
       barely held, the first match was ~14 deg off, and while the lidar pulled it back the filter learned a
       0.3 rad/s gyro bias, so the map kept turning (2 of 3 starts on 2026-10-08). `init_map_size: 3000`
       builds it from ~0.3 s of scans: all three starts hold within 1.5 deg. Start with the robot still.
-- [ ] **Per-point times.** Check that the cloud's `time` field holds each point's time within the scan;
-      it's what undoes the smear while walking.
+- [x] **Per-point times.** The cloud's `time` field is each point's time in the scan, in seconds: 0 to ~63 ms,
+      rising, one value per point, ~4200 points per scan at 15.5 Hz (`timestamp_unit: 0`). Checked on both bags.
 - [ ] **Raw scans.** Unitree's clouds carry about 59k points/s against the L1's 21.6k, so they overlap or are
       preprocessed. LIO may need the raw scans instead.
 - [ ] **Same data as Unitree's driver.** Point-LIO's L1 config expects the cloud and IMU as `unilidar_sdk`
@@ -175,11 +178,8 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
    - Occasionally, a camera frame or a top-down map render as an image, for bigger decisions.
    - Research angle: a small scene graph (objects, positions, how they relate) as the robot's memory,
      which the LLM queries and updates. Related work: ConceptGraphs, Hydra.
-5. **3D map in the app's 3D tab.** The point cloud drawn around the robot model.
-   - **Robot:** a small node keeps one point per 5–10 cm cube of the LIO map and publishes it about
-     once a second on `/map_cloud`. The raw map and scans are too heavy for Wi-Fi next to the heartbeat.
-   - **App:** read `PointCloud2` in the native DDS code, best-effort and only while the tab is open. Draw
-     the points colored by height, placed with the TF from the LIO frame (`camera_init`) to the base.
+5. **3D map in the app's 3D tab: done.** `lio_map_stream` sends the LIO map as voxels (see Setup), and the
+   app draws them around the robot model, colored by height.
 
 ## GPU on the robot: ROS with CUDA torch
 
@@ -221,9 +221,8 @@ Things to watch:
 
 ## Backlog
 
-- **CPU, GPU, RAM and temperature in the app.** A `system_monitor` node reads `/proc/stat`, `/proc/meminfo`,
-  the GPU load file in `/sys` (find it with `find /sys/devices -name load | grep -i ga10b`) and
-  `/sys/class/thermal`. It publishes JSON on `/system_stats` at 1 Hz, and the app's Robot tab shows it.
+- **CPU, GPU, RAM and temperature in the app: done.** `system_monitor` publishes `/system_stats` at 1 Hz,
+  shown in the app's Robot tab.
 
 - **SSH terminal in the app: built, not yet tried on the robot.** Shell tab, see `Android/README.md`.
   Still to check: `sshd` and the login user on the Go2's Jetson (the app defaults to `unitree@10.42.0.1`).
