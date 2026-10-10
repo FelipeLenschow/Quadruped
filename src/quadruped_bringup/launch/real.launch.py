@@ -1,7 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import OpaqueFunction
 
-from quadruped_bringup.launch_common import arg, common_args, flag, get, include, interface, interface_args, node, record, reward, reward_args
+from quadruped_bringup.launch_common import arg, flag, get, include, interface, interface_args, node, reward, reward_args
 
 
 def setup(context):
@@ -22,12 +22,12 @@ def setup(context):
     actions += interface(context)
     if flag(context, "joy"):
         actions.append(include("joy.launch.py"))
-    return actions + record(context, "real_deploy" if checkpoint else "real_telemetry") + reward(context)
+    return actions + reward(context)
 
 
 def generate_launch_description():
     return LaunchDescription([
-        *common_args(),
+        arg("robot", "go2"),
         *interface_args(),
         arg("checkpoint", "", "policy .pt; empty runs telemetry only"),
         arg("obs_dim", "45"),

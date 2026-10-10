@@ -17,13 +17,18 @@ LAST_COMMAND_FILE = ".launcher_last_command.json"
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 # Off since c26be44 (control-loop performance); flip to run it beside the driver again.
 START_REWARD_ESTIMATOR = False
-RECORDING_LAUNCH_FILES = {"real.launch.py", "mujoco.launch.py", "gazebo.launch.py", "isaac_sim.launch.py",
+RECORDING_LAUNCH_FILES = {"mujoco.launch.py", "gazebo.launch.py", "isaac_sim.launch.py",
                           "eval.launch.py", "sweep.launch.py"}
 CONFIG_PATH = os.path.join(REPO_DIR, "src", "quadruped_bringup", "config", "config.yaml")
 
 # Global Environment Detection
 IS_DOCKER = os.path.exists("/.dockerenv")
 IS_ROBOT = platform.machine().lower() in ["aarch64", "arm64"]
+
+if IS_ROBOT:
+    sys.path.insert(0, os.path.join(REPO_DIR, "src", "quadruped_core"))
+    from quadruped_core import realtime
+    realtime.avoid_reserved_core()
 
 def discovery_server_address():
     """The configured FastDDS discovery server address ("host:port")."""
@@ -730,7 +735,7 @@ def run_cli_menu():
             last_cmd.get("use_estimator", False),
             last_cmd.get("no_ground_truth", False),
             last_cmd.get("show_ghost", True),
-            last_cmd.get("record_session", False),
+            last_cmd.get("record_session", False) and action not in ("real_deploy", "real_telemetry"),
             last_cmd.get("training_phase", ""),
             last_cmd.get("auto_eval", 0),
             last_cmd.get("sweep_opts", {}),
@@ -1079,7 +1084,7 @@ def run_cli_menu():
 
     # Auto-record prompt if launching driver
     record_session = False
-    if action in ["mujoco", "gazebo", "isaac_sim", "real_deploy"]:
+    if action in ["mujoco", "gazebo", "isaac_sim"]:
         # Recording is opt-in: default N regardless of logging.auto_record in config.yaml.
         record_session = input("Record this session to MCAP? [y/N]: ").lower().strip() == "y"
     elif action == "teleop_sweep":
@@ -1091,7 +1096,7 @@ def run_cli_menu():
     if action == "mcap":
         # MCAP Log & Replay sub-menu
         print("\n--- MCAP Telemetry Manager ---")
-        print("  [WARNING] If you started MuJoCo, Gazebo, IsaacSim, or Deploy with auto-record enabled, it is already recording!")
+        print("  [WARNING] If you started MuJoCo, Gazebo or IsaacSim with auto-record enabled, it is already recording!")
         print("  [1] Record Topics (Ros2 Bag)")
         print("  [2] Replay (Ros2 Bag)")
         print("  [3] Replay (Custom Script)")
@@ -1115,6 +1120,7 @@ def run_cli_menu():
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"run_{timestamp}"
             run_name = os.path.join(record_dir, filename)
+            sweep_opts["lidar"] = input("Include the large lidar topics (/lidar/points*, /lio/cloud*, /lio/map, camera)? [y/N]: ").lower().strip() == "y"
         else:
             if mcap_choice == "2":
                 action = "mcap_replay_rosbag"
@@ -1570,7 +1576,7 @@ def main():
             cmd = ros2_launch("lio.launch.py", save=sweep_opts.get("save", False), voxel=sweep_opts.get("voxel"))
 
         elif action == "mcap_record":
-            cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name))
+            cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name), lidar=sweep_opts.get("lidar", False))
         elif action == "mcap_replay_rosbag":
             cmd = [
                 "ros2", "bag", "play",

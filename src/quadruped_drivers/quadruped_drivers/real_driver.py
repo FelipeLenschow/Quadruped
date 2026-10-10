@@ -13,7 +13,7 @@ import yaml
 
 
 from quadruped_core.pipeline import LocomotionPipeline
-from quadruped_core import paths
+from quadruped_core import paths, realtime
 
 # Two clocks, deliberately separate.
 #
@@ -464,6 +464,10 @@ def main():
     parser.add_argument("--internal_policy", type=str, default=None)
     parser.add_argument("--obs_dim", type=int, default=45)
     args = parser.parse_args(remove_ros_args()[1:])
+
+    core = realtime.take_reserved_core()
+    if core is not None:
+        print(f"[RealDriver] Policy core: {core} (SCHED_FIFO), everything else moved off it")
 
     # 1. SDK2 Initialization (Must happen BEFORE rclpy.init to claim the DDS domain)
     # Clear ROS 2 config to prevent conflicts with SDK's internal XML

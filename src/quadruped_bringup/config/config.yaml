@@ -164,6 +164,13 @@ network:
   discovery_mode: "auto"     # auto = on only when this machine is on the AP's subnet
                              # on   = always use it | off = always plain multicast
 
+# --- Policy core (robot only) ---
+# real_driver gets one CPU core to itself at SCHED_FIFO; every launch and the launcher stay off it.
+realtime:
+  enabled: true
+  core: -1                   # -1 = the last online CPU
+  priority: 80               # SCHED_FIFO, 1-99
+
 # --- Safety ---
 safety:
   watchdog_timeout: 0.35     # Seconds before the policy is cut if no heartbeat
