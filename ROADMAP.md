@@ -37,13 +37,38 @@ Working: the L1 lidar (mount, yaw, range offset, leg filter), SLAM in a room, an
 ## Phase 2: Camera
 
 **To build:**
-- [ ] **Camera bridge.** `VideoClient` JPEG frames to `/camera/image_raw/compressed` plus `/camera/camera_info`. The app should only show a low-rate preview.
-- [ ] **Camera mount check tool:** draw the lidar points on the image.
+- [x] **Camera bridge.** `camera_bridge` starts every camera under `cameras:` in `config.yaml`, so a second
+      one (a thermal camera, say) is a new entry, not new code. Sources: `unitree` (the front camera's
+      `VideoClient` JPEGs, passed on without re-encoding), `v4l2` (any USB/UVC camera; `kind: thermal` keeps
+      16-bit frames, sent as PNG) and `ros` (another driver's image topic; Gazebo uses it). Each camera
+      `<name>` gets `/camera/<name>/image_raw/compressed`, `image_raw` (decoded), `camera_info`, the mount TF,
+      and `/camera/<name>/preview/compressed` (320 px, 2 Hz, ~2-15 kB). `/cameras` lists them. Nothing is read
+      or encoded while nobody subscribes. Its own launcher option, [I] (`camera.launch.py`), on top of the
+      real driver or Gazebo's nav world.
+- [x] **App camera tab:** the preview only, one camera at a time, nothing once the tab is left. Preview rate
+      (1-10 Hz) and width (160-640 px) are set from the app (`/camera/<name>/preview/settings`); the robot
+      echoes them in `/cameras`, and the tab shows the frame size and kB/s.
+- [x] **Heartbeat drops:** the robot counts gaps between heartbeats (a gap of k periods = k - 1 lost) and puts
+      them in `/robot_state` (`heartbeat`: Hz, lost in 10 s, total, received, longest gap). Shown in the camera
+      tab and the System tab's link card, red once a gap reaches the watchdog; the header's Live pill has a
+      bar per second of the last minute and the % lost over it.
+- [x] **Camera mount check tool:** `ros2 run quadruped_perception camera_lidar_check` draws the last 20 lidar
+      clouds on the image, coloured by distance, on `/camera/front/lidar_check/compressed` (2 Hz); view it in
+      `rqt_image_view`. Checked in sim on a synthetic cloud: points land on their projected pixels.
 
 **To test on the robot:**
-- [ ] **Calibration:** checkerboard with `camera_calibration`, saved to a yaml.
+- [ ] **Bridge:** the front camera's resolution and rate, and the Jetson CPU with it running. Needs the Docker
+      image rebuilt (OpenCV, `camera_calibration`, `image_transport_plugins`, `rqt_image_view`).
+- [ ] **Calibration:** checkerboard with `camera_calibration`; its Commit button saves `calibration/front.yaml`
+      through the bridge's `set_camera_info`. Run it on a laptop on the robot's Ethernet (full-rate JPEGs over
+      Wi-Fi starve the heartbeat), decoding there rather than pulling the robot's raw `image_raw`:
+      `ros2 run image_transport republish compressed raw --ros-args -r in/compressed:=/camera/front/image_raw/compressed -r out:=/calib/image`,
+      then `ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 --ros-args -r image:=/calib/image -p camera:=/camera/front`.
+      If the lens is too wide for `plumb_bob`, try camera_calibration's fisheye model; the bridge stores it and
+      `camera_lidar_check` handles `equidistant`.
 - [ ] **Camera mount:** the lidar points land on the objects in the image.
-- [ ] **Preview rate:** the app's preview doesn't load the Wi-Fi (heartbeat stays steady).
+- [ ] **Preview rate:** the app's preview doesn't load the Wi-Fi: 0 heartbeats lost in the camera tab at each
+      rate and width, to find the largest that is safe.
 
 **Done when:** a lidar point on a cone lands on the cone in the image.
 

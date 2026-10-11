@@ -229,6 +229,7 @@ class LocomotionPipeline:
             "velocity": [round(v, 3) for v in vel] + [round(yaw_rate, 3)],
             "cmd": cmd,
             "gait": gait,
+            "heartbeat": sp.heartbeat_stats.summary(time.monotonic()),
         })
         self._state_pub.publish(msg)
 

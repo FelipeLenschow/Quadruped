@@ -13,7 +13,7 @@ The system utilizes a **decentralized, high-speed control architecture** designe
 - `launcher.py`: High-level entry point. Handles environment variables and process orchestration.
 - `src/`: the ROS 2 packages (colcon workspace, `colcon build --symlink-install --base-paths src`):
   - `quadruped_core`: library, no nodes: `pipeline.py`, `controller/` (policy runner, safety processor, pose generator), `telemetry/` (TelemetryManager, LKF estimator, kinematics), `config_loader.py`, `paths.py`.
-  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`, `gazebo_sensors`: lidar and camera to ROS).
+  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`, `gazebo_sensors`: lidar and camera to ROS), and `camera_bridge` (every camera in `config.yaml`'s `cameras:`, real or Gazebo, to `/camera/<name>/...`).
   - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool.
   - `quadruped_description`: MuJoCo menagerie, Gazebo worlds (`scene`: flat, `nav`: walls, obstacles, 4 cones), Go2/Go1/A1 models (the Go2 carries an L1-style lidar and a front camera), kinematics yaml, bundled policies.
   - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`).

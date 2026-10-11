@@ -40,6 +40,7 @@ setup(
         "eval_mujoco = quadruped_drivers.eval_mujoco:main",
         "gazebo_driver = quadruped_drivers.gazebo_driver:main",
         "gazebo_sensors = quadruped_drivers.gazebo_sensors:main",
+        "camera_bridge = quadruped_drivers.camera_bridge:main",
         "mujoco_sim2sim = quadruped_drivers.mujoco_sim2sim:main",
         "gazebo_sim2sim = quadruped_drivers.gazebo_sim2sim:main",
     ]},

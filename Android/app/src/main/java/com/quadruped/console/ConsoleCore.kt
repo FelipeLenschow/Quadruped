@@ -26,6 +26,9 @@ data class SafetyParams(
 data class Status(
     val heartbeatCount: Long,
     val heartbeatReaders: Int,
+    /** Share the robot lost, per second over the last minute (NaN = no report), and in % over it. */
+    val heartbeatLoss: DoubleArray,
+    val heartbeatLossPercent: Double?,
     val robotStateAgeMs: Long,
     val estopLatched: Boolean,
     val estopConfirmed: Boolean,
@@ -122,6 +125,7 @@ class ConsoleCore(
     private var robotState: JSONObject? = null
     private var systemStats: JSONObject? = null
     private var heartbeatCount = 0L
+    private val heartbeatLoss = HeartbeatLoss()
     private val seen = HashMap<String, Long>()
     private val events = ArrayDeque<String>()
     private var driveEnabled = false
@@ -146,6 +150,7 @@ class ConsoleCore(
         link.publishFloat32(KP, params.kp.toFloat())
         link.publishFloat32(KD, params.kd.toFloat())
         heartbeatCount++
+        heartbeatLoss.roll(clockMs())
     }
 
     private fun fresh(topic: String): Boolean {
@@ -161,6 +166,9 @@ class ConsoleCore(
             try {
                 val js = JSONObject(link.latestText(ROBOT_STATE) ?: "")
                 robotState = js
+                js.optJSONObject("heartbeat")?.takeIf { it.has("count") }?.let {
+                    heartbeatLoss.add(clockMs(), it.getLong("count"), it.optLong("missed"))
+                }
                 mode = js.optString("mode", mode)
                 if (js.has("estop")) onRobotStateEstop(js.getBoolean("estop"))
             } catch (_: Exception) {
@@ -376,6 +384,8 @@ class ConsoleCore(
         return Status(
             heartbeatCount = heartbeatCount,
             heartbeatReaders = link.matchedReaders(HEARTBEAT),
+            heartbeatLoss = heartbeatLoss.history(),
+            heartbeatLossPercent = heartbeatLoss.percent(),
             robotStateAgeMs = link.latestAgeMs(ROBOT_STATE),
             estopLatched = estopLatched,
             estopConfirmed = estopConfirmed,

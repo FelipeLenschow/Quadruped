@@ -70,6 +70,41 @@ real_lidar:
   # the L1's gyro turned into the body's axes, with the body IMU's accelerometer (rt/lowstate).
   # point_lio_go2.yaml's extrinsic repeats xyz and rpy: change both together.
 
+# Cameras (camera_bridge), one entry each. Every camera <name> publishes
+#   /camera/<name>/image_raw/compressed, /camera/<name>/camera_info (once calibrated),
+#   /camera/<name>/preview/compressed (small and slow, for the app; only while someone watches),
+# and /cameras lists them all (JSON, latched). Fields:
+#   source: unitree (the Go2's own front camera, JPEG over the SDK), v4l2 (any USB/UVC camera),
+#           ros (an image topic from another driver: adds the compressed copy, preview and TF)
+#   kind: rgb or thermal (thermal: 16-bit frames go out as PNG, the preview gets a colour map)
+#   frame, xyz, rpy: the mount on the base; <frame>_optical is the image's frame
+#   rate: Hz; preview_rate, preview_width: the app's preview
+#   calibration: yaml from camera_calibration (default calibration/<name>.yaml); written by its Commit
+#   sim_topic: in Gazebo, read this topic (source ros) instead; cameras without it are real-only
+#   v4l2: device, width, height, fps, fourcc; ros: topic
+cameras:
+  front:
+    source: unitree
+    kind: rgb
+    frame: front_camera
+    xyz: [0.32715, 0.0, 0.04297]
+    rpy: [0.0, 0.0, 0.0]
+    rate: 15
+    preview_rate: 2
+    preview_width: 320
+    sim_topic: /gazebo/front_camera/image
+  # thermal:
+  #   source: v4l2
+  #   kind: thermal
+  #   device: /dev/video0
+  #   width: 256
+  #   height: 192
+  #   fourcc: Y16
+  #   frame: thermal_camera
+  #   xyz: [0.30, 0.0, 0.08]
+  #   rpy: [0.0, 0.0, 0.0]
+  #   rate: 9
+
 # --- Motor Physical Parameters ---
 motor:
   max_torque: 45.0        # Nm (Saturation torque for Go2)

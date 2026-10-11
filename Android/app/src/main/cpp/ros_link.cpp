@@ -137,6 +137,12 @@ void to_latest(const Odometry& m, Latest& l, Store&) {
                 m.linear.x, m.linear.y, m.linear.z, m.angular.x, m.angular.y, m.angular.z};
 }
 
+void to_latest(const CompressedImage& m, Latest& l, Store&) {
+    l.text = m.format;
+    l.values = {m.header.sec + m.header.nanosec * 1e-9};
+    l.bytes = std::make_shared<const std::vector<int8_t>>(m.data);
+}
+
 // The ROS 2 defaults (rmw_qos_profile_default): reliable, volatile, keep last 10.
 template <class Q>
 void ros_qos(Q& q, bool reliable = true, bool transient_local = false) {
@@ -312,7 +318,8 @@ bool Link::start(const LinkConfig& cfg, std::string* error) {
                            TypeSupport(new RosType<PoseStamped>()), TypeSupport(new RosType<JointState>()),
                            TypeSupport(new RosType<TFMessage>()), TypeSupport(new RosType<OccupancyGrid>()),
                            TypeSupport(new RosType<Path>()), TypeSupport(new RosType<LaserScan>()),
-                           TypeSupport(new RosType<PointCloud2>()), TypeSupport(new RosType<Odometry>())}) {
+                           TypeSupport(new RosType<PointCloud2>()), TypeSupport(new RosType<Odometry>()),
+                           TypeSupport(new RosType<CompressedImage>())}) {
         ts.register_type(impl_->participant);
     }
     impl_->publisher = impl_->participant->create_publisher(PUBLISHER_QOS_DEFAULT);
@@ -412,6 +419,7 @@ bool Link::subscribe(const std::string& topic, MsgType type, bool reliable, bool
         case MsgType::LaserScan: return i.subscribe<LaserScan>(topic, r, t, q);
         case MsgType::PointCloud2: return i.subscribe<PointCloud2>(topic, r, t, q);
         case MsgType::Odometry: return i.subscribe<Odometry>(topic, r, t, q);
+        case MsgType::CompressedImage: return i.subscribe<CompressedImage>(topic, r, t, q);
         default: return false;
     }
 }

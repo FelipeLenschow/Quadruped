@@ -243,6 +243,19 @@ struct Odometry {
     size_t bound() const { return 0; }
 };
 
+struct CompressedImage {
+    static constexpr const char* kName = "sensor_msgs::msg::dds_::CompressedImage_";
+    Header header;
+    std::string format;
+    std::vector<int8_t> data;
+    void deser(eprosima::fastcdr::Cdr& c) {
+        header.deser(c);
+        c >> format >> data;
+    }
+    void ser(eprosima::fastcdr::Cdr&) const {}
+    size_t bound() const { return 0; }
+};
+
 template <class T>
 class RosType : public eprosima::fastdds::dds::TopicDataType {
 public:

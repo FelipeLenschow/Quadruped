@@ -7,7 +7,7 @@ from launch.actions import ExecuteProcess, OpaqueFunction
 from quadruped_bringup.launch_common import arg, get
 from quadruped_core import paths
 
-LIDAR_TOPICS = r"^/(lidar/points.*|lio/(cloud.*|map)|camera/image_raw)$"
+LIDAR_TOPICS = r"^/(lidar/points.*|lio/(cloud.*|map)|camera/.*image_raw.*|gazebo/.*image)$"
 
 
 def setup(context):
@@ -21,6 +21,6 @@ def setup(context):
 def generate_launch_description():
     return LaunchDescription([
         arg("path", "", "output folder"),
-        arg("lidar", "true", "also record the lidar and LIO point clouds and the camera image"),
+        arg("lidar", "true", "also record the lidar and LIO point clouds and the camera images"),
         OpaqueFunction(function=setup),
     ])

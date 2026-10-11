@@ -2,6 +2,8 @@ import os
 import sys
 import time
 import threading
+from collections import deque
+
 import numpy as np
 
 from rclpy.node import Node
@@ -20,6 +22,52 @@ _RED    = "\033[91m"
 _YELLOW = "\033[93m"
 _BOLD   = "\033[1m"
 _RESET  = "\033[0m"
+
+
+class HeartbeatStats:
+    """Gaps between heartbeat arrivals over the last WINDOW_S. A gap of k periods counts k - 1 missed
+    heartbeats; the period is the median gap, so it follows whatever rate the console sends at."""
+
+    WINDOW_S = 10.0
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.first = self.last = None
+        self.gaps = deque()  # (arrival, gap s, missed)
+        self.missed_total = 0
+        self.count = 0
+
+    def add(self, now):
+        with self.lock:
+            self.count += 1
+            if self.last is not None:
+                gap = now - self.last
+                period = float(np.median([g for _, g, _ in self.gaps])) if len(self.gaps) >= 5 else 0.0
+                missed = max(0, round(gap / period) - 1) if period > 0 else 0
+                self.gaps.append((now, gap, missed))
+                self.missed_total += missed
+            else:
+                self.first = now
+            self.last = now
+            self._trim(now)
+
+    def _trim(self, now):
+        while self.gaps and self.gaps[0][0] < now - self.WINDOW_S:
+            self.gaps.popleft()
+
+    def summary(self, now):
+        """max_gap_ms includes the time since the last heartbeat, so a stall shows while it lasts."""
+        with self.lock:
+            if self.last is None:
+                return None
+            self._trim(now)
+            gaps = [g for _, g, _ in self.gaps] + [now - self.last]
+            span = min(self.WINDOW_S, now - self.first)
+            return {"hz": round(len(self.gaps) / span, 1) if span > 0 else 0.0,
+                    "missed_10s": sum(m for _, _, m in self.gaps),
+                    "missed": self.missed_total,
+                    "count": self.count,
+                    "max_gap_ms": round(max(gaps) * 1000)}
 
 
 class CommandSafetyProcessor:
@@ -130,6 +178,7 @@ class CommandSafetyProcessor:
         self.active_max_torque = 0.0   # Fail-safe start: zero torque
         self.last_heartbeat_time = 0.0
         self.has_received_heartbeat = False
+        self.heartbeat_stats = HeartbeatStats()
 
         # ------------------------------------------------------------------
         # 6. Heartbeat Subscriptions (separate Float32 topics)
@@ -242,6 +291,7 @@ class CommandSafetyProcessor:
     def _heartbeat_cb(self, msg: Float32):
         self.last_heartbeat_time = time.time()
         self.has_received_heartbeat = True
+        self.heartbeat_stats.add(time.monotonic())
 
     def _max_torque_percent_cb(self, msg: Float32):
         self.max_torque_percent = msg.data

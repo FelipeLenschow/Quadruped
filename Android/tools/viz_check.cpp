@@ -23,6 +23,8 @@ int main(int argc, char** argv) {
     link.subscribe("/lio/map_voxels", T::PointCloud2, true, true);
     link.subscribe("/lio/map_voxels/delta", T::PointCloud2, true, false, true);
     link.subscribe("/lio/odom", T::Odometry, false);
+    link.subscribe("/cameras", T::String, true, true);
+    link.subscribe("/camera/front/preview/compressed", T::CompressedImage, false);
     size_t delta_points = 0, delta_takes = 0;
     float last_delta[3] = {};
     auto drain = [&] {
@@ -66,5 +68,11 @@ int main(int argc, char** argv) {
     std::printf("lio odom #%llu frames=%s pose=", (unsigned long long)o.count, o.text.c_str());
     for (double v : o.values) std::printf("%.3f ", v);
     std::printf("\n");
+    std::printf("cameras: %s\n", link.latest("/cameras").text.c_str());
+    auto im = link.latest("/camera/front/preview/compressed");
+    std::printf("front preview #%llu format=%s stamp=%.3f bytes=%zu magic=%02x%02x\n", (unsigned long long)im.count,
+                im.text.c_str(), im.values.empty() ? 0.0 : im.values[0], im.bytes ? im.bytes->size() : 0,
+                im.bytes && im.bytes->size() > 1 ? (uint8_t)(*im.bytes)[0] : 0,
+                im.bytes && im.bytes->size() > 1 ? (uint8_t)(*im.bytes)[1] : 0);
     link.stop();
 }

@@ -12,7 +12,7 @@ namespace roslink {
 enum class MsgType {
     Float32, Bool, String, Vector3, Float32MultiArray,
     JointState, TFMessage, OccupancyGrid, Path, LaserScan,
-    Twist, PoseStamped, PointCloud2, Odometry,
+    Twist, PoseStamped, PointCloud2, Odometry, CompressedImage,
 };
 
 struct LinkConfig {
@@ -32,6 +32,7 @@ struct LinkConfig {
 //   LaserScan: text = frame, values = [angle_min, angle_increment, range_min, range_max, ranges...]
 //   PointCloud2: text = frame, values = [points], bytes = x,y,z float32 little-endian per point
 //   Odometry: text = "frame child", values = [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
+//   CompressedImage: text = format, values = [stamp s], bytes = the encoded image (JPEG/PNG)
 //   TFMessage: nothing here, see tf_snapshot()
 struct Latest {
     std::string text;

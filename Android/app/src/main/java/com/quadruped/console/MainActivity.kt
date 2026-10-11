@@ -17,6 +17,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -78,6 +80,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -87,7 +91,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.quadruped.console.ui.CameraView
 import com.quadruped.console.ui.ConsoleTheme
+import com.quadruped.console.ui.HeartbeatLine
 import com.quadruped.console.ui.Joystick
 import com.quadruped.console.ui.MapView
 import com.quadruped.console.ui.Robot3D
@@ -131,6 +137,7 @@ private enum class Tab(val label: String, val icon: androidx.compose.ui.graphics
     DRIVE("Drive", Icons.Filled.PlayArrow),
     VIEW("3D", Icons.Filled.Face),
     MAP("Map", Icons.Filled.LocationOn),
+    CAMERA("Camera", Icons.Filled.Search),
     SHELL("Shell", Icons.AutoMirrored.Filled.KeyboardArrowRight),
     SYSTEM("System", Icons.Filled.Settings),
 }
@@ -174,19 +181,23 @@ fun ConsoleApp() {
         ) {
             val t = Tab.entries[tab]
             // Full-height views get a slimmer stop button; it never goes away.
-            val full = t == Tab.SHELL || t == Tab.VIEW || t == Tab.MAP
+            val full = t == Tab.SHELL || t == Tab.VIEW || t == Tab.MAP || t == Tab.CAMERA
             TopBar(status, core != null)
             Spacer(Modifier.height(if (full) 8.dp else 12.dp))
             EstopButton(status, core, compact = full)
             Spacer(Modifier.height(if (full) 8.dp else 12.dp))
             val s = status
             val c = core
-            // The terminal, 3D view and map need the remaining height, which a scrolling column cannot give.
+            // The terminal, 3D view, map and camera need the remaining height, which a scrolling column cannot give.
             if (full) Column(Modifier.weight(1f).padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when {
                     t == Tab.SHELL -> ShellTab(Modifier.weight(1f))
                     s == null || c == null -> OfflineCard(info)
                     t == Tab.VIEW -> ViewTab(s, Modifier.weight(1f))
+                    t == Tab.CAMERA -> CameraView(
+                        s.robotState?.optJSONObject("heartbeat"), s.params.watchdogTimeout,
+                        Modifier.fillMaxWidth().weight(1f),
+                    )
                     else -> MapView(Modifier.fillMaxWidth().weight(1f))
                 }
             } else Column(
@@ -246,6 +257,36 @@ private fun LinkPill(s: Status?, connected: Boolean) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(6.dp))
         Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        val pct = s?.heartbeatLossPercent
+        if (connected && s != null && pct != null) {
+            val lossColor = when {
+                pct >= 5.0 -> Palette.Danger
+                pct > 0.0 -> Palette.Warn
+                else -> Palette.Ok
+            }
+            Spacer(Modifier.width(8.dp))
+            LossGraph(s.heartbeatLoss, lossColor, Modifier.size(width = 36.dp, height = 14.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (pct == 0.0) "0%" else if (pct < 10) "%.1f%%".format(pct) else "%.0f%%".format(pct),
+                color = lossColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = Mono,
+            )
+        }
+    }
+}
+
+/** Heartbeats the robot lost, one bar per second over the last minute; 5 % fills the height. */
+@Composable
+private fun LossGraph(loss: DoubleArray, color: Color, modifier: Modifier) = Canvas(modifier) {
+    val n = 60
+    val w = size.width / n
+    val top = maxOf(0.05, loss.filter { !it.isNaN() }.maxOrNull() ?: 0.0)
+    drawLine(color.copy(alpha = 0.3f), Offset(0f, size.height), Offset(size.width, size.height), 1f)
+    loss.takeLast(n).forEachIndexed { i, v ->
+        if (v.isNaN() || v <= 0.0) return@forEachIndexed
+        val h = (v / top * size.height).toFloat().coerceAtLeast(2f)
+        val x = (n - loss.size.coerceAtMost(n) + i) * w
+        drawRect(color, Offset(x, size.height - h), Size(maxOf(w - 0.5f, 1f), h))
     }
 }
 
@@ -702,6 +743,7 @@ private fun LinkCard(s: Status?, info: String) =
             if (s.heartbeatReaders == 0) {
                 Text("No robot is reading the heartbeat yet.", color = Palette.Warn, fontSize = 12.sp)
             }
+            HeartbeatLine(s.robotState?.optJSONObject("heartbeat"), s.params.watchdogTimeout)
         }
     }
 

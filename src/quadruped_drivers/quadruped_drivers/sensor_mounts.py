@@ -8,9 +8,13 @@ from tf2_ros import StaticTransformBroadcaster
 # base -> sensor mounts, as in the Unitree Go2 URDF and model.sdf
 MOUNTS = {
     "radar": ((0.28945, 0.0, -0.046825), (0.0, 2.8782, 0.0)),
-    "front_camera": ((0.32715, 0.0, 0.04297), (0.0, 0.0, 0.0)),
 }
-OPTICAL_FRAME = "front_camera_optical"
+# Camera frames are x forward; their <frame>_optical child is z forward, x right, y down (REP 103).
+OPTICAL_RPY = (-math.pi / 2, 0.0, -math.pi / 2)
+
+
+def optical_frame(frame):
+    return f"{frame}_optical"
 
 
 def quaternion(roll, pitch, yaw):
@@ -40,11 +44,12 @@ def matrix(roll, pitch, yaw):
             [-sp, cp * sr, cp * cr]]
 
 
-def publish_static_tf(node, base_frame, mounts=None):
-    """Returns the broadcaster; keep it alive with the node."""
-    mounts = {**MOUNTS, **(mounts or {})}
+def publish_static_tf(node, base_frame, mounts=None, cameras=()):
+    """mounts: {child: (xyz, rpy)} on base_frame, MOUNTS by default; cameras: frames that also get their
+    optical frame. Returns the broadcaster; keep it alive with the node."""
+    mounts = MOUNTS if mounts is None else mounts
     transforms = [transform(base_frame, child, xyz, rpy) for child, (xyz, rpy) in mounts.items()]
-    transforms.append(transform("front_camera", OPTICAL_FRAME, (0.0, 0.0, 0.0), (-math.pi / 2, 0.0, -math.pi / 2)))
+    transforms += [transform(frame, optical_frame(frame), (0.0, 0.0, 0.0), OPTICAL_RPY) for frame in cameras]
     broadcaster = StaticTransformBroadcaster(node)
     broadcaster.sendTransform(transforms)
     return broadcaster

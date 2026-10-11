@@ -604,6 +604,7 @@ def run_cli_menu():
         print("  --- ROS 2 Tools ---")
         print("  [N] Navigation (SLAM + Nav2 + rviz)")
         print("  [L] 3D Mapping (Point-LIO + the app's voxel map)")
+        print("  [I] Cameras (camera_bridge + the app's preview)")
         print("  [K] Remote Teleop / Eval Sweep")
         print("  [V] Visualizers")
         print("  [P] PlotJuggler")
@@ -623,6 +624,7 @@ def run_cli_menu():
         print("  --- ROS 2 Tools ---")
         print("  [X] Navigation (REQUIRES DOCKER OR PY3.10)")
         print("  [X] 3D Mapping (REQUIRES DOCKER OR PY3.10)")
+        print("  [X] Cameras (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Remote Teleop (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Visualizers (REQUIRES DOCKER OR PY3.10)")
         print("  [X] PlotJuggler (REQUIRES DOCKER OR PY3.10)")
@@ -644,6 +646,8 @@ def run_cli_menu():
         "N": "nav",
         "l": "lio",
         "L": "lio",
+        "i": "cameras",
+        "I": "cameras",
         "k": "teleop",
         "K": "teleop",
         "v": "visualizers",
@@ -714,7 +718,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "nav", "lio", "discovery_server"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -775,7 +779,7 @@ def run_cli_menu():
     
     # teleop_sweep is not in this list on purpose: it asks for the checkpoint the robot is running,
     # only to file the report under it later. sweep_report reads that back from the recording.
-    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "discovery_server"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         # Simple and WalkTheseWays (cut from unitree_rl_lab) live here so their logs sit alongside
         # the others (the eval viewer and the checkpoint list both read them in place), but they
@@ -839,7 +843,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "discovery_server"]:
+    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -1196,6 +1200,23 @@ def run_cli_menu():
             auto_localize = input("Localize automatically once in policy mode? [Y/n] (default Y): ").lower().strip() != "n"
         sweep_opts = {"map": chosen_map, "initial_pose": initial_pose, "auto_localize": auto_localize}
 
+    if action == "cameras":
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                cams = list(((yaml.safe_load(f) or {}).get("cameras") or {}).keys())
+        except Exception:
+            cams = []
+        print(f"\nCameras in config.yaml: {', '.join(cams) or 'none'}")
+        only = input("Which ones, comma-separated [all]: ").strip()
+        sim = False
+        if not IS_ROBOT:
+            sim = (input("Source [1: Gazebo nav world, 2: the real robot] (default 1): ").strip() or "1") == "1"
+        check = input("Also draw the lidar on the image to check the mount (camera_lidar_check)? [y/N]: ").lower().strip() == "y"
+        check_camera = ""
+        if check:
+            check_camera = input(f"Camera to check [{cams[0] if cams else 'front'}]: ").strip()
+        sweep_opts = {"only": only, "sim": sim, "check": check, "check_camera": check_camera}
+
     if action == "lio":
         save = input("Save the 3D map to third_party/point_lio_ros2/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
         voxel_cm = input("Voxel size for the app's 3D map, cm [5]: ").strip()
@@ -1480,7 +1501,7 @@ def main():
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "lio", "discovery_server"):
+    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable
@@ -1570,6 +1591,12 @@ def main():
             cmd = ros2_launch("nav.launch.py", sim=not IS_ROBOT, rviz=not IS_ROBOT, map=sweep_opts.get("map", ""),
                               initial_pose=sweep_opts.get("initial_pose", "0,0,0"),
                               auto_localize=sweep_opts.get("auto_localize", True))
+
+        elif action == "cameras":
+            # Needs the robot running (real driver, or Gazebo's nav world for sim).
+            cmd = ros2_launch("camera.launch.py", sim=sweep_opts.get("sim", False), only=sweep_opts.get("only"),
+                              interface=None if sweep_opts.get("sim") else sdk_network_interface(),
+                              check=sweep_opts.get("check", False), check_camera=sweep_opts.get("check_camera"))
 
         elif action == "lio":
             # Needs the real driver running (its real_sensors publishes the lidar and its IMU).

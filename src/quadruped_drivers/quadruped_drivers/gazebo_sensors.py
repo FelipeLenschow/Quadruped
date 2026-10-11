@@ -1,4 +1,5 @@
-"""Gazebo sensors to ROS 2: the Go2's lidar and front RGB-D camera, stamped with sim time."""
+"""Gazebo sensors to ROS 2: the Go2's lidar and front camera, stamped with sim time. camera_bridge (--sim) takes
+the image from /gazebo/front_camera/image and publishes the camera's topics and TF, as on the real robot."""
 
 import argparse
 import array
@@ -16,7 +17,7 @@ from gz.msgs10.image_pb2 import Image as GzImage
 from gz.msgs10.pointcloud_packed_pb2 import PointCloudPacked
 from gz.transport13 import Node as GzNode
 
-from quadruped_drivers.sensor_mounts import OPTICAL_FRAME, publish_static_tf
+from quadruped_drivers.sensor_mounts import optical_frame, publish_static_tf
 
 IMAGE_ENCODINGS = {3: "rgb8", 13: "32FC1"}
 
@@ -25,11 +26,11 @@ class GazeboSensors(Node):
     def __init__(self, args):
         super().__init__("gazebo_sensors")
         self.base_frame = args.base_frame
-        self.optical_frame = OPTICAL_FRAME
+        self.optical_frame = optical_frame("front_camera")
         self.cloud_pub = self.create_publisher(PointCloud2, "/lidar/points", 5)
-        self.image_pub = self.create_publisher(Image, "/camera/image_raw", 5)
-        # self.depth_pub = self.create_publisher(Image, "/camera/depth/image_raw", 5)
-        self.info_pub = self.create_publisher(CameraInfo, "/camera/camera_info", 5)
+        self.image_pub = self.create_publisher(Image, "/gazebo/front_camera/image", 5)
+        # self.depth_pub = self.create_publisher(Image, "/camera/front/depth/image_raw", 5)
+        self.info_pub = self.create_publisher(CameraInfo, "/camera/front/camera_info", 5)
         self.tf = publish_static_tf(self, self.base_frame)
 
         self.gz = GzNode()
@@ -37,7 +38,7 @@ class GazeboSensors(Node):
         self.gz.subscribe(GzImage, "/front_camera/image", self._guard(lambda m: self._image_cb(m, self.image_pub)))
         # self.gz.subscribe(GzImage, "/front_camera/depth_image", self._guard(lambda m: self._image_cb(m, self.depth_pub)))
         self.gz.subscribe(GzCameraInfo, "/front_camera/camera_info", self._guard(self._info_cb))
-        self.get_logger().info("/lidar/points, /camera/{image_raw,camera_info}")
+        self.get_logger().info("/lidar/points, /gazebo/front_camera/image, /camera/front/camera_info")
 
     def _guard(self, cb):
         failed = []

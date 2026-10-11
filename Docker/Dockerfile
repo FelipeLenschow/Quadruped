@@ -44,6 +44,9 @@ RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=fa
     ros-humble-rqt-tf-tree \
     ros-humble-robot-state-publisher \
     ros-humble-xacro \
+    ros-humble-camera-calibration \
+    ros-humble-image-transport-plugins \
+    ros-humble-rqt-image-view \
     || echo "Some ROS tools unavailable on this architecture. Continuing."
 
 # 3.6 Navigation: Nav2 (MPPI), slam_toolbox, lidar to laser scan
@@ -102,7 +105,8 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
     skrl \
     tensorboard \
     mcap \
-    mcap-ros2-support
+    mcap-ros2-support \
+    opencv-python-headless
 
 # 8. Set environment variables for Domain Isolation and Protobuf compatibility
 ENV ROS_DOMAIN_ID=1

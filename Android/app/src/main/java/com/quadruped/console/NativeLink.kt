@@ -16,7 +16,7 @@ interface RosLink {
 enum class MsgType {
     FLOAT32, BOOL, STRING, VECTOR3, FLOAT32_MULTI_ARRAY,
     JOINT_STATE, TF_MESSAGE, OCCUPANCY_GRID, PATH, LASER_SCAN,
-    TWIST, POSE_STAMPED, POINT_CLOUD2, ODOMETRY,
+    TWIST, POSE_STAMPED, POINT_CLOUD2, ODOMETRY, COMPRESSED_IMAGE,
 }
 
 /** The C++ DDS participant (app/src/main/cpp). One per process. */
