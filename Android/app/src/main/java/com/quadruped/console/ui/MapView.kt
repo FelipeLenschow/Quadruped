@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -54,6 +56,7 @@ import com.quadruped.console.Vec3
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -69,6 +72,8 @@ private const val GOAL = "/goal_pose"
 private const val SAVE = "/map/save"
 private const val SAVE_RESULT = "/map/save/result"
 private const val SAVE_RESULT_SHOWN_MS = 10_000L
+private const val OBJECTS = "/objects"
+private const val OBJECTS_CLEAR = "/objects/clear"
 
 private class Grid(val image: ImageBitmap, val ox: Double, val oy: Double, val res: Double, val w: Int, val h: Int)
 
@@ -77,7 +82,18 @@ private class MapScene(
     val robot: Pose3?,
     val scan: List<Vec3>,
     val plan: List<Vec3>,
+    val objects: List<Pair<Vec3, String>> = emptyList(),
 )
+
+/** object_mapper's /objects: (position, label) in its frame, and that frame. */
+private fun parseObjects(json: String): Pair<String, List<Pair<Vec3, String>>>? = runCatching {
+    val o = JSONObject(json)
+    val a = o.getJSONArray("objects")
+    o.getString("frame") to (0 until a.length()).map {
+        val d = a.getJSONObject(it)
+        Vec3(d.getDouble("x"), d.getDouble("y"), 0.0) to "${d.getString("label")} (${d.getInt("sightings")})"
+    }
+}.getOrNull()
 
 private fun gridBitmap(v: DoubleArray, cells: ByteArray): Grid {
     val w = v[0].toInt()
@@ -109,7 +125,8 @@ private fun gridBitmap(v: DoubleArray, cells: ByteArray): Grid {
  * RViz-style view of Nav2: /map, the robot (TF map -> base_footprint, odom when there
  * is no map frame yet), /scan and the global /plan. Pinch/drag to move; in goal mode a
  * drag sets a goal and its heading, sent on /goal_pose like RViz's "2D Goal Pose". "Save map"
- * asks the robot's map_save (started with SLAM) to write /map to maps/<name> for AMCL.
+ * asks the robot's map_save (started with SLAM) to write /map to maps/<name> for AMCL. Objects are
+ * object_mapper's /objects, in their label's colour; "Clear objects" asks it to forget them.
  */
 @Composable
 fun MapView(modifier: Modifier = Modifier) {
@@ -127,9 +144,17 @@ fun MapView(modifier: Modifier = Modifier) {
     var saveResult by remember { mutableStateOf("") }
     var saveResultAt by remember { mutableLongStateOf(0L) }
     var now by remember { mutableLongStateOf(0L) }
+    val labelPaint = remember {
+        android.graphics.Paint().apply {
+            isAntiAlias = true
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+    }
 
     DisposableEffect(Unit) {
-        onDispose { listOf(MAP, SCAN, PLAN, SAVE_RESULT, "/tf", "/tf_static").forEach { NativeLink.unsubscribe(it) } }
+        onDispose {
+            listOf(MAP, SCAN, PLAN, SAVE_RESULT, OBJECTS, "/tf", "/tf_static").forEach { NativeLink.unsubscribe(it) }
+        }
     }
     LaunchedEffect(Unit) {
         var saveCount = NativeLink.latestCount(SAVE_RESULT)
@@ -142,6 +167,8 @@ fun MapView(modifier: Modifier = Modifier) {
             NativeLink.advertise(GOAL, MsgType.POSE_STAMPED)
             NativeLink.advertise(SAVE, MsgType.STRING)
             NativeLink.subscribe(SAVE_RESULT, MsgType.STRING)
+            NativeLink.subscribe(OBJECTS, MsgType.STRING, reliable = true, transientLocal = true)
+            NativeLink.advertise(OBJECTS_CLEAR, MsgType.STRING)
             now = System.currentTimeMillis()
             if (NativeLink.latestCount(SAVE_RESULT) != saveCount) {
                 saveCount = NativeLink.latestCount(SAVE_RESULT)
@@ -180,7 +207,11 @@ fun MapView(modifier: Modifier = Modifier) {
                 val toFixed = tf.lookup(fixed, NativeLink.latestText(PLAN) ?: "map") ?: Pose3.IDENTITY
                 for (k in 0 until p.size / 2) plan += toFixed.apply(Vec3(p[2 * k], p[2 * k + 1], 0.0))
             }
-            scene = MapScene(fixed, robot, scan, plan)
+            val objects = NativeLink.latestText(OBJECTS)?.let { parseObjects(it) }?.let { (frame, list) ->
+                val toFixed = tf.lookup(fixed, frame) ?: Pose3.IDENTITY
+                list.map { (p, label) -> toFixed.apply(p) to label }
+            } ?: emptyList()
+            scene = MapScene(fixed, robot, scan, plan, objects)
             if (follow && robot != null) {
                 cx = robot.t.x.toFloat()
                 cy = robot.t.y.toFloat()
@@ -230,6 +261,7 @@ fun MapView(modifier: Modifier = Modifier) {
             grid?.let { drawGrid(view, it) }
             drawPlan(view, scene.plan)
             drawScan(view, scene.scan)
+            drawObjects(view, scene.objects, labelPaint)
             goal?.let { (x, y, a) -> drawArrow(view.px(x, y), a, Palette.Warn, 26f) }
             scene.robot?.let { drawRobot(view, it) }
             goalDrag?.let { (a, b) ->
@@ -243,6 +275,9 @@ fun MapView(modifier: Modifier = Modifier) {
                 Chip("Save map", saveName != null, Palette.Ok) {
                     saveName = "map_" + SimpleDateFormat("MMdd_HHmm", Locale.US).format(Date())
                 }
+            }
+            if (scene.objects.isNotEmpty()) {
+                Chip("Clear objects", false, Palette.Danger) { NativeLink.publishString(OBJECTS_CLEAR, "clear") }
             }
             Chip("Follow", follow, Palette.Accent) { follow = !follow }
             Chip(if (goalMode) "Drag to set goal" else "Goal", goalMode, Palette.Warn) { goalMode = !goalMode }
@@ -313,6 +348,19 @@ private fun DrawScope.drawPlan(v: View, plan: List<Vec3>) {
 private fun DrawScope.drawScan(v: View, scan: List<Vec3>) {
     if (scan.isEmpty()) return
     drawPoints(scan.map { v.px(it.x, it.y) }, PointMode.Points, Palette.Danger, 5f, StrokeCap.Round)
+}
+
+private fun DrawScope.drawObjects(v: View, objects: List<Pair<Vec3, String>>, paint: android.graphics.Paint) {
+    paint.textSize = 12.sp.toPx()
+    val r = maxOf(6f, (0.15 * v.scale).toFloat())
+    for ((p, label) in objects) {
+        val c = labelColor(label.substringBeforeLast(" ("))
+        val at = v.px(p.x, p.y)
+        drawCircle(c, r, at)
+        drawCircle(Palette.Bg, r, at, style = Stroke(2f))
+        paint.color = c.toArgb()
+        drawContext.canvas.nativeCanvas.drawText(label, at.x + r + 4f, at.y + paint.textSize / 3, paint)
+    }
 }
 
 private fun DrawScope.drawArrow(at: Offset, yaw: Double, color: Color, len: Float) {

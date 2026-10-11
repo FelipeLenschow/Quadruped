@@ -1,4 +1,5 @@
-"""Cameras: camera_bridge for config.yaml's cameras, and optionally the lidar mount check and object detection.
+"""Cameras: camera_bridge for config.yaml's cameras, and optionally the lidar mount check, object detection and
+objects on the map (object_mapper, which needs nav.launch.py's map and filtered lidar).
 
 Needs the robot running: real.launch.py (or, with sim:=true, Gazebo's nav world, whose gazebo_sensors
 publishes the simulated image).
@@ -24,6 +25,9 @@ def setup(context):
         actions.append(node("quadruped_perception", "camera_lidar_check", f"--camera={get(context, 'check_camera')}"))
     if flag(context, "detect"):
         actions.append(node("quadruped_perception", "object_detector"))
+    if flag(context, "map_objects"):
+        actions.append(node("quadruped_perception", "object_mapper",
+                            parameters=[{"use_sim_time": flag(context, "sim")}]))
     return actions
 
 
@@ -35,5 +39,6 @@ def generate_launch_description():
         arg("check", "false", "also draw the lidar on a camera's image (camera_lidar_check)"),
         arg("check_camera", "front", "camera for the check"),
         arg("detect", "false", "also run object_detector (config.yaml's detector:)"),
+        arg("map_objects", "false", "also run object_mapper (config.yaml's object_mapper:; needs nav.launch.py)"),
         OpaqueFunction(function=setup),
     ])

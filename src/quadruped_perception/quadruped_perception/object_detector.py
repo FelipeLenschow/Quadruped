@@ -2,7 +2,8 @@
 
 Reads /camera/<camera>/image_raw/compressed and publishes, at most at rate:
   /camera/<camera>/detections: JSON {"stamp", "frame", "width", "height", "ms",
-                                     "objects": [{"label", "score", "box": [x1, y1, x2, y2]}]} (pixels)
+                                     "objects": [{"label", "score", "box": [x1, y1, x2, y2],
+                                                  "mask": [[x, y], ...]}]} (pixels; mask: the outline)
   /camera/<camera>/detections/image/compressed: the image with the boxes drawn (only while subscribed)
 
 --export builds a TensorRT engine for the configured model, classes and imgsz. Engines are tied to the GPU
@@ -45,6 +46,14 @@ def settings(cfg):
 def engine_path(model, classes, imgsz):
     tag = hashlib.sha1("\n".join(classes).encode()).hexdigest()[:8] if classes else "all"
     return f"{os.path.splitext(model)[0]}-{tag}-{imgsz}.engine"
+
+
+def outline(points, tolerance_px=2.0):
+    """A mask's outline with fewer points, as [[x, y], ...] in whole pixels; [] when there is none."""
+    if points is None or len(points) < 3:
+        return []
+    poly = cv2.approxPolyDP(np.asarray(points, np.float32).reshape(-1, 1, 2), tolerance_px, True)
+    return poly.reshape(-1, 2).round().astype(int).tolist()
 
 
 def label_color(label):
@@ -150,8 +159,11 @@ class ObjectDetector(Node):
         t0 = time.monotonic()
         r = self._predict(image)
         ms = (time.monotonic() - t0) * 1000
-        objects = [{"label": r.names[int(c)], "score": round(s, 3), "box": [round(v, 1) for v in b]}
-                   for b, s, c in zip(r.boxes.xyxy.tolist(), r.boxes.conf.tolist(), r.boxes.cls.tolist())]
+        outlines = r.masks.xy if r.masks is not None else [None] * len(r.boxes)
+        objects = [{"label": r.names[int(c)], "score": round(s, 3), "box": [round(v, 1) for v in b],
+                    "mask": outline(m)}
+                   for b, s, c, m in zip(r.boxes.xyxy.tolist(), r.boxes.conf.tolist(), r.boxes.cls.tolist(),
+                                         outlines)]
         h, w = image.shape[:2]
         stamp = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
         self.pub.publish(String(data=json.dumps({"stamp": stamp, "frame": m.header.frame_id, "width": w,

@@ -33,8 +33,9 @@ Android, no bridge on the robot.
   stay on DDS, independent of the shell.
 - Camera tab: camera_bridge's preview of each camera in `/cameras`, with rate and width sent back to the
   robot. "Objects" draws object_detector's boxes (`/camera/<name>/detections`, JSON) over the preview,
-  so only a few hundred bytes a frame cross Wi-Fi on top of it.
-- Map tab: `/map`, `/scan`, `/plan` and the robot (TF map -> base_footprint), RViz-style;
+  so only a few kB a frame at most cross Wi-Fi on top of it.
+- Map tab: object_mapper's `/objects` as dots in their label's colour ("Clear objects" sends
+  `/objects/clear`), and `/map`, `/scan`, `/plan` and the robot (TF map -> base_footprint), RViz-style;
   "Goal" mode sends a drag as `/goal_pose`. "Save map" sends a name on `/map/save`; the robot's `map_save`
   (started with SLAM) writes `maps/<name>.pgm/.yaml` and answers on `/map/save/result`. These streams are subscribed only while shown,
   best-effort, so they never compete with the heartbeat for retransmits.

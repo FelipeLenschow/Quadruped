@@ -108,29 +108,40 @@ YOLOE, an open-vocabulary YOLO: its prompt-free model names objects from a built
 
 ### 3b: Objects on the map
 
-A new `object_mapper` node in `quadruped_perception`. Needs the camera calibrated (`calibration/front.yaml`;
-Gazebo publishes its own `camera_info`) and the mount checked with `camera_lidar_check` (Phase 2).
+`object_mapper` in `quadruped_perception` (config.yaml's `object_mapper:`); launcher [I] → detect → "put them
+on the map", with [N] running. Needs the camera calibrated (`calibration/front.yaml`; Gazebo publishes its own
+`camera_info`) and the mount checked with `camera_lidar_check` (Phase 2).
 
 **To build:**
-- [ ] **Box → direction:** the camera's intrinsics turn a pixel into a ray in the camera frame. For objects on
-      the floor, the box's bottom-centre (where it touches the ground).
-- [ ] **Direction → distance from the lidar:**
-  - the last ~1 s of clouds, kept in the map frame so the robot can move meanwhile, projected onto the image
-    through TF (as `camera_lidar_check` does);
-  - the points inside the object's mask (YOLOE gives one; better than the box), and a robust distance from
-    them, the nearest cluster, so the wall behind it does not count;
-  - fallback when no point hits it (small or very close objects): the ray's crossing with the floor.
-- [ ] **Camera → map:** TF (map → odom → base → camera) at the image's stamp gives x, y on the map.
-- [ ] **Merging sightings:**
-  - a sighting within ~0.5 m of a known object of that label updates it (averaged position, one more count);
-    otherwise it is a new object;
-  - an object is reported after a few sightings (~3), which drops one-frame mistakes;
-  - labels are voted: 20 × "traffic cone" and 2 × "extrude" is a traffic cone;
-  - later: drop objects that should be in view, in range, but are not seen for a while.
-- [ ] **Output:** `/objects` (JSON: id, label, x, y, sightings, last seen) for the app and the LLM
-      (`list_cones`, `describe_surroundings`), plus a MarkerArray for rviz.
-- [ ] **Show them** in rviz and on the app's map tab.
-- [ ] **Gazebo check:** a script compares `/objects` with the 4 cones' poses in `nav.sdf` and prints each error.
+- [x] **Box → direction:** the camera's intrinsics turn a pixel into a ray (`pixel_ray`, shared with
+      `camera_lidar_check`). For objects on the floor, the box's bottom-centre.
+- [x] **Direction → distance from the lidar:**
+  - the last ~1 s of `/lidar/points_filtered`, kept in the map frame, projected onto the image through TF;
+  - the points inside the object's outline (object_detector now sends YOLOE's mask as a polygon), and the
+    nearest cluster of them, so the wall behind it does not count;
+  - pushed back by half the object's width (how far its points spread sideways), since the lidar sees only
+    its front: cone error 11 → 4 cm;
+  - fallback when no point hits it: the bottom-centre ray crossed with the floor.
+- [x] **Camera → map:** TF at the image's stamp.
+- [x] **Merging sightings:** within 0.5 m (0.25 m for a label it never had), reported after 3 sightings,
+      labels voted. Boxes wider than 90% of the image or over half its area (floor, "room", "sky") and
+      `ignore:` labels (people, surfaces) are not mapped.
+- [ ] **Forgetting:** each object already has `last_seen`, but time alone would forget everything out of view.
+      For each camera frame, a known object that should have been seen counts a miss:
+  - in view (its position projects inside the image), in range and not cut off;
+  - not hidden (no lidar points in front of it along that direction);
+  - not detected there.
+
+  After ~10 misses in a row (~2 s at 5 Hz) it is dropped; a sighting resets the count. Also add
+  `first_seen`. Test in Gazebo by mapping a cone, then removing it from the world. For now
+  `/objects/clear` (or "Clear objects" in the app) forgets them all.
+- [x] **Output:** `/objects` (JSON, latched: id, label, x, y, z, sightings, last seen, label votes) and
+      `/objects/markers` for rviz.
+- [x] **Show them** in rviz (markers) and on the app's map tab (dots in the label's colour).
+- [x] **Gazebo check:** `ros2 run quadruped_perception object_check [--start=x,y,yaw]` compares `/objects`
+      with the cones' poses in `nav.sdf`. Standing 2–4.5 m from each of the 4 cones: 0–4 cm. Labels up close
+      are odd with the prompt-free model ("extrude", "stupa"); with `classes: [traffic cone, box, pillar, wall]`
+      it is "traffic cone" and nothing else gets mapped. A cone behind an obstacle is not mapped (correct).
 
 **To test on the robot:**
 - [ ] **Positions:** objects on the map against tape-measured positions.

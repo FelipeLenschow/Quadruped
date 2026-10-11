@@ -35,6 +35,30 @@ def xyz(msg):
     return out[np.isfinite(out).all(axis=1)]
 
 
+def project(info, pts):
+    """Points in the camera's optical frame to pixels of info's image, with its distortion."""
+    k = np.array(info.k).reshape(3, 3)
+    d = np.array(info.d, float)
+    zero = np.zeros(3)
+    if info.distortion_model == "equidistant":
+        uv, _ = cv2.fisheye.projectPoints(pts[:, None, :], zero, zero, k, d[:4])
+    else:
+        uv, _ = cv2.projectPoints(pts, zero, zero, k, d)
+    return uv.reshape(-1, 2)
+
+
+def pixel_ray(info, u, v):
+    """The direction (unnormalised, z = 1) in the camera's optical frame that pixel (u, v) looks along."""
+    k = np.array(info.k).reshape(3, 3)
+    d = np.array(info.d, float)
+    p = np.array([[[u, v]]], np.float64)
+    if info.distortion_model == "equidistant":
+        x, y = cv2.fisheye.undistortPoints(p, k, d[:4]).ravel()
+    else:
+        x, y = cv2.undistortPoints(p, k, d).ravel()
+    return np.array([x, y, 1.0])
+
+
 class CameraLidarCheck(Node):
     def __init__(self, args):
         super().__init__("camera_lidar_check")
@@ -86,7 +110,7 @@ class CameraLidarCheck(Node):
         dist = np.linalg.norm(pts, axis=1)
         keep = (pts[:, 2] > 0.1) & (dist < self.max_range)
         pts, dist = pts[keep], dist[keep]
-        uv = self._project(pts) if len(pts) else np.zeros((0, 2))
+        uv = project(self.info, pts) if len(pts) else np.zeros((0, 2))
         h, w = image.shape[:2]
         sx, sy = w / self.info.width, h / self.info.height
         inside = (uv[:, 0] >= 0) & (uv[:, 0] < self.info.width) & (uv[:, 1] >= 0) & (uv[:, 1] < self.info.height)
@@ -100,16 +124,6 @@ class CameraLidarCheck(Node):
         msg.header = self.image.header
         msg.data = array.array("B", cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes())
         self.pub.publish(msg)
-
-    def _project(self, pts):
-        k = np.array(self.info.k).reshape(3, 3)
-        d = np.array(self.info.d, float)
-        zero = np.zeros(3)
-        if self.info.distortion_model == "equidistant":
-            uv, _ = cv2.fisheye.projectPoints(pts[:, None, :], zero, zero, k, d[:4])
-        else:
-            uv, _ = cv2.projectPoints(pts, zero, zero, k, d)
-        return uv.reshape(-1, 2)
 
 
 def main():

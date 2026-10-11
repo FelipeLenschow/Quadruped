@@ -23,5 +23,7 @@ setup(
         "lio_map_stream = quadruped_perception.lio_map_stream:main",
         "camera_lidar_check = quadruped_perception.camera_lidar_check:main",
         "object_detector = quadruped_perception.object_detector:main",
+        "object_mapper = quadruped_perception.object_mapper:main",
+        "object_check = quadruped_perception.object_check:main",
     ]},
 )

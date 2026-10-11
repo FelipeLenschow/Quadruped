@@ -86,7 +86,8 @@ private fun parseDetections(json: String): Detections? = runCatching {
     })
 }.getOrNull()
 
-private fun labelColor(label: String) =
+/** One colour per label, shared with the map's objects. */
+fun labelColor(label: String) =
     Color(android.graphics.Color.HSVToColor(floatArrayOf(((label.hashCode() % 360) + 360) % 360f, 0.65f, 1f)))
 
 /**
