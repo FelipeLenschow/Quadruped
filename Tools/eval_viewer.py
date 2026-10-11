@@ -283,6 +283,7 @@ def _run_index():
             i = parts.index("IsaacLab_Tasks")
             if i + 1 < len(parts):
                 module = parts[i + 1]
+        experiment = parts[-2] if len(parts) > 3 and parts[-3] == "rsl_rl" else ""
         env_cfg = _load_yaml(os.path.join(run_dir, "params", "env.yaml"))
         agent_cfg = _load_yaml(os.path.join(run_dir, "params", "agent.yaml"))
         cfg = _flatten_cfg(env_cfg, agent_cfg)
@@ -297,6 +298,7 @@ def _run_index():
             "name": name,
             "id": rel,
             "module": module,
+            "experiment": experiment,
             "events": ev,
             "last_write": mtime,
             "live": bool(ev) and (now - mtime) < LIVE_WINDOW_S,
@@ -327,7 +329,7 @@ CACHE_DIR = os.path.join(BASE_DIR, "Tools", ".viewer_cache")
 # the old single-module behaviour.
 VIEWER_MODULES = [
     m.strip()
-    for m in os.environ.get("VIEWER_MODULES", os.environ.get("VIEWER_MODULE", "Walk,Simple,WalkTheseWays")).split(",")
+    for m in os.environ.get("VIEWER_MODULES", os.environ.get("VIEWER_MODULE", "Walk,Simple,WalkTheseWays,Recovery")).split(",")
     if m.strip()
 ]
 MODULE_DIRS = [os.path.join(BASE_DIR, "IsaacLab_Tasks", m) for m in VIEWER_MODULES]

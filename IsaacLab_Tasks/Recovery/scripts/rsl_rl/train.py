@@ -1,0 +1,263 @@
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Script to train RL agent with RSL-RL."""
+
+"""Launch Isaac Sim Simulator first."""
+
+
+import gymnasium as gym
+import pathlib
+import sys
+
+sys.path.insert(0, f"{pathlib.Path(__file__).parent.parent}")
+from list_envs import import_packages  # noqa: F401
+
+sys.path.pop(0)
+
+tasks = []
+for task_spec in gym.registry.values():
+    if str(task_spec.kwargs.get("rsl_rl_cfg_entry_point", "")).startswith("recovery."):
+        tasks.append(task_spec.id)
+
+import argparse
+
+import argcomplete
+
+from isaaclab.app import AppLauncher
+
+# local imports
+import cli_args  # isort: skip
+from nan_guard import install_nan_guard  # isort: skip
+
+# add argparse arguments
+parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
+parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
+parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
+parser.add_argument("--task", type=str, default=None, choices=tasks, help="Name of the task.")
+parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
+parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
+parser.add_argument(
+    "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
+)
+# append RSL-RL cli arguments
+cli_args.add_rsl_rl_args(parser)
+# append AppLauncher cli args
+AppLauncher.add_app_launcher_args(parser)
+argcomplete.autocomplete(parser)
+args_cli, hydra_args = parser.parse_known_args()
+
+# always enable cameras to record video
+if args_cli.video:
+    args_cli.enable_cameras = True
+
+if "--headless" in hydra_args:
+    hydra_args.remove("--headless")
+    args_cli.headless = True
+if not getattr(args_cli, "headless", False) and getattr(args_cli, "visualizer", "") is None:
+    args_cli.visualizer = "kit"
+
+# clear out sys.argv for Hydra
+sys.argv = [sys.argv[0]] + hydra_args
+
+# launch omniverse app
+app_launcher = AppLauncher(args_cli)
+simulation_app = app_launcher.app
+
+"""Check for minimum supported RSL-RL version."""
+
+import importlib.metadata as metadata
+import platform
+
+from packaging import version
+
+# for distributed training, check minimum supported rsl-rl version
+RSL_RL_VERSION = "2.3.1"
+installed_version = metadata.version("rsl-rl-lib")
+if args_cli.distributed and version.parse(installed_version) < version.parse(RSL_RL_VERSION):
+    if platform.system() == "Windows":
+        cmd = [r".\isaaclab.bat", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
+    else:
+        cmd = ["./isaaclab.sh", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
+    print(
+        f"Please install the correct version of RSL-RL.\nExisting version is: '{installed_version}'"
+        f" and required version is: '{RSL_RL_VERSION}'.\nTo install the correct version, run:"
+        f"\n\n\t{' '.join(cmd)}\n"
+    )
+    exit(1)
+
+"""Rest everything follows."""
+
+import gymnasium as gym
+import inspect
+import os
+import shutil
+import torch
+from datetime import datetime
+
+from rsl_rl.runners import OnPolicyRunner  # TODO: Consider printing the experiment name in the terminal.
+
+import isaaclab_tasks  # noqa: F401
+from isaaclab.envs import (
+    DirectMARLEnv,
+    DirectMARLEnvCfg,
+    DirectRLEnvCfg,
+    ManagerBasedRLEnvCfg,
+    multi_agent_to_single_agent,
+)
+from isaaclab.utils.io import dump_yaml
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_tasks.utils import get_checkpoint_path
+from isaaclab_tasks.utils.hydra import hydra_task_config
+
+import recovery.tasks  # noqa: F401
+from recovery.utils.export_deploy_cfg import export_deploy_cfg
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.deterministic = False
+torch.backends.cudnn.benchmark = False
+
+class DecimatedWriter:
+    """Pass add_scalar through on every Nth call per tag; everything else goes straight to the writer.
+
+    rsl_rl writes ~60 scalars every iteration, which puts a 30k-iteration run's TensorBoard file
+    past GitHub's 50 MB warning. Every 10th iteration keeps the curves and cuts the file tenfold.
+    """
+
+    def __init__(self, writer, every: int):
+        self._writer = writer
+        self._every = every
+        self._calls = {}
+
+    def add_scalar(self, tag, *args, **kwargs):
+        n = self._calls.get(tag, 0)
+        self._calls[tag] = n + 1
+        if n % self._every == 0:
+            self._writer.add_scalar(tag, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._writer, name)
+
+
+def decimate_tensorboard(runner) -> None:
+    """Wrap the runner's log writer once rsl_rl creates it. TB_LOG_EVERY sets N (1 logs everything)."""
+    every = int(os.environ.get("TB_LOG_EVERY", 10))
+    if every <= 1:
+        return
+    logger = runner.logger
+    create = logger.init_logging_writer
+
+    def init_logging_writer():
+        create()
+        if logger.writer is not None:
+            logger.writer = DecimatedWriter(logger.writer, every)
+            print(f"[TensorBoard] writing scalars every {every} iterations (TB_LOG_EVERY)")
+
+    logger.init_logging_writer = init_logging_writer
+
+
+@hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
+def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
+    """Train with RSL-RL agent."""
+    # override configurations with non-hydra CLI arguments
+    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    agent_cfg.max_iterations = (
+        args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
+    )
+
+    # a resumed policy already handles the easy starts; RECOVERY_LEVEL_INIT still wins if set
+    level = getattr(getattr(env_cfg, "curriculum", None), "level", None)
+    if agent_cfg.resume and level is not None and "RECOVERY_LEVEL_INIT" not in os.environ:
+        level.params["initial"] = 1.0
+        print("[Recovery] resuming: curriculum starts at level 1")
+
+    # set the environment seed
+    # note: certain randomizations occur in the environment initialization so we set the seed here
+    env_cfg.seed = agent_cfg.seed
+    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+
+    # multi-gpu training configuration
+    if args_cli.distributed:
+        env_cfg.sim.device = f"cuda:{app_launcher.local_rank}"
+        agent_cfg.device = f"cuda:{app_launcher.local_rank}"
+
+        # set seed to have diversity in different threads
+        seed = agent_cfg.seed + app_launcher.local_rank
+        env_cfg.seed = seed
+        agent_cfg.seed = seed
+
+    # specify directory for logging experiments
+    log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+    log_root_path = os.path.abspath(log_root_path)
+    print(f"[INFO] Logging experiment in directory: {log_root_path}")
+    # specify directory for logging runs: {time-stamp}_{run_name}
+    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # This way, the Ray Tune workflow can extract experiment name.
+    print(f"Exact experiment name requested from command line: {log_dir}")
+    if agent_cfg.run_name:
+        log_dir += f"_{agent_cfg.run_name}"
+    log_dir = os.path.join(log_root_path, log_dir)
+
+    # create isaac environment
+    if args_cli.video:
+        cli_args.add_video_recorder(
+            env_cfg, os.path.join(log_dir, "videos", "train"), args_cli.video_length, args_cli.video_interval
+        )
+    env = gym.make(args_cli.task, cfg=env_cfg)
+
+    # convert to single-agent instance if required by the RL algorithm
+    if isinstance(env.unwrapped, DirectMARLEnv):
+        env = multi_agent_to_single_agent(env)
+
+    # save resume path before creating a new log_dir
+    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+        if os.path.isfile(agent_cfg.load_checkpoint):
+            resume_path = os.path.abspath(agent_cfg.load_checkpoint)
+        else:
+            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+
+    # wrap around environment for rsl-rl
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    install_nan_guard(env)
+
+    # create runner from rsl-rl
+    agent_cfg = cli_args.migrate_rsl_rl_cfg(agent_cfg)
+    runner_cfg = cli_args.runner_cfg_for_installed_rsl_rl(agent_cfg)
+    runner = OnPolicyRunner(env, runner_cfg, log_dir=log_dir, device=agent_cfg.device)
+    decimate_tensorboard(runner)
+    # write git state to logs
+    runner.add_git_repo_to_log(__file__)
+    # load the checkpoint
+    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+        print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+        # load previously trained model
+        cli_args.load_checkpoint(runner, resume_path)
+
+    # dump the configuration into log-directory
+    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+    export_deploy_cfg(env.unwrapped, log_dir)
+    # copy the environment configuration file to the log directory
+    shutil.copy(
+        inspect.getfile(env_cfg.__class__),
+        os.path.join(log_dir, "params", os.path.basename(inspect.getfile(env_cfg.__class__))),
+    )
+
+    # run training
+    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+
+    # close the simulator
+    env.close()
+
+
+if __name__ == "__main__":
+    # run the main function
+    main()
+    # close sim app
+    simulation_app.close()

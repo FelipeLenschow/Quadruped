@@ -91,6 +91,7 @@ Each subfolder is a fully independent copy of the Isaac Lab task package (own `s
 - **`Handstand/`** — handstand task.
 - **`Simple/`** — unitree_rl_lab cut down to the Go2 (package `simple`, manager-based, rsl_rl): the Sigma-Vel-Foot-Rough and Deploy tasks. Trains through its own `scripts/rsl_rl/train.py`.
 - **`WalkTheseWays/`** — Walk These Ways for the Go2 (package `walk_these_ways`), cut from Simple to the single `Unitree-Go2-Velocity-WTW` task. Same rsl_rl layout as Simple.
+- **`Recovery/`** — Go2 fall recovery (package `recovery`), cut from Simple: `Go2-Recovery` (get back to the standing pose slowly from drops, rolls and random poses) and `Go2-LieDown` (a safety controller that lies the robot down on its belly so the motors can be switched off). Same rsl_rl layout as Simple.
 
 ## Reward/training config pattern (Walk)
 

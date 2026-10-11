@@ -503,10 +503,11 @@ window.addEventListener('scroll',hideTip,true);
 // First match wins, so Task is tested before the generic velocity/joint patterns.
 const CATS=[
  ['Task',              t=>/track_lin_vel|track_ang_vel|^alive$|pos_deviation|yaw_deviation/.test(t)],
+ ['Recovery',          t=>/^lie_|^stand_|^upright|base_height_up|^base_low|^relaxed|feet_on_ground|^Curriculum\/level/.test(t)],
  ['Gait',              t=>/foot_height|feet_air|gait_phase/.test(t)],
  ['Stability',         t=>/flat_orientation|lin_vel_z_l2|ang_vel_xy_l2|base_acc_l2|base_height_l2/.test(t)],
- ['Effort & smoothness', t=>/dof_acc|dof_torques|action_rate|dof_pos_l2|joint_vel_l2/.test(t)],
- ['Contact forces',    t=>/grf_|max_contact_force|undesired_contacts/.test(t)],
+ ['Effort & smoothness', t=>/dof_acc|dof_torques|action_rate|dof_pos_l2|joint_vel_l2|_over(_calm)?$|^energy$/.test(t)],
+ ['Contact forces',    t=>/grf_|max_contact_force|undesired_contacts|_hits$|^impacts$|belly_impact|head_contact/.test(t)],
  ['Training',          t=>/^(Reward|Loss|Policy|Learning|Episode) \//.test(t)||/joint_acc_sum|base_acc_sum/.test(t)],
 ];
 const CAT_ORDER=CATS.map(c=>c[0]).concat('Other');
@@ -626,7 +627,7 @@ function restoreSelection(){
 function renderRuns(){
   const q=(document.getElementById('q').value||'').toLowerCase();
   const el=document.getElementById('runs'); el.innerHTML='';
-  RUNS.filter(r=>r.name.toLowerCase().includes(q)||(r.module||'').toLowerCase().includes(q))
+  RUNS.filter(r=>[r.name,r.module,r.experiment].some(x=>(x||'').toLowerCase().includes(q)))
       .forEach(r=>{
     const on=sel.includes(r.id);
     const d=document.createElement('div');
@@ -637,7 +638,7 @@ function renderRuns(){
     const curves=(r.tags&&r.tags.length)?`${(r.last_step/1000).toFixed(0)}k steps`:'no curves';
     const evals=r.n_reports?` · <span class="evals">${r.n_reports} eval${r.n_reports===1?'':'s'}</span>`:'';
     d.innerHTML=`<div class="nm"><span class="dot ${r.live?'pulse':''}"></span>${r.name}</div>
-      <div class="meta">${r.module||'—'} · ${curves} ·
+      <div class="meta">${r.module||'—'}${r.experiment?' / '+r.experiment:''} · ${curves} ·
       ${r.num_envs||'?'} envs${evals}${r.live?' · LIVE':' · '+relTime(age)}</div>`;
     d.onclick=()=>toggle(r.id);
     el.appendChild(d);
