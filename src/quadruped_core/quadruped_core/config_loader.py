@@ -22,3 +22,15 @@ def load_config(config_path=None):
         except yaml.YAMLError as exc:
             print(f"[ConfigLoader] ERROR: Could not parse YAML: {exc}")
             return {}
+
+
+def load_policies(path=None):
+    """quadruped_bringup/config/policies.json: {"safety_policy": name, "policies": {name: {path, ...}}}."""
+    import json
+
+    path = path or paths.config("policies.json")
+    if not os.path.exists(path):
+        print(f"[ConfigLoader] WARNING: {path} not found. No policies to switch to, no safety policy.")
+        return {}
+    with open(path) as f:
+        return json.load(f)

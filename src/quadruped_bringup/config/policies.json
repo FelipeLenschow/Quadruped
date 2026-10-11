@@ -1,0 +1,24 @@
+{
+  "safety_policy": "Lie2",
+  "policies": {
+    "Final7": {
+      "path": "IsaacLab_Tasks/Walk/logs/skrl/quadruped_direct/Final7/checkpoints/agent_500000.pt"
+    },
+    "WTW": {
+      "path": "IsaacLab_Tasks/WalkTheseWays/logs/rsl_rl/go2_wtw/V2/model_29999.pt"
+    },
+    "ClockRough": {
+      "path": "IsaacLab_Tasks/Simple/logs/rsl_rl/clock_rough/ClockRough/model_19999.pt"
+    },
+    "Reco2": {
+      "path": "IsaacLab_Tasks/Recovery/logs/rsl_rl/go2_recovery/Reco2/model_12998.pt",
+      "protections": ["heartbeat"],
+      "commands": false
+    },
+    "Lie2": {
+      "path": "IsaacLab_Tasks/Recovery/logs/rsl_rl/go2_liedown/Lie2/model_34998.pt",
+      "protections": [],
+      "commands": false
+    }
+  }
+}

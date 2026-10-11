@@ -70,3 +70,14 @@ def take_reserved_core():
             print(f"[realtime] No permission for SCHED_FIFO (needs root or rtprio); pinned to core {core} only.")
             break
     return core
+
+
+def leave_realtime():
+    """For a helper thread started by the policy's process: back to normal scheduling, off the policy's core."""
+    core = avoid_reserved_core()
+    if core is not None:
+        try:
+            os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
+        except (PermissionError, OSError):
+            pass
+    return core

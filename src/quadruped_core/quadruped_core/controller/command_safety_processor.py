@@ -13,7 +13,7 @@ from std_msgs.msg import Bool, Float32
 
 from quadruped_core.config_loader import load_config
 from quadruped_core.telemetry.estimator import projected_gravity_b
-from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS, PROTECTIONS
 
 # ---------------------------------------------------------------------------
 # ANSI helpers for coloured terminal output
@@ -175,6 +175,11 @@ class CommandSafetyProcessor:
         # through its own channel.
         self._estop_latched = False
         self._estop_reset_running = False
+        # Numb: kp 0 with the e-stop damping, like the e-stop, but released from the app or console
+        # (/safety/numb False, or a safety reset) into pose mode. The end of the safety lie-down.
+        self._numb = False
+        self.numb_reason = ""
+        self.trip_reason = ""
         self.active_max_torque = 0.0   # Fail-safe start: zero torque
         self.last_heartbeat_time = 0.0
         self.has_received_heartbeat = False
@@ -208,6 +213,8 @@ class CommandSafetyProcessor:
         # lands within a policy step instead of after watchdog_timeout.
         self.node.create_subscription(
             Bool, "/safety/estop", self._estop_cb, 10)
+        self.node.create_subscription(
+            Bool, "/safety/numb", self._numb_cb, 10)
         # Robot-side truth about the latch, so the console can report it
         # honestly instead of assuming its own request took effect.
         self._estop_state_pub = self.node.create_publisher(
@@ -230,7 +237,7 @@ class CommandSafetyProcessor:
         reads stay at zero, so no code path can raise torque without first
         going through /safety/reset.
         """
-        return 0.0 if self._estop_latched else self._active_max_torque
+        return 0.0 if self._estop_latched or self._numb else self._active_max_torque
 
     @active_max_torque.setter
     def active_max_torque(self, value: float):
@@ -239,6 +246,34 @@ class CommandSafetyProcessor:
     @property
     def is_estopped(self) -> bool:
         return self._estop_latched
+
+    @property
+    def is_numb(self) -> bool:
+        return self._numb
+
+    def set_numb(self, reason: str):
+        if self._numb:
+            return
+        self._numb = True
+        self.numb_reason = reason
+        self.node.get_logger().warn(f"[SAFETY] Numb: {reason}. Release from the app or console.")
+
+    def release(self):
+        """Clear a latched stop and numb. The pipeline takes a released numb into pose mode."""
+        if self._numb:
+            self.node.get_logger().warn("[SAFETY] Numb released.")
+        self._numb = False
+        self.numb_reason = ""
+        self.trip_reason = ""
+        self._robot_safe = True
+        self._shutdown_logged = False
+        self._policy_blocked = False
+
+    def _numb_cb(self, msg: Bool):
+        if msg.data:
+            self.set_numb("asked for")
+        elif self._numb:
+            self.release()
 
     def _estop_cb(self, msg: Bool):
         """Latch a hard stop. True latches; False is ignored.
@@ -321,12 +356,10 @@ class CommandSafetyProcessor:
         the stop is still true, evaluate_safety latches it again on the next
         step, so this cannot force an unsafe robot to keep running.
         """
-        if not msg.data or not self._policy_blocked:
+        if not msg.data or not (self._policy_blocked or self._numb):
             return
         self.node.get_logger().warn("[CommandSafetyProcessor] Safety reset received from console.")
-        self._robot_safe = True
-        self._shutdown_logged = False
-        self._policy_blocked = False
+        self.release()
 
     # ======================================================================
     # Derived Limit Computation
@@ -347,18 +380,19 @@ class CommandSafetyProcessor:
     # ======================================================================
     # Safety Evaluation
     # ======================================================================
-    def evaluate_safety(self, state) -> tuple:
-        """Run all safety checks against current state."""
+    def evaluate_safety(self, state, protections=PROTECTIONS) -> tuple:
+        """Run the given safety checks (policies.json) against current state."""
         now = time.time()
-        if not self.has_received_heartbeat:
-            return False, "No supervisor heartbeat received yet"
-        if now - self.last_heartbeat_time > self.watchdog_timeout:
-            return False, f"Supervisor heartbeat lost (>{self.watchdog_timeout:.1f}s)"
+        if "heartbeat" in protections:
+            if not self.has_received_heartbeat:
+                return False, "No supervisor heartbeat received yet"
+            if now - self.last_heartbeat_time > self.watchdog_timeout:
+                return False, f"Supervisor heartbeat lost (>{self.watchdog_timeout:.1f}s)"
 
         # 2. Base orientation tilt
         proj_grav = projected_gravity_b(state.imu.quaternion)
         base_tilt_cos = -proj_grav[2] / 9.81
-        if base_tilt_cos < self.tilt_thresh:
+        if "tilt" in protections and base_tilt_cos < self.tilt_thresh:
             tilt_deg = float(np.degrees(np.arccos(np.clip(base_tilt_cos, -1.0, 1.0))))
             return False, (
                 f"Base tilt {tilt_deg:.1f}° exceeds limit {self.base_tilt_limit_deg:.1f}°")
@@ -366,13 +400,13 @@ class CommandSafetyProcessor:
         # 3. Forward pitch detection
         pitch_rad = np.arctan2(proj_grav[0], -proj_grav[2])
         pitch_deg = float(np.degrees(pitch_rad))
-        if pitch_deg > self.forward_tilt_limit_deg:
+        if "pitch" in protections and pitch_deg > self.forward_tilt_limit_deg:
             return False, (
                 f"Forward pitch {pitch_deg:.1f}° exceeds limit "
                 f"{self.forward_tilt_limit_deg:.1f}°")
 
         # 4. Joint ROM boundary check
-        for i in range(12):
+        for i in range(12 if "rom" in protections else 0):
             val = state.motorState[i].q
             if val < self.joint_safe_min[i]:
                 return False, (
@@ -386,7 +420,7 @@ class CommandSafetyProcessor:
     # ======================================================================
     # Safety Gating and Soft Clipping
     # ======================================================================
-    def process(self, proposed_targets: dict, state) -> tuple:
+    def process(self, proposed_targets: dict, state, protections=PROTECTIONS) -> tuple:
         """
         Arbitrate between proposed targets based on safety checks and clip output.
 
@@ -402,7 +436,7 @@ class CommandSafetyProcessor:
         # Checked before _policy_blocked because that branch hands control to
         # the recovery policy at full torque, which is not what an operator
         # hitting the kill button is asking for.
-        if self._estop_latched:
+        if self._estop_latched or self._numb:
             self.active_max_torque = 0.0
             return self.desired_qpos.copy(), 0.0
 
@@ -419,7 +453,7 @@ class CommandSafetyProcessor:
 
 
 
-        is_safe, reason = self.evaluate_safety(state)
+        is_safe, reason = self.evaluate_safety(state, protections)
 
         if is_safe:
             # ── Safe Mode: Use Main Policy ────────────────────────────────
@@ -432,6 +466,7 @@ class CommandSafetyProcessor:
 
         # ── Unsafe Mode: Emergency Gating ────────────────────────────────
         if not self._shutdown_logged:
+            self.trip_reason = reason
             self._print_shutdown_banner(reason)
             self._shutdown_logged = True
             self._policy_blocked = True
@@ -494,9 +529,7 @@ class CommandSafetyProcessor:
         print(f"{_YELLOW}{_BOLD}>>> Safety RESET. Re-enabling main policy...{_RESET}")
         self.node.get_logger().info(
             "[CommandSafetyProcessor] Operator pressed ENTER. Main policy re-enabled.")
-        self._robot_safe = True
-        self._shutdown_logged = False
-        self._policy_blocked = False
+        self.release()
 
     @property
     def is_policy_blocked(self) -> bool:

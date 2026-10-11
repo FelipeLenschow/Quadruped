@@ -6,7 +6,7 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32MultiArray, String
 from quadruped_core.telemetry.telemetry import TelemetryManager
 from quadruped_core.controller.policy_manager import PolicyManager
-from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS, PROTECTIONS
 from quadruped_core.controller.command_safety_processor import CommandSafetyProcessor
 from quadruped_core.controller.distributor import Distributor
 from quadruped_core.controller.command_slew import CommandSlewLimiter
@@ -23,7 +23,7 @@ class LocomotionPipeline:
     Ensures identical execution across MuJoCo, Gazebo, Isaac Sim, and Physical Hardware.
     """
     def __init__(self, node, robot_type="go2", checkpoint=None, obs_dim=49,
-                 use_estimator=False, joint_names=None, sim_dt=0.001):
+                 use_estimator=False, joint_names=None, sim_dt=0.001, safety_switch=True):
         self.node = node
         self.robot_type = robot_type
 
@@ -44,18 +44,42 @@ class LocomotionPipeline:
             self.node.get_logger().warn(
                 "[LocomotionPipeline] No main policy checkpoint provided. Policy runner disabled.")
 
-        # Register Safety Policy (backup recovery policy configured in config.yaml)
-        safety_policy_path = safety_cfg.get("safety_policy_path", "")
-        if safety_policy_path:
-            loaded = self.policy_manager.load_policy("safety", safety_policy_path)
-            if not loaded:
-                self.node.get_logger().warn(
-                    "[LocomotionPipeline] Safety policy failed to load. "
-                    "Robot will DISABLE directly on safety violations.")
-        else:
-            self.node.get_logger().info(
-                "[LocomotionPipeline] No safety policy configured. "
-                "Robot will DISABLE directly on safety violations.")
+        # Safety policy (policies.json safety_policy): loaded now, since an emergency can't wait
+        # for a file to load. It takes over when the active policy's checks trip, until the robot lies
+        # still, then the robot goes numb.
+        # safety_switch=False (eval sweeps, which clear every trip themselves): no safety policy and no
+        # numb, a trip only cuts torque until it is cleared.
+        pm = self.policy_manager
+        self.safety_switch = safety_switch
+        self.safety_name = pm.safety_policy if safety_switch else ""
+        if self.safety_name:
+            if self.safety_name not in pm.catalog:
+                self.node.get_logger().error(
+                    f"[LocomotionPipeline] safety_policy '{self.safety_name}' is not in policies.json.")
+                self.safety_name = ""
+            elif not pm.load_policy(self.safety_name, pm.catalog[self.safety_name]["path"]):
+                self.safety_name = ""
+        if safety_switch and not self.safety_name:
+            self.node.get_logger().warn(
+                "[LocomotionPipeline] No safety policy: the robot goes numb as soon as a check trips.")
+        self.safety_timeout = float(safety_cfg.get("safety_policy_timeout_s", 10.0))
+        self.lying_hold_s = float(safety_cfg.get("lying_hold_s", 1.0))
+        self.lying_cos = float(np.cos(np.radians(float(safety_cfg.get("lying_tilt_deg", 20.0)))))
+        self.lying_pose_err = float(safety_cfg.get("lying_pose_err", 0.3))
+        self.lying_joint_vel = float(safety_cfg.get("lying_joint_vel", 1.0))
+        self.lie_pose = np.array(
+            (self.config.get("poses") or {}).get("lie_flat", DEFAULT_STANCE_QPOS), dtype=np.float32)
+        # Safety policy running time and how long the robot has lain still, counted in policy steps so a
+        # jump of the robot's wall clock (dead RTC, NTP) cannot cut the lie-down short or stretch it.
+        self._safety_elapsed = None
+        self._lying_for = 0.0
+
+        # The policy that runs in policy mode, switched by name on /pipeline/policy.
+        self.active_policy = "main" if "main" in pm.policies else None
+        self._pending_policy = None
+        self.policy_error = None
+        self.policy_switch_blend = float(self.config.get("policy_switch_blend_s", 0.5))
+        self.node.create_subscription(String, "/pipeline/policy", self._policy_cb, 10)
 
         self.mj_to_isaac = list(range(12))  # Standard mapping
         self.sim_dt = sim_dt
@@ -109,12 +133,14 @@ class LocomotionPipeline:
         self.step_counter = 0
         self._pose_heartbeat_was_ok = False  # Track heartbeat lost→alive transitions
         self._was_estopped = False           # Track e-stop latched→released
+        self._was_numb = False
 
         # Mode Transition State
         self.mode_transition_active = False
         self.mode_transition_start_time = None
         self._last_measured_q = None
         self.mode_transition_duration = 3.0  # Smooth transition duration in seconds
+        self.transition_duration = self.mode_transition_duration
         self.mode_transition_start_targets = self.desired_qpos.copy()
 
     def reset(self):
@@ -134,6 +160,9 @@ class LocomotionPipeline:
         self.mode_transition_active = False
         self.mode_transition_start_time = None
         self.mode_transition_start_targets = self.desired_qpos.copy()
+        self._safety_elapsed = None
+        self._lying_for = 0.0
+        self._pending_policy = None
 
     def _wtw_runners(self):
         return [r for r in self.policy_manager.policies.values() if getattr(r, "_obs_layout", None) == "wtw"]
@@ -197,10 +226,10 @@ class LocomotionPipeline:
 
         if tilt > 60.0:
             posture = "fallen"
+        elif sp.active_max_torque <= 0.1 or (self.mode != "policy" and pose == "lie_flat"):
+            posture = "lying"
         elif self.mode == "policy":
             posture = "walking" if moving else "standing"
-        elif pose == "lie_flat" or sp.active_max_torque <= 0.1:
-            posture = "lying"
         else:
             posture = pose
 
@@ -224,6 +253,16 @@ class LocomotionPipeline:
             "moving": moving,
             "estop": sp.is_estopped,
             "safety_blocked": sp._policy_blocked,
+            "safety_policy_active": self._safety_elapsed is not None and not sp.is_numb,
+            "trip_reason": sp.trip_reason,
+            "numb": sp.is_numb,
+            "numb_reason": sp.numb_reason,
+            "policy": self.active_policy,
+            "policies": self.policy_manager.available,
+            "policy_loading": self._pending_policy,
+            "policy_error": self.policy_error,
+            "protections": list(self.policy_manager.spec(self.active_policy)["protections"])
+            if self.active_policy else [],
             "torque_on": sp.active_max_torque > 0.1,
             "tilt_deg": round(tilt, 1),
             "velocity": [round(v, 3) for v in vel] + [round(yaw_rate, 3)],
@@ -245,6 +284,9 @@ class LocomotionPipeline:
                 "[Pipeline] Refusing policy mode: E-STOP is latched. "
                 "Release it at the robot first.")
             return
+        if new_mode == "policy" and self.safety_processor.is_numb:
+            self.node.get_logger().warn("[Pipeline] Refusing policy mode: the robot is numb. Release it first.")
+            return
 
         if new_mode in ("pose", "policy"):
             if new_mode != self.mode:
@@ -255,6 +297,7 @@ class LocomotionPipeline:
                 # Start smooth transition from current targets
                 self.mode_transition_active = True
                 self.mode_transition_start_time = None
+                self.transition_duration = self.mode_transition_duration
 
                 was_limp = self.safety_processor.active_max_torque <= 0.1
                 if was_limp and self._last_measured_q is not None:
@@ -270,6 +313,8 @@ class LocomotionPipeline:
                     self.safety_processor._policy_blocked = False
                     self.safety_processor._shutdown_logged = False
                     self.safety_processor._robot_safe = True
+                    self.safety_processor.trip_reason = ""
+                    self._safety_elapsed = None
                     # Re-sync pose generator to current desired joint positions
                     # so it doesn't jump to the old cached targets.
                     pose_gen = self.policy_manager.policies.get("pose")
@@ -279,6 +324,83 @@ class LocomotionPipeline:
         else:
             self.node.get_logger().warn(
                 f"[Pipeline] Unknown mode '{new_mode}'. Use 'pose' or 'policy'.")
+
+    def _policy_cb(self, msg: String):
+        """Pick the policy that runs in policy mode. Loads it in the background if needed; the switch
+        happens on the first policy step after it is ready."""
+        name = msg.data.strip()
+        if "main" in self.policy_manager.specs and self.policy_manager.catalog.get(name) is self.policy_manager.specs["main"]:
+            name = "main"
+        sp = self.safety_processor
+        if sp.is_estopped or sp.is_numb or sp.is_policy_blocked:
+            self.node.get_logger().warn(
+                f"[Pipeline] Refusing policy '{name}': e-stop, numb or the safety switch is on.")
+            return
+        if name == self.active_policy:
+            self._pending_policy = None
+            return
+        if not self.policy_manager.request(name):
+            self.node.get_logger().warn(
+                f"[Pipeline] Unknown policy '{name}'. Available: {self.policy_manager.available}")
+            return
+        self._pending_policy = name
+        self.policy_error = None
+        self.node.get_logger().info(f"[Pipeline] Switching to policy '{name}'...")
+
+    def _advance_policy_switch(self):
+        name = self._pending_policy
+        if name is None:
+            return
+        pm = self.policy_manager
+        # _policy_cb runs on the executor's thread: only clear the request if no newer one replaced it.
+        if name in pm.load_errors:
+            self.policy_error = f"{name}: {pm.load_errors[name]}"
+            self.node.get_logger().error(f"[Pipeline] Policy switch failed: {self.policy_error}")
+            if self._pending_policy == name:
+                self._pending_policy = None
+            return
+        if name not in pm.policies:
+            return
+        old = self.active_policy
+        pm.policies[name].reset_history()
+        self.active_policy = name
+        if self._pending_policy == name:
+            self._pending_policy = None
+        if self.mode == "policy":
+            self.mode_transition_active = True
+            self.mode_transition_start_time = None
+            self.mode_transition_start_targets = self.latest_targets.copy()
+            self.transition_duration = self.policy_switch_blend
+        # Free whatever is neither running nor wanted, including a policy asked for and then replaced.
+        keep = {name, self._pending_policy, "main", "pose", self.safety_name}
+        for stale in [n for n in list(pm.policies) if n not in keep and not pm.is_loading(n)]:
+            pm.unload(stale)
+        self.node.get_logger().info(
+            f"[Pipeline] Policy '{old}' -> '{name}', protections {list(pm.spec(name)['protections']) or 'none'}.")
+
+    def _is_lying(self, state) -> bool:
+        pg = projected_gravity_b(state.imu.quaternion)
+        level = -pg[2] / max(float(np.linalg.norm(pg)), 1e-6) >= self.lying_cos
+        q = np.array([state.motorState[i].q for i in range(12)], dtype=np.float32)
+        dq = np.array([state.motorState[i].dq for i in range(12)], dtype=np.float32)
+        return bool(level and np.mean(np.abs(q - self.lie_pose)) < self.lying_pose_err
+                    and np.max(np.abs(dq)) < self.lying_joint_vel)
+
+    def _watch_safety_policy(self, state):
+        """Once per policy step while the safety switch is on: numb once the robot lies still, or after
+        the timeout."""
+        sp = self.safety_processor
+        if sp.is_numb or not self.safety_switch:
+            return
+        if self.safety_name not in self.policy_manager.policies:
+            sp.set_numb(f"safety switch ({sp.trip_reason}), no safety policy")
+            return
+        self._safety_elapsed += self.policy_dt
+        self._lying_for = self._lying_for + self.policy_dt if self._is_lying(state) else 0.0
+        if self._lying_for >= self.lying_hold_s:
+            sp.set_numb("lying after the safety switch")
+        elif self._safety_elapsed >= self.safety_timeout:
+            sp.set_numb(f"safety policy ran {self.safety_timeout:.0f} s without lying still")
 
     def step(self, raw_state_kwargs, cmd_vel, sim_time, send_cb=None):
         """
@@ -337,6 +459,18 @@ class LocomotionPipeline:
                     "[Pipeline] E-STOP released — holding at measured joint "
                     "positions in POSE mode.")
 
+            if self._was_numb and not self.safety_processor.is_numb:
+                self._was_numb = False
+                self.mode = "pose"
+                self.mode_transition_active = False
+                self._safety_elapsed = None
+                pose_gen = self.policy_manager.policies.get("pose")
+                if pose_gen:
+                    pose_gen.sync_to_current()
+                self.node.get_logger().warn(
+                    "[Pipeline] Numb released: holding at measured joint positions in POSE mode.")
+
+            self._advance_policy_switch()
             self._release_gait_override()
 
             if self.mode != "policy" or self.safety_processor.is_estopped:
@@ -390,9 +524,14 @@ class LocomotionPipeline:
 
             else:
                 # ── POLICY MODE ──────────────────────────────────────
-                # Full safety evaluation: ROM, tilt, and heartbeat checks.
+                # The active policy's checks (policies.json). When
+                # one trips, the safety policy takes over with no checks.
                 # ─────────────────────────────────────────────────────
-                is_safe, _ = self.safety_processor.evaluate_safety(state)
+                sp = self.safety_processor
+                pm = self.policy_manager
+                name = self.active_policy
+                protections = pm.spec(name)["protections"] if name else PROTECTIONS
+                is_safe, _ = sp.evaluate_safety(state, protections)
 
                 dt = self.policy_dt
                 if self._slew_time is not None and 0.0 < sim_time - self._slew_time <= 0.1:
@@ -400,25 +539,38 @@ class LocomotionPipeline:
                 self._slew_time = sim_time
                 cmd_vel = self.command_slew(cmd_vel, dt)
 
-                if not is_safe:
-                    active_policy = "safety"
-                else:
-                    active_policy = "main"
-
+                if not sp.is_policy_blocked:
+                    self._safety_elapsed = None
+                takeover = not is_safe or sp.is_policy_blocked
                 proposed_targets = {}
-                if active_policy in self.policy_manager.policies:
-                    targets = self.policy_manager.step_single(
-                        active_policy, state, cmd_vel, self.mj_to_isaac,
-                        current_time=sim_time,
-                        dt=self.policy_dt
-                    )
-                    key = "safety" if active_policy == "safety" else "main"
-                    proposed_targets[key] = targets
+                if takeover and self.safety_name in pm.policies and not sp.is_numb:
+                    if self._safety_elapsed is None:
+                        self._safety_elapsed = 0.0
+                        self._lying_for = 0.0
+                        self.mode_transition_active = False
+                        pm.policies[self.safety_name].reset_history()
+                        self.node.get_logger().error(
+                            f"[Pipeline] Safety policy '{self.safety_name}' takes over from '{name}'.")
+                    proposed_targets["safety"] = pm.step_single(
+                        self.safety_name, state, cmd_vel, self.mj_to_isaac,
+                        current_time=sim_time, dt=self.policy_dt)
+                elif not takeover and name in pm.policies:
+                    proposed_targets["main"] = pm.step_single(
+                        name, state, cmd_vel, self.mj_to_isaac,
+                        current_time=sim_time, dt=self.policy_dt)
 
-                final_targets, max_torque = self.safety_processor.process(
+                final_targets, max_torque = sp.process(
                     proposed_targets=proposed_targets,
-                    state=state
+                    state=state,
+                    protections=protections,
                 )
+                if sp.is_policy_blocked:
+                    if self._safety_elapsed is None:
+                        self._safety_elapsed = 0.0
+                        self._lying_for = 0.0
+                    self._watch_safety_policy(state)
+                else:
+                    self._safety_elapsed = None
 
             # ── HARD E-STOP OVERRIDE ─────────────────────────────
             # active_max_torque already reads zero through its property, but
@@ -432,6 +584,11 @@ class LocomotionPipeline:
                 final_targets = self.latest_targets
                 max_torque = 0.0
                 self.mode_transition_active = False
+            elif self.safety_processor.is_numb:
+                self._was_numb = True
+                final_targets = self.latest_targets
+                max_torque = 0.0
+                self.mode_transition_active = False
 
             # ── MODE TRANSITION INTERPOLATION ────────────────────
             if self.mode_transition_active:
@@ -439,7 +596,7 @@ class LocomotionPipeline:
                     self.mode_transition_start_time = sim_time
                 
                 elapsed = sim_time - self.mode_transition_start_time
-                alpha = np.clip(elapsed / self.mode_transition_duration, 0.0, 1.0)
+                alpha = np.clip(elapsed / self.transition_duration, 0.0, 1.0)
                 
                 final_targets = (1.0 - alpha) * self.mode_transition_start_targets + alpha * final_targets
                 

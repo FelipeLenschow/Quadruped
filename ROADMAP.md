@@ -340,6 +340,24 @@ How to build and run it: [Docker/README.md](Docker/README.md), section 1d.
 - **Later, JetPack 6** (Ubuntu 22.04, "Super" mode, ~67 TOPS) would allow Jazzy from apt with dusty-nv's
   `jazzy-ros-base-r36.4.0-cu128-24.04`, with no source builds. That needs reflashing the Jetson.
 
+## Policies: switching, safety lie-down and numb
+
+Built and tried in MuJoCo (2026-10-11); see `PROJECT_OVERVIEW.md` (Robot interface). Policies are listed in
+`config/policies.json` with the checks each one wants; after a trip the `Lie2` policy takes over with no
+checks and the robot goes numb once lying; the app and console pick policies and have a Numb button.
+
+- [x] **Policy list** with per-policy `protections` (heartbeat, tilt, pitch, rom) and `commands`.
+- [x] **Load on demand** in a background thread, off the policy's real-time core; the safety one is always loaded.
+- [x] **Switching** on `/pipeline/policy`, blended over 0.5 s, refused during an e-stop, a trip or numb.
+- [x] **Safety lie-down**, then numb (lying: level, near `lie_flat`, still for 1 s; or after 10 s).
+- [x] **Numb** on `/safety/numb`, released from the app or console into pose mode.
+- [x] **App and console**: policy picker, Numb / Release numb, banner.
+- [ ] **Real robot**, on the rope first: a heartbeat cut while standing, then while walking; Numb and release.
+- [ ] **Load time and RAM** per policy on the Jetson, and whether the background load shows up as control-loop jitter.
+- [ ] **Per-policy action scale and default pose** from each run's `params/deploy.yaml` (today the same for all,
+      which the current ones share).
+- [ ] **Skills** (`skill_server`): use `Reco2` after a fall, and `Lie2` for `lie`.
+
 ## Backlog
 
 - **CPU, GPU, RAM and temperature in the app: done.** `system_monitor` publishes `/system_stats` at 1 Hz,
@@ -348,16 +366,5 @@ How to build and run it: [Docker/README.md](Docker/README.md), section 1d.
 - **SSH terminal in the app: built, not yet tried on the robot.** Shell tab, see `Android/README.md`.
   Still to check: `sshd` and the login user on the Go2's Jetson (the app defaults to `unitree@10.42.0.1`).
   The terminal can press ENTER on the driver, which releases an e-stop from the phone; not blocked.
-- **Safety lie-down before going numb.** When the safety switch trips, run the Recovery module's
-  Go2-LieDown policy (`IsaacLab_Tasks/Recovery`, run `Lie2`) until the robot is lying on its belly pads, then
-  zero the gains. Today the trip latches a shutdown and holds the "safety" targets.
-  - The policy uses unitree's 45-wide observation with the velocity command at zero, so `policy_runner`'s
-    "unitree" layout should run it as is.
-  - The ROM check (`joint_rom_safety_margin` 0.15) trips at calves below about -2.39, and lying puts them at
-    -2.6 to -2.7: exempt the lying state, or anything that re-checks safety while lying trips again.
-  - Decide when it counts as lying (belly down, low, still for ~1 s) and how long to wait before numb.
-  - Try it in MuJoCo first, from standing, walking, and a fall.
-- **The app and the new Recovery work.** Show when the safety lie-down is running and when the robot has
-  gone numb.
 - **A custom rviz config.**
 - **Flags to ROS parameters.**

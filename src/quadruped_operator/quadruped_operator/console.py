@@ -68,6 +68,8 @@ class ConsoleNode(Node):
 
     Pipeline and Pose control:
       /pipeline/mode       — "pose" or "policy", sent on change (the shown mode follows /robot_state)
+      /pipeline/policy     — which policy runs in policy mode, by name (policies.json, or "main")
+      /safety/numb         — true: torque off with damping; false: release into pose mode
       /pose/command        — named pose (e.g. "stand", "pushup")
       /pose/interp_duration — interpolation time override
 
@@ -157,6 +159,11 @@ class ConsoleNode(Node):
         # ------------------------------------------------------------------
         self.mode_pub = self.create_publisher(
             String, "/pipeline/mode", 10)
+        self.policy_pub = self.create_publisher(
+            String, "/pipeline/policy", 10)
+        self.numb_pub = self.create_publisher(
+            Bool, "/safety/numb", 10)
+        self.robot_state = {}
         self.pose_cmd_pub = self.create_publisher(
             String, "/pose/command", 10)
         self.pose_interp_pub = self.create_publisher(
@@ -283,7 +290,8 @@ class ConsoleNode(Node):
 
     def _robot_state_cb(self, msg):
         try:
-            self.current_mode = json.loads(msg.data)["mode"]
+            self.robot_state = json.loads(msg.data)
+            self.current_mode = self.robot_state["mode"]
         except (ValueError, KeyError):
             pass
 
@@ -448,6 +456,9 @@ class ConsoleNode(Node):
             "Mode = ",
             "Safety = reset",
             "Estop = now",
+            "Policy = ",
+            "Numb = on",
+            "Numb = off",
             "Pose = stand",
             "Pose = lie_flat",
             "Pose = sit",
@@ -528,6 +539,15 @@ class ConsoleNode(Node):
                         print(f"{_DIM}    If the cause is still present it will "
                               f"latch again immediately.{_RESET}\n")
                         self._preserve_output = True
+                    continue
+
+                elif param == "policy":
+                    self.policy_pub.publish(String(data=val_str.strip()))
+                    continue
+
+                elif param == "numb":
+                    on = val_str.lower().strip() in ("on", "true", "1", "yes")
+                    self.numb_pub.publish(Bool(data=on))
                     continue
 
                 # --- Pipeline mode ---
@@ -696,7 +716,9 @@ class ConsoleNode(Node):
             unfilled_part = unfilled_part.ljust(line_width - fill_chars)
             mode_line = f"\r{_BG_GREEN}{filled_part}{_BG_DEFAULT}{unfilled_part}\033[K"
         else:
-            mode_line = f"\r ├─ Mode        : {mode_label} (NN policy active)\033[K"
+            rs = self.robot_state
+            loading = f", loading {rs['policy_loading']}" if rs.get("policy_loading") else ""
+            mode_line = f"\r ├─ Mode        : {mode_label} ({rs.get('policy') or 'none'}{loading})\033[K"
 
         print(f"\r\033[K")
         print(f"\r\033[K")
@@ -704,6 +726,11 @@ class ConsoleNode(Node):
         print(f"\r\033[K")
         if self.estop_latched:
             print(f"\r{_RED}{_BOLD}[Console] \u26d4 E-STOP LATCHED{_RESET}\033[K")
+        elif self.robot_state.get("numb"):
+            print(f"\r{_YELLOW}{_BOLD}[Console] NUMB ({self.robot_state.get('numb_reason')}): "
+                  f"numb = off to release{_RESET}\033[K")
+        elif self.robot_state.get("safety_policy_active"):
+            print(f"\r{_RED}{_BOLD}[Console] SAFETY LIE-DOWN ({self.robot_state.get('trip_reason')}){_RESET}\033[K")
         else:
             print(f"\r{_GREEN}[Console]{_RESET} Heartbeat #{self.heartbeat_count}\033[K")
         print(mode_line)

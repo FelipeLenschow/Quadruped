@@ -101,6 +101,7 @@ import com.quadruped.console.ui.ShellTab
 import com.quadruped.console.ui.Mono
 import com.quadruped.console.ui.Palette
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -382,7 +383,14 @@ private fun DriveTab(s: Status, core: ConsoleCore) {
 @Composable
 private fun ModeCard(s: Status, core: ConsoleCore) {
     var refusal by remember { mutableStateOf<List<String>>(emptyList()) }
+    val rs = s.robotState
+    val numb = rs?.optBoolean("numb") == true
     Card {
+        if (rs?.optBoolean("safety_policy_active") == true) {
+            Banner("Safety lie-down", "Tripped: ${rs.optString("trip_reason")}. Goes numb once lying still.", Palette.Danger)
+        } else if (numb) {
+            Banner("Numb", "${rs?.optString("numb_reason")}. Release to hold where it is in pose mode.", Palette.Warn)
+        }
         Segmented(listOf("Pose", "Policy"), if (s.mode == "policy") 1 else 0) {
             refusal = core.setMode(if (it == 1) "policy" else "pose")
         }
@@ -400,7 +408,54 @@ private fun ModeCard(s: Status, core: ConsoleCore) {
                 ) { Text("Force policy anyway", color = Palette.Danger) }
             }
         }
+        PolicyPicker(rs, core)
+        OutlinedButton(
+            { core.setNumb(!numb) }, Modifier.fillMaxWidth(), border = BorderStroke(1.dp, Palette.Warn),
+        ) { Text(if (numb) "Release numb" else "Numb (torque off)", color = Palette.Warn) }
     }
+}
+
+@Composable
+private fun Banner(title: String, body: String, color: Color) = Column(
+    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(color.copy(alpha = 0.12f)).padding(12.dp),
+) {
+    Text(title, color = color, fontWeight = FontWeight.Bold)
+    Text(body, color = Palette.Text, fontSize = 13.sp)
+}
+
+private fun JSONObject.stringOrNull(key: String) = if (isNull(key)) null else optString(key)
+
+/** The policies /robot_state lists; the robot loads the one tapped and switches once it is ready. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PolicyPicker(rs: JSONObject?, core: ConsoleCore) {
+    val names = rs?.optJSONArray("policies")?.let { a -> List(a.length()) { a.optString(it) } } ?: return
+    if (names.isEmpty()) return
+    val active = rs.stringOrNull("policy")
+    val loading = rs.stringOrNull("policy_loading")
+    val checks = rs.optJSONArray("protections")?.let { a -> List(a.length()) { a.optString(it) } }.orEmpty()
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionLabel("Policy")
+        Spacer(Modifier.weight(1f))
+        Text(
+            if (loading != null) "loading $loading…" else "checks: ${checks.joinToString(" ").ifEmpty { "none" }}",
+            color = Palette.Muted, fontFamily = Mono, fontSize = 12.sp,
+        )
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        names.forEach { n ->
+            val on = n == active
+            val color = if (n == loading) Palette.Warn else Palette.Accent
+            Box(
+                Modifier.height(40.dp).clip(RoundedCornerShape(12.dp))
+                    .background(if (on || n == loading) color.copy(alpha = 0.18f) else Palette.Surface2)
+                    .border(1.dp, if (on || n == loading) color else Color.Transparent, RoundedCornerShape(12.dp))
+                    .clickable { core.setPolicy(n) }.padding(horizontal = 14.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text(n, fontWeight = FontWeight.SemiBold, color = if (on || n == loading) color else Palette.Text) }
+        }
+    }
+    rs.stringOrNull("policy_error")?.let { Text(it, color = Palette.Danger, fontSize = 12.sp) }
 }
 
 @Composable

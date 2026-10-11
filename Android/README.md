@@ -13,8 +13,10 @@ Android, no bridge on the robot.
   sticks publish `geometry_msgs/Twist` on `/cmd_vel/phone` (twist_mux priority 80: above Nav2
   and skills, below the F710 and keyboard) at 20 Hz while the "Phone drive" switch is on, zero
   when centred, so it holds Nav2 off. Off sends one zero and stops, and twist_mux hands back to
-  Nav2 after 0.5 s. E-stop, leaving Policy or leaving the app turns it off. Robot state and
-  safety reset below.
+  Nav2 after 0.5 s. E-stop, leaving Policy or leaving the app turns it off. Under the switch, the
+  policy picker (the list from `/robot_state`, sent on `/pipeline/policy`) and the Numb / Release
+  numb button (`/safety/numb`), with a banner while the safety lie-down runs or the robot is numb.
+  Robot state and safety reset below.
 - 3D tab: the Go2 URDF drawn with OpenGL ES 3, legs from `/sensors/joint_states`, standing in
   Point-LIO's voxel map: `/lio/map_voxels` (latched snapshot) replaces the map, `/lio/map_voxels/delta`
   adds and removes voxels (what lidar beams now pass through: an opened door, someone who walked by), one box per voxel (instanced, up to 300k), coloured by height with turbo. The box size comes from

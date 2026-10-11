@@ -59,7 +59,8 @@ class MujocoEvaluator(Node):
             obs_dim=obs_dim,
             use_estimator=use_estimator,
             joint_names=self.isaac_names,
-            sim_dt=0.001
+            sim_dt=0.001,
+            safety_switch=False,
         )
         # The sweep measures the response to a step command.
         self.pipeline.command_slew.enabled = False

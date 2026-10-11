@@ -82,6 +82,7 @@ class PolicyRunner:
         device="cpu",
         verbose=True,
         decimation=4,
+        obs_dim_from_env=True,
     ):
         print(f"[PolicyRunner] __init__ called for {checkpoint_path}")
 
@@ -120,7 +121,7 @@ class PolicyRunner:
             print(f"[PolicyRunner] Loading JIT model from {checkpoint_path}")
             self.policy_jit = torch.jit.load(checkpoint_path, map_location=device)
             # Detect obs_dim from JIT model if possible, or fallback
-            self.obs_dim = self._detect_jit_obs_dim(self.policy_jit)
+            self.obs_dim = self._detect_jit_obs_dim(self.policy_jit, obs_dim_from_env)
             self.action_dim = 12
         else:
             self.obs_dim, self.layers = self._inspect_checkpoint(checkpoint_path)
@@ -214,16 +215,17 @@ class PolicyRunner:
         except (zipfile.BadZipFile, OSError):
             return False
 
-    def _detect_jit_obs_dim(self, model):
+    def _detect_jit_obs_dim(self, model, from_env=True):
         """Infer the input width of a TorchScript policy from its own parameters.
 
         The old fallback of 49 was our own layout, so any foreign JIT (the 45-wide Unitree
         baseline) silently got the wrong width and failed downstream on a shape mismatch.
         Two signals, cheapest first: an exported normalizer's running_mean is exactly one
         observation wide, and failing that the first 2-D weight of the MLP is
-        [hidden, obs_dim]. QUADRUPED_OBS_DIM still overrides both.
+        [hidden, obs_dim]. QUADRUPED_OBS_DIM still overrides both, unless from_env is False (the launcher
+        sets it for the main checkpoint, not for the ones switched to later).
         """
-        env_override = os.environ.get("QUADRUPED_OBS_DIM")
+        env_override = os.environ.get("QUADRUPED_OBS_DIM") if from_env else None
         if env_override:
             return int(env_override)
         try:

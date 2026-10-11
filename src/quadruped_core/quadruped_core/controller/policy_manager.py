@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 import numpy as np
 from rclpy.node import Node
 
@@ -7,9 +8,10 @@ from rclpy.node import Node
 
 from quadruped_core.controller.policy_runner import PolicyRunner
 from quadruped_core.controller.pose_generator import PoseGenerator
-from quadruped_core.config_loader import load_config
+from quadruped_core.config_loader import load_config, load_policies
 from quadruped_core import paths
-from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS, PROTECTIONS
+from quadruped_core import realtime
 
 
 class PolicyManager:
@@ -39,6 +41,81 @@ class PolicyManager:
 
         # Nominal Standing Pose (Default)
         self.desired_qpos = DEFAULT_STANCE_QPOS.copy()
+
+        # Policies that can be switched to by name (policies.json), and the settings of each
+        # loaded one. Only loaded policies are in self.policies.
+        policies_cfg = load_policies()
+        self.safety_policy = policies_cfg.get("safety_policy") or ""
+        self.catalog = self._read_catalog(policies_cfg.get("policies") or {})
+        self.specs = {}
+        self.load_errors = {}
+        self._loading = set()
+        self._lock = threading.Lock()
+
+    def _read_catalog(self, policies: dict) -> dict:
+        out = {}
+        for name, spec in policies.items():
+            spec = spec or {}
+            protections = spec.get("protections")
+            protections = PROTECTIONS if protections is None else tuple(protections)
+            unknown = [p for p in protections if p not in PROTECTIONS]
+            if unknown:
+                self.node.get_logger().error(
+                    f"[PolicyManager] Policy '{name}': unknown protections {unknown}, "
+                    f"known: {list(PROTECTIONS)}. Using all of them.")
+                protections = PROTECTIONS
+            out[name] = {
+                "path": spec.get("path", ""),
+                "protections": protections,
+                "commands": bool(spec.get("commands", True)),
+            }
+        return out
+
+    def spec(self, name: str) -> dict:
+        """protections and commands of a policy; all checks and real commands when it has no entry."""
+        return self.specs.get(name) or self.catalog.get(name) or {
+            "path": "", "protections": PROTECTIONS, "commands": True}
+
+    @property
+    def available(self) -> list:
+        """Names that can be switched to: "main" when loaded, then policies.json's list."""
+        main = self.specs.get("main")
+        return (["main"] if "main" in self.policies else []) + [
+            n for n, spec in self.catalog.items() if n != "main" and spec is not main]
+
+    def is_loading(self, name: str) -> bool:
+        return name in self._loading
+
+    def request(self, name: str) -> bool:
+        """Make a policy available, loading it in the background if needed. False if it is unknown."""
+        if name in self.policies:
+            return True
+        if name not in self.catalog:
+            return False
+        with self._lock:
+            if name in self._loading:
+                return True
+            self._loading.add(name)
+            self.load_errors.pop(name, None)
+        threading.Thread(target=self._load_in_background, args=(name,), daemon=True).start()
+        return True
+
+    def _load_in_background(self, name: str):
+        # Started from the driver's thread, so it would inherit the policy's core at SCHED_FIFO and
+        # hold up the control loop for as long as the load takes.
+        realtime.leave_realtime()
+        try:
+            if not self.load_policy(name, self.catalog[name]["path"]):
+                self.load_errors[name] = "could not load (see the driver's log)"
+        except Exception as e:
+            self.load_errors[name] = str(e)
+        finally:
+            with self._lock:
+                self._loading.discard(name)
+
+    def unload(self, name: str):
+        self.policies.pop(name, None)
+        self.specs.pop(name, None)
 
     def load_policy(self, name: str, checkpoint_path: str) -> bool:
         """
@@ -70,14 +147,30 @@ class PolicyManager:
             runner = PolicyRunner(
                 checkpoint_path,
                 obs_dim=self.obs_dim,
-                robot_type=self.robot_type
+                robot_type=self.robot_type,
+                obs_dim_from_env=name == "main",
             )
+            self.specs[name] = self._spec_for(name, checkpoint_path)
             self.policies[name] = runner
+            spec = self.specs[name]
+            self.node.get_logger().info(
+                f"[PolicyManager] '{name}': protections {list(spec['protections']) or 'none'}"
+                f"{', zero velocity command' if not spec['commands'] else ''}.")
             return True
         except Exception as e:
             self.node.get_logger().error(
                 f"[PolicyManager] Failed to load policy '{name}': {e}")
             return False
+
+    def _spec_for(self, name: str, checkpoint_path: str) -> dict:
+        """A policy's own entry, or the entry whose path is this checkpoint (the launcher's "main")."""
+        if name in self.catalog:
+            return self.catalog[name]
+        real = os.path.realpath(checkpoint_path)
+        for spec in self.catalog.values():
+            if spec["path"] and os.path.realpath(paths.repo(spec["path"])) == real:
+                return spec
+        return {"path": checkpoint_path, "protections": PROTECTIONS, "commands": True}
 
     def register_pose_generator(self, node: Node):
         """
@@ -117,6 +210,8 @@ class PolicyManager:
 
         # --- Standard PolicyRunner path ---
         runner = provider
+        if not self.spec(name)["commands"]:
+            commands = np.zeros_like(np.asarray(commands, dtype=np.float32))
         # 1. Inference (returns raw action vector in [-1, 1])
         raw_actions, _ = runner.infer(
             state,
@@ -139,7 +234,7 @@ class PolicyManager:
         (Kept for backward compatibility, but step_single should be preferred for performance).
         """
         proposed_targets = {}
-        for name in self.policies.keys():
+        for name in list(self.policies):
             try:
                 proposed_targets[name] = self.step_single(name, state, commands, mapping, dt=dt)
             except Exception as e:
@@ -158,6 +253,6 @@ class PolicyManager:
         from one velocity test into the next -- and once a test produced a NaN, every remaining
         test in the sweep inherited it and reported frozen, identical numbers.
         """
-        for name, policy in self.policies.items():
+        for name, policy in list(self.policies.items()):
             if hasattr(policy, "reset_history"):
                 policy.reset_history()

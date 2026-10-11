@@ -75,6 +75,8 @@ class ConsoleCore(
         const val KP = "/control/kp"
         const val KD = "/control/kd"
         const val MODE = "/pipeline/mode"
+        const val POLICY = "/pipeline/policy"
+        const val NUMB = "/safety/numb"
         const val POSE_CMD = "/pose/command"
         const val POSE_INTERP = "/pose/interp_duration"
         const val FREEZE_BASE = "/base/freeze"
@@ -103,8 +105,8 @@ class ConsoleCore(
             HEARTBEAT to MsgType.FLOAT32, MAX_TORQUE to MsgType.FLOAT32, ROLL_LIMIT to MsgType.FLOAT32,
             PITCH_LIMIT to MsgType.FLOAT32, ROM_MARGIN to MsgType.FLOAT32, WATCHDOG to MsgType.FLOAT32,
             KP to MsgType.FLOAT32, KD to MsgType.FLOAT32, POSE_INTERP to MsgType.FLOAT32,
-            ESTOP to MsgType.BOOL, SAFETY_RESET to MsgType.BOOL, FREEZE_BASE to MsgType.BOOL,
-            MODE to MsgType.STRING, POSE_CMD to MsgType.STRING, CMD_VEL to MsgType.TWIST,
+            ESTOP to MsgType.BOOL, SAFETY_RESET to MsgType.BOOL, FREEZE_BASE to MsgType.BOOL, NUMB to MsgType.BOOL,
+            MODE to MsgType.STRING, POLICY to MsgType.STRING, POSE_CMD to MsgType.STRING, CMD_VEL to MsgType.TWIST,
         )
 
         const val PREFLIGHT_MAX_SPEED = 1.5
@@ -283,6 +285,21 @@ class ConsoleCore(
         link.publishString(MODE, newMode)
         log("Mode = $newMode${if (force) " (forced)" else ""}")
         return emptyList()
+    }
+
+    /** Which policy runs in policy mode; the robot loads it if needed and reports it in /robot_state. */
+    @Synchronized
+    fun setPolicy(name: String) {
+        link.publishString(POLICY, name)
+        log("Policy = $name")
+    }
+
+    /** Numb: torque off with the e-stop damping. Unlike the e-stop, released from here, into pose mode. */
+    @Synchronized
+    fun setNumb(on: Boolean) {
+        if (on) stopDrive()
+        link.publishBool(NUMB, on)
+        log(if (on) "Numb: torque off" else "Numb released: robot holds where it is in POSE mode")
     }
 
     @Synchronized

@@ -184,6 +184,21 @@ class ConsoleCoreTest {
     }
 
     @Test
+    fun setPolicySendsTheName() {
+        core.setPolicy("stand_up")
+        assertEquals(listOf("stand_up"), link.on(ConsoleCore.POLICY))
+    }
+
+    @Test
+    fun numbTurnsDriveOffAndReleases() {
+        core.setDrive(true)
+        core.setNumb(true)
+        assertFalse(core.status().driveEnabled)
+        core.setNumb(false)
+        assertEquals(listOf(true, false), link.on(ConsoleCore.NUMB))
+    }
+
+    @Test
     fun estopTurnsDriveOffAndBlocksIt() {
         core.setDrive(true)
         core.triggerEstop("test")

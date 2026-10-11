@@ -20,3 +20,6 @@ DEFAULT_STANCE_QPOS = np.array(
     ],
     dtype=np.float32,
 )
+
+# The checks a policy can ask for in policies.json, all of them by default.
+PROTECTIONS = ("heartbeat", "tilt", "pitch", "rom")

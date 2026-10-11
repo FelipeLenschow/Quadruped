@@ -261,7 +261,24 @@ safety:
   base_tilt_limit_deg: 30   # Trigger emergency stop if base tilts past 30 degrees in any direction
   base_forward_tilt_limit_deg: 30.0    # Trigger emergency stop if pitched forward past 30 degrees
   joint_rom_safety_margin: 0.15        # Protect the outer 15% range of motion of each joint
-  safety_policy_path: ""               # Relative path to backup safety policy (.pt). Empty = disable on violation.
+  # The safety policy is policies.json's safety_policy. It takes over when a check trips, with no checks
+  # of its own, until the robot lies still, then the robot goes numb. Empty = numb at once.
+  safety_policy_timeout_s: 10.0  # Numb after this long even if it never counts as lying.
+  lying_hold_s: 1.0          # Lying: within lying_tilt_deg of level, joints within lying_pose_err rad (mean)
+  lying_tilt_deg: 20.0       # of poses.lie_flat and slower than lying_joint_vel rad/s, for this long.
+  lying_pose_err: 0.3
+  lying_joint_vel: 1.0
+
+# --- Policies ---
+# policies.json, next to this file: what the app and the console can switch to, by name (the launcher's
+# checkpoint is "main"), and safety_policy. Only the active one and the safety one are loaded; the others
+# load when picked and are freed when left. Per policy:
+#   path:        relative to the repo. A launcher checkpoint at the same path takes that entry's settings.
+#   protections: the checks that trip the safety switch while it runs. heartbeat (console alive), tilt (any
+#                direction past base_tilt_limit_deg), pitch (nose down past base_forward_tilt_limit_deg),
+#                rom (joints in the outer joint_rom_safety_margin). Left out = all four.
+#   commands:    false feeds a zero velocity command, for policies trained without one.
+policy_switch_blend_s: 0.5   # Seconds to blend from the old policy's targets to the new one's.
 
 # --- Pose Generator ---
 poses:
