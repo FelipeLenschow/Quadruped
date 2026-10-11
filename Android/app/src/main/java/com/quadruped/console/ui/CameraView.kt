@@ -1,6 +1,7 @@
 package com.quadruped.console.ui
 
 import android.graphics.BitmapFactory
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,8 +27,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -64,6 +70,25 @@ private fun parseCameras(json: String): List<CameraEntry> = runCatching {
     }
 }.getOrDefault(emptyList())
 
+/** object_detector's output: boxes in the full image's pixels, so they scale onto any preview size. */
+private data class Detected(val label: String, val score: Double, val box: FloatArray)
+private data class Detections(val width: Int, val height: Int, val ms: Double, val objects: List<Detected>)
+
+private fun detectionsTopic(camera: String) = "/camera/$camera/detections"
+
+private fun parseDetections(json: String): Detections? = runCatching {
+    val o = JSONObject(json)
+    val a = o.getJSONArray("objects")
+    Detections(o.getInt("width"), o.getInt("height"), o.optDouble("ms"), (0 until a.length()).map {
+        val d = a.getJSONObject(it)
+        val b = d.getJSONArray("box")
+        Detected(d.getString("label"), d.getDouble("score"), FloatArray(4) { i -> b.getDouble(i).toFloat() })
+    })
+}.getOrNull()
+
+private fun labelColor(label: String) =
+    Color(android.graphics.Color.HSVToColor(floatArrayOf(((label.hashCode() % 360) + 360) % 360f, 0.65f, 1f)))
+
 /**
  * The robot's cameras, as camera_bridge's small, slow previews (best effort, so a lost frame is just skipped).
  * Only the chosen camera is subscribed, and nothing once the tab is left: the robot then stops making previews.
@@ -77,13 +102,18 @@ fun CameraView(heartbeat: JSONObject?, watchdogS: Double, modifier: Modifier = M
     var frameBytes by remember { mutableIntStateOf(0) }
     var ageMs by remember { mutableLongStateOf(-1L) }
     var request by remember { mutableStateOf<Pair<Double, Int>?>(null) }
+    var showObjects by remember { mutableStateOf(true) }
+    var detections by remember { mutableStateOf<Detections?>(null) }
     val cam = cameras.firstOrNull { it.name == selected }
     val topic = cam?.preview
 
     DisposableEffect(Unit) { onDispose { NativeLink.unsubscribe(CAMERAS) } }
     DisposableEffect(topic) {
+        val name = cam?.name
         onDispose {
             topic?.let { NativeLink.unsubscribe(it) }
+            name?.let { NativeLink.unsubscribe(detectionsTopic(it)) }
+            detections = null
             frame = null
             frameBytes = 0
             ageMs = -1L
@@ -96,6 +126,8 @@ fun CameraView(heartbeat: JSONObject?, watchdogS: Double, modifier: Modifier = M
         var sentMs = 0L
         var sent: Pair<Double, Int>? = null
         var tries = 0
+        var detCount = 0L
+        var detSubscribed = false
         cam?.let { NativeLink.advertise(it.settings, MsgType.STRING) }
         withContext(Dispatchers.Default) {
             while (true) {
@@ -117,6 +149,21 @@ fun CameraView(heartbeat: JSONObject?, watchdogS: Double, modifier: Modifier = M
                         }
                     }
                     ageMs = NativeLink.latestAgeMs(topic)
+                    val det = detectionsTopic(c.name)
+                    if (showObjects) {
+                        NativeLink.subscribe(det, MsgType.STRING, reliable = false)
+                        detSubscribed = true
+                        val n = NativeLink.latestCount(det)
+                        if (n != detCount) {
+                            detCount = n
+                            NativeLink.latestText(det)?.let { detections = parseDetections(it) }
+                        }
+                        if (NativeLink.latestAgeMs(det) !in 0..1500) detections = null
+                    } else if (detSubscribed) {
+                        NativeLink.unsubscribe(det)
+                        detSubscribed = false
+                        detections = null
+                    }
                     val r = request
                     val now = System.currentTimeMillis()
                     if (r != sent) tries = 0
@@ -146,6 +193,7 @@ fun CameraView(heartbeat: JSONObject?, watchdogS: Double, modifier: Modifier = M
             val f = frame
             if (f != null) {
                 Image(f, selected, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                detections?.let { DetectionOverlay(it, Modifier.fillMaxSize()) }
             } else {
                 Text(
                     if (cameras.isEmpty()) "no cameras (start them with the launcher's [I])" else "waiting for $selected",
@@ -170,6 +218,10 @@ fun CameraView(heartbeat: JSONObject?, watchdogS: Double, modifier: Modifier = M
                 Text("Width", color = Palette.Muted, fontSize = 13.sp, modifier = Modifier.width(52.dp))
                 Choice(WIDTHS.map { "$it px" }, WIDTHS.indexOf(want.second)) { request = want.first to WIDTHS[it] }
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Objects", color = Palette.Muted, fontSize = 13.sp, modifier = Modifier.width(52.dp))
+                Choice(listOf("Off", "On"), if (showObjects) 1 else 0) { showObjects = it == 1 }
+            }
             val pending = request != null && request != (cam.previewRate to cam.previewWidth)
             Text(
                 if (pending) "sending to the robot…"
@@ -178,8 +230,46 @@ fun CameraView(heartbeat: JSONObject?, watchdogS: Double, modifier: Modifier = M
                     else "—",
                 color = if (pending) Palette.Warn else Palette.Muted, fontFamily = Mono, fontSize = 12.sp,
             )
+            if (showObjects) {
+                val d = detections
+                Text(
+                    if (d == null) "objects: none (start the launcher's [I] with detection)"
+                    else "${d.objects.size} objects · ${d.ms.toInt()} ms: " +
+                        d.objects.map { it.label }.distinct().joinToString(", ").ifEmpty { "—" },
+                    color = Palette.Muted, fontFamily = Mono, fontSize = 12.sp, maxLines = 2,
+                )
+            }
         }
         HeartbeatLine(heartbeat, watchdogS)
+    }
+}
+
+/** object_detector's boxes over the preview: the preview keeps the camera's aspect, so the same fit maps both. */
+@Composable
+private fun DetectionOverlay(d: Detections, modifier: Modifier) {
+    val paint = remember {
+        android.graphics.Paint().apply {
+            isAntiAlias = true
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            color = android.graphics.Color.BLACK
+        }
+    }
+    Canvas(modifier) {
+        val s = minOf(size.width / d.width, size.height / d.height)
+        val ox = (size.width - d.width * s) / 2
+        val oy = (size.height - d.height * s) / 2
+        val pad = 3.dp.toPx()
+        paint.textSize = 12.sp.toPx()
+        for (o in d.objects) {
+            val c = labelColor(o.label)
+            val tl = Offset(ox + o.box[0] * s, oy + o.box[1] * s)
+            drawRect(c, tl, Size((o.box[2] - o.box[0]) * s, (o.box[3] - o.box[1]) * s), style = Stroke(2.dp.toPx()))
+            val text = "${o.label} ${"%.2f".format(o.score)}"
+            val h = paint.textSize + 2 * pad
+            val y = maxOf(tl.y, h)
+            drawRect(c, Offset(tl.x, y - h), Size(paint.measureText(text) + 2 * pad, h))
+            drawContext.canvas.nativeCanvas.drawText(text, tl.x + pad, y - pad - paint.descent(), paint)
+        }
     }
 }
 

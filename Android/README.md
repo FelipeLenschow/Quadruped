@@ -31,6 +31,9 @@ Android, no bridge on the robot.
   whatever runs outside tmux. The tmux row has one-tap `+win`, windows `0`-`3`, previous/next;
   the tmux shortcut turns mouse mode on, so a drag scrolls tmux's history. Heartbeat and e-stop
   stay on DDS, independent of the shell.
+- Camera tab: camera_bridge's preview of each camera in `/cameras`, with rate and width sent back to the
+  robot. "Objects" draws object_detector's boxes (`/camera/<name>/detections`, JSON) over the preview,
+  so only a few hundred bytes a frame cross Wi-Fi on top of it.
 - Map tab: `/map`, `/scan`, `/plan` and the robot (TF map -> base_footprint), RViz-style;
   "Goal" mode sends a drag as `/goal_pose`. "Save map" sends a name on `/map/save`; the robot's `map_save`
   (started with SLAM) writes `maps/<name>.pgm/.yaml` and answers on `/map/save/result`. These streams are subscribed only while shown,

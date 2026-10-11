@@ -72,10 +72,13 @@ Working: the L1 lidar (mount, yaw, range offset, leg filter), SLAM in a room, an
 
 **Done when:** a lidar point on a cone lands on the cone in the image.
 
-## Phase 3: Object detection
+## Phase 3: Objects
 
 YOLOE, an open-vocabulary YOLO: its prompt-free model names objects from a built-in 4,585-word vocabulary
 (cones included), so nothing is trained; with `classes:` in `config.yaml` it looks only for those names.
+3a finds objects in the image; 3b puts them on the map.
+
+### 3a: Detection
 
 **To build:**
 - [x] **GPU in the robot's Docker:** [Docker/Dockerfile.jetson](Docker/Dockerfile.jetson), see
@@ -84,11 +87,12 @@ YOLOE, an open-vocabulary YOLO: its prompt-free model names objects from a built
 - [x] **`object_detector` node:** `/camera/<name>/image_raw/compressed` → `/camera/<name>/detections`
       (JSON boxes) and `/camera/<name>/detections/image/compressed`; `--export` builds the TensorRT engine.
       `camera.launch.py detect:=true`, or [I] in the launcher. About 12 ms per image on the laptop's GPU.
-- [ ] **Objects on the map:**
-  - the box gives a direction from the camera, and the lidar gives the distance;
-  - each object becomes a point on the map, and repeated sightings are merged;
-  - the list is published on `/objects` (cones are the ones labelled "traffic cone").
-- [ ] **Show the objects** in rviz and in the app's map tab, and the detection image in the app.
+- [x] **Laptop image with YOLO:** ultralytics and torch's CUDA 12.6 build (runs on NVIDIA driver 525+) in
+      [Docker/Dockerfile](Docker/Dockerfile); same pip list as the Jetson image, OpenCV 5 in both.
+- [x] **Tried in Gazebo** (nav world): it sees the cones from far away, but up close it gives odd labels
+      ("extrude"): Gazebo's flat renders are far from the real photos it learned from. In Gazebo, a `*-seg.pt`
+      model with `classes:` limits it to names we choose.
+- [x] **Boxes in the app:** the camera tab draws `/camera/<name>/detections` over the preview ("Objects").
 - Only if YOLOE misses cones:
   - [ ] **Dataset:** Gazebo images, labelled automatically from the known cone poses; 100–200 real photos,
         labelled by hand.
@@ -99,7 +103,38 @@ YOLOE, an open-vocabulary YOLO: its prompt-free model names objects from a built
 - [ ] **Everything else still works** in the new image: driver, Nav2, SLAM, Point-LIO, the app.
 - [ ] **Detection** in different light, and with other orange things around.
 - [ ] **Speed:** FPS of the TensorRT engine on the Jetson, and CPU/GPU/RAM while Nav2 runs.
+
+**Done when:** the camera tab shows boxes on the real robot's objects, at the detector's rate.
+
+### 3b: Objects on the map
+
+A new `object_mapper` node in `quadruped_perception`. Needs the camera calibrated (`calibration/front.yaml`;
+Gazebo publishes its own `camera_info`) and the mount checked with `camera_lidar_check` (Phase 2).
+
+**To build:**
+- [ ] **Box → direction:** the camera's intrinsics turn a pixel into a ray in the camera frame. For objects on
+      the floor, the box's bottom-centre (where it touches the ground).
+- [ ] **Direction → distance from the lidar:**
+  - the last ~1 s of clouds, kept in the map frame so the robot can move meanwhile, projected onto the image
+    through TF (as `camera_lidar_check` does);
+  - the points inside the object's mask (YOLOE gives one; better than the box), and a robust distance from
+    them, the nearest cluster, so the wall behind it does not count;
+  - fallback when no point hits it (small or very close objects): the ray's crossing with the floor.
+- [ ] **Camera → map:** TF (map → odom → base → camera) at the image's stamp gives x, y on the map.
+- [ ] **Merging sightings:**
+  - a sighting within ~0.5 m of a known object of that label updates it (averaged position, one more count);
+    otherwise it is a new object;
+  - an object is reported after a few sightings (~3), which drops one-frame mistakes;
+  - labels are voted: 20 × "traffic cone" and 2 × "extrude" is a traffic cone;
+  - later: drop objects that should be in view, in range, but are not seen for a while.
+- [ ] **Output:** `/objects` (JSON: id, label, x, y, sightings, last seen) for the app and the LLM
+      (`list_cones`, `describe_surroundings`), plus a MarkerArray for rviz.
+- [ ] **Show them** in rviz and on the app's map tab.
+- [ ] **Gazebo check:** a script compares `/objects` with the 4 cones' poses in `nav.sdf` and prints each error.
+
+**To test on the robot:**
 - [ ] **Positions:** objects on the map against tape-measured positions.
+- [ ] **Moving robot:** positions stay put while it walks and turns.
 
 **Done when:** every cone in a room appears on the map within about 20 cm.
 
@@ -127,7 +162,10 @@ All skills go through `/skill`.
 **To build:**
 - [ ] **MCP server** with these tools:
   - `get_state`, `list_cones`, `go_to(x, y)`, `skill(name)`, `explore`, `stop`;
-  - `describe_surroundings()`: the map condensed to a few lines of text, see [3D mapping](#3d-mapping-lidar-inertial-odometry).
+  - `describe_surroundings()`: the map condensed to a few lines of text, see [3D mapping](#3d-mapping-lidar-inertial-odometry);
+  - `look_for(words)`: object_detector looks only for those names until cleared. YOLOE can change its words
+    while running, but only with the PyTorch model (a TensorRT engine has them built in), so it is slower on the
+    Jetson; the prompt-free engine stays the default.
 - [ ] **LLM on the laptop.** Calls cross Wi-Fi over TCP or HTTP, not DDS.
 - [ ] **Safety:**
   - the LLM only reaches skills and `/cmd_vel/llm`, the lowest priority;
@@ -275,16 +313,18 @@ from dusty-nv's `dustynv/ros:humble-desktop-pytorch-l4t-r35.4.1` (Humble built f
 TensorRT, torch 2.0) and builds on top:
 - the robot's ROS packages: Nav2 (with MPPI, gcc 11), slam_toolbox, pointcloud_to_laserscan, twist_mux,
   joy, teleop_twist_joy, the MCAP plugin and pcl_ros;
-- torchvision with CUDA, CycloneDDS 0.10 for the Unitree SDK, our pip packages and ultralytics;
+- torchvision with CUDA, CycloneDDS 0.10 for the Unitree SDK, and the laptop image's pip list (ultralytics,
+  OpenCV 5 headless instead of NVIDIA's 4.5 Python binding, whose C++ libraries stay for cv_bridge);
 - pip is held to the base's torch, so nothing replaces it with the CPU one.
 
-The laptop's image stays as it is. How to build and run it: [Docker/README.md](Docker/README.md), section 1d.
+Still different from the laptop because of 20.04: Python 3.8, torch 2.0, numpy 1.24, mujoco 3.2.3.
+How to build and run it: [Docker/README.md](Docker/README.md), section 1d.
 
 - **Check the L4T version** on the robot (`cat /etc/nv_tegra_release`); the base's must be R35 too.
 - **Leave the policy on the CPU.** It runs in about 6 ms there, and the GPU would only add launch latency.
   The GPU is for perception.
-- **Size and build time.** Roughly 10+ GB and a few hours. Build it once on the robot and push it to GHCR
-  (`:jetson`).
+- **Size and build time.** About 7 GB, and 1.5 h on the laptop under QEMU (most of it Nav2). Push it to GHCR
+  (`:jetson`) so the robot only pulls it.
 - **Memory.** The GPU shares the 8 GB of RAM with the CPU; watch `/system_stats`.
 - **Later, JetPack 6** (Ubuntu 22.04, "Super" mode, ~67 TOPS) would allow Jazzy from apt with dusty-nv's
   `jazzy-ros-base-r36.4.0-cu128-24.04`, with no source builds. That needs reflashing the Jetson.
