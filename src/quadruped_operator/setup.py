@@ -41,5 +41,6 @@ setup(
         "mcap_tool = quadruped_operator.mcap_tool:main",
         "skill_server = quadruped_operator.skill_server:main",
         "auto_localize = quadruped_operator.auto_localize:main",
+        "map_save = quadruped_operator.map_save:main",
     ]},
 )

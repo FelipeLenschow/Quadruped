@@ -32,7 +32,8 @@ Android, no bridge on the robot.
   the tmux shortcut turns mouse mode on, so a drag scrolls tmux's history. Heartbeat and e-stop
   stay on DDS, independent of the shell.
 - Map tab: `/map`, `/scan`, `/plan` and the robot (TF map -> base_footprint), RViz-style;
-  "Goal" mode sends a drag as `/goal_pose`. These streams are subscribed only while shown,
+  "Goal" mode sends a drag as `/goal_pose`. "Save map" sends a name on `/map/save`; the robot's `map_save`
+  (started with SLAM) writes `maps/<name>.pgm/.yaml` and answers on `/map/save/result`. These streams are subscribed only while shown,
   best-effort, so they never compete with the heartbeat for retransmits.
 - System tab: "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
   published once a second by `quadruped_drivers/system_monitor`, which the real launch starts;

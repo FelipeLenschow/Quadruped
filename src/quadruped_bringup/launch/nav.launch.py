@@ -93,6 +93,7 @@ def setup(context):
     if map_yaml is None:
         actions.append(Node(package="slam_toolbox", executable="async_slam_toolbox_node", output="screen",
                             emulate_tty=True, parameters=[paths.config("slam.yaml"), use_sim]))
+        actions.append(Node(package="quadruped_operator", executable="map_save", output="screen", emulate_tty=True))
     else:
         if not os.path.exists(map_yaml):
             raise RuntimeError(f"map not found: {map_yaml}")

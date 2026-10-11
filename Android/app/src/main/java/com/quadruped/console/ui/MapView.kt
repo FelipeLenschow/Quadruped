@@ -14,7 +14,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -51,6 +54,9 @@ import com.quadruped.console.Vec3
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -60,6 +66,9 @@ private const val MAP = "/map"
 private const val SCAN = "/scan"
 private const val PLAN = "/plan"
 private const val GOAL = "/goal_pose"
+private const val SAVE = "/map/save"
+private const val SAVE_RESULT = "/map/save/result"
+private const val SAVE_RESULT_SHOWN_MS = 10_000L
 
 private class Grid(val image: ImageBitmap, val ox: Double, val oy: Double, val res: Double, val w: Int, val h: Int)
 
@@ -99,7 +108,8 @@ private fun gridBitmap(v: DoubleArray, cells: ByteArray): Grid {
 /**
  * RViz-style view of Nav2: /map, the robot (TF map -> base_footprint, odom when there
  * is no map frame yet), /scan and the global /plan. Pinch/drag to move; in goal mode a
- * drag sets a goal and its heading, sent on /goal_pose like RViz's "2D Goal Pose".
+ * drag sets a goal and its heading, sent on /goal_pose like RViz's "2D Goal Pose". "Save map"
+ * asks the robot's map_save (started with SLAM) to write /map to maps/<name> for AMCL.
  */
 @Composable
 fun MapView(modifier: Modifier = Modifier) {
@@ -113,11 +123,16 @@ fun MapView(modifier: Modifier = Modifier) {
     var goalMode by remember { mutableStateOf(false) }
     var goalDrag by remember { mutableStateOf<Pair<Offset, Offset>?>(null) }
     var goal by remember { mutableStateOf<Triple<Double, Double, Double>?>(null) }
+    var saveName by remember { mutableStateOf<String?>(null) }
+    var saveResult by remember { mutableStateOf("") }
+    var saveResultAt by remember { mutableLongStateOf(0L) }
+    var now by remember { mutableLongStateOf(0L) }
 
     DisposableEffect(Unit) {
-        onDispose { listOf(MAP, SCAN, PLAN, "/tf", "/tf_static").forEach { NativeLink.unsubscribe(it) } }
+        onDispose { listOf(MAP, SCAN, PLAN, SAVE_RESULT, "/tf", "/tf_static").forEach { NativeLink.unsubscribe(it) } }
     }
     LaunchedEffect(Unit) {
+        var saveCount = NativeLink.latestCount(SAVE_RESULT)
         while (true) {
             NativeLink.subscribe(MAP, MsgType.OCCUPANCY_GRID, reliable = true, transientLocal = true)
             NativeLink.subscribe("/tf_static", MsgType.TF_MESSAGE, reliable = true, transientLocal = true)
@@ -125,6 +140,14 @@ fun MapView(modifier: Modifier = Modifier) {
             NativeLink.subscribe(SCAN, MsgType.LASER_SCAN, reliable = false)
             NativeLink.subscribe(PLAN, MsgType.PATH)
             NativeLink.advertise(GOAL, MsgType.POSE_STAMPED)
+            NativeLink.advertise(SAVE, MsgType.STRING)
+            NativeLink.subscribe(SAVE_RESULT, MsgType.STRING)
+            now = System.currentTimeMillis()
+            if (NativeLink.latestCount(SAVE_RESULT) != saveCount) {
+                saveCount = NativeLink.latestCount(SAVE_RESULT)
+                saveResult = NativeLink.latestText(SAVE_RESULT) ?: ""
+                saveResultAt = now
+            }
 
             val n = NativeLink.latestCount(MAP)
             if (n != mapCount) {
@@ -216,6 +239,11 @@ fun MapView(modifier: Modifier = Modifier) {
         }
 
         Row(Modifier.align(Alignment.TopEnd).padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (grid != null) {
+                Chip("Save map", saveName != null, Palette.Ok) {
+                    saveName = "map_" + SimpleDateFormat("MMdd_HHmm", Locale.US).format(Date())
+                }
+            }
             Chip("Follow", follow, Palette.Accent) { follow = !follow }
             Chip(if (goalMode) "Drag to set goal" else "Goal", goalMode, Palette.Warn) { goalMode = !goalMode }
         }
@@ -227,7 +255,32 @@ fun MapView(modifier: Modifier = Modifier) {
                 color = Palette.Muted, fontSize = 11.sp, fontFamily = Mono,
             )
             if (scene.robot == null) Text("No TF to base_footprint", color = Palette.Warn, fontSize = 11.sp)
+            if (saveResult.isNotEmpty() && now - saveResultAt < SAVE_RESULT_SHOWN_MS) {
+                Text(saveResult, color = if (saveResult.startsWith("error")) Palette.Danger else Palette.Ok, fontSize = 12.sp)
+            }
         }
+    }
+
+    saveName?.let { name ->
+        AlertDialog(
+            onDismissRequest = { saveName = null },
+            title = { Text("Save map") },
+            text = {
+                Column {
+                    OutlinedTextField(name, { saveName = it }, singleLine = true, label = { Text("Name") })
+                    Text("Written on the robot to maps/<name>, listed by launcher [N].", color = Palette.Muted, fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                TextButton({
+                    NativeLink.publishString(SAVE, name.trim())
+                    saveResult = "Saving maps/${name.trim()}…"
+                    saveResultAt = System.currentTimeMillis()
+                    saveName = null
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton({ saveName = null }) { Text("Cancel") } },
+        )
     }
 }
 

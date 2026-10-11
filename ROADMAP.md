@@ -3,23 +3,31 @@
 Goal: the Go2 explores on its own, finds cones, sniffs them and pees on them, driven by an LLM over MCP.
 
 Each phase ends with a test on the real robot. Phases are in order; each one needs the one before.
+Each lists what is left **to build** (code) and what is left **to test on the robot**.
 
 ## Phase 1: Real-robot navigation (now)
 
 Working: the L1 lidar (mount, yaw, range offset, leg filter), SLAM in a room, and Nav2 goals from the app.
 
-- [ ] **Save a map.** Build a map of a room with SLAM, then save it from the robot's Docker:
-      `ros2 run nav2_map_server map_saver_cli -f maps/<name>`. Not in the launcher or the app yet.
+**To build:**
+- [x] **Save a map.** "Save map" on the app's map tab while SLAM builds one ([N], "Build a new map"): `map_save`
+      writes `maps/<name>.pgm/.yaml` on the robot (map_saver's format, checked byte for byte against
+      `maps/nav.pgm`), and [N] lists it next time. Without the app:
+      `ros2 topic pub --once /map/save std_msgs/msg/String "data: room1"`.
+- [x] **Keepout zones:** `scripts/make_keepout_mask.py` on a saved map.
+
+**To test on the robot:**
+- [ ] **Save a map** of a room from the app, and find it in [N].
 - [ ] **Big loop.** Walk one large loop (a corridor, or around a building) and check:
   - when the robot gets back to the start, the map closes without a doubled wall;
   - how far the pose drifted before SLAM corrected it.
-  If leg odometry drifts badly, compare it with Unitree's lidar odometry.
-- [ ] **Keepout zones** on the saved map (`scripts/make_keepout_mask.py`).
+  If leg odometry drifts badly, compare it with Point-LIO's (`/lio/odom`).
+- [ ] **Keepout zones** on the saved map: Nav2 plans around them.
 - [ ] **Localize on the saved map:**
   1. AMCL with a known start pose.
   2. Unknown start pose plus the `localize` skill. Never confirmed, not even in Gazebo, so try Gazebo first.
 - [ ] **Goals and obstacles:** several goals on the saved map from the app, then someone stepping into the path.
-- [ ] **Jetson load:** run `top` with the policy, SLAM or AMCL, and Nav2 all running.
+- [ ] **Jetson load:** the app's CPU/GPU/RAM with the policy, SLAM or AMCL, and Nav2 all running.
 - [ ] **Lidar checks:**
   - the 12 cm range offset, against walls to the side and behind at tape-measured distances;
   - narrowing the body box back from ±0.35 m toward ±0.25 m, now that the leg filter exists.
@@ -28,42 +36,61 @@ Working: the L1 lidar (mount, yaw, range offset, leg filter), SLAM in a room, an
 
 ## Phase 2: Camera
 
+**To build:**
 - [ ] **Camera bridge.** `VideoClient` JPEG frames to `/camera/image_raw/compressed` plus `/camera/camera_info`. The app should only show a low-rate preview.
+- [ ] **Camera mount check tool:** draw the lidar points on the image.
+
+**To test on the robot:**
 - [ ] **Calibration:** checkerboard with `camera_calibration`, saved to a yaml.
-- [ ] **Camera mount check:** draw the lidar points on the image; they should land on the objects.
+- [ ] **Camera mount:** the lidar points land on the objects in the image.
+- [ ] **Preview rate:** the app's preview doesn't load the Wi-Fi (heartbeat stays steady).
 
 **Done when:** a lidar point on a cone lands on the cone in the image.
 
 ## Phase 3: Cone detection
 
+**To build:**
 - [ ] **Colour filter first:** orange pixels → blobs → lidar distance. About 1–2 ms per image on the CPU, with no training or GPU. Move on to YOLO only if it gets fooled by other orange things or bad lighting.
-- [ ] **GPU in the robot's Docker**, needed for YOLO. See [GPU on the robot](#gpu-on-the-robot-ros-with-cuda-torch) below.
-- [ ] **Dataset:**
-  - Gazebo images, labelled automatically from the known cone poses;
-  - 100–200 real photos, labelled by hand.
-- [ ] **Model:** a small YOLO, exported to TensorRT on the Jetson. Measure FPS.
 - [ ] **`cone_detector` node:**
   - the box gives a direction from the camera, and the lidar gives the distance;
   - the cone becomes a point on the map, and repeated sightings are merged;
   - the list is published on `/cones`.
 - [ ] **Show the cones** in rviz and in the app's map tab.
+- Only if the colour filter isn't enough:
+  - [ ] **GPU in the robot's Docker**, needed for YOLO. See [GPU on the robot](#gpu-on-the-robot-ros-with-cuda-torch) below.
+  - [ ] **Dataset:** Gazebo images, labelled automatically from the known cone poses; 100–200 real photos,
+        labelled by hand.
+  - [ ] **Model:** a small YOLO, exported to TensorRT on the Jetson.
+
+**To test on the robot:**
+- [ ] **Detection** in different light, and with other orange things around.
+- [ ] **Speed:** ms per image (colour filter) or FPS (YOLO) on the Jetson.
+- [ ] **Positions:** cones on the map against tape-measured positions.
 
 **Done when:** every cone in a room appears on the map within about 20 cm.
 
 ## Phase 4: Skills
 
+All skills go through `/skill`.
+
+**To build:**
 - [ ] **`go_to_cone`:** a Nav2 goal about 0.5 m from the cone, facing it.
 - [ ] **`pee`:** lift a back leg and hold it. Balance it in sim first.
 - [ ] **`wiggle`.**
 - [ ] **`explore`:** frontier exploration, so the robot finds cones in an unknown place.
 - [ ] **`follow_me`:** track the person's legs in the lidar beside the robot, published on `/cmd_vel/skill`.
 
-All skills go through `/skill`.
+**To test on the robot:**
+- [ ] **`pee` balance**, after MuJoCo: the robot holds the leg up without tipping.
+- [ ] **`go_to_cone`** from different starts and angles.
+- [ ] **`explore`** in a room it has never mapped.
+- [ ] **`follow_me`** with one person, then with others nearby.
 
 **Done when:** go to cone → sniff → pee works on the real robot.
 
 ## Phase 5: LLM brain over MCP
 
+**To build:**
 - [ ] **MCP server** with these tools:
   - `get_state`, `list_cones`, `go_to(x, y)`, `skill(name)`, `explore`, `stop`;
   - `describe_surroundings()`: the map condensed to a few lines of text, see [3D mapping](#3d-mapping-lidar-inertial-odometry).
@@ -72,6 +99,10 @@ All skills go through `/skill`.
   - the LLM only reaches skills and `/cmd_vel/llm`, the lowest priority;
   - the app's e-stop and the joystick always win.
 - [ ] **A "having fun" prompt:** explore, pick a cone, go sniff it, sometimes pee, then repeat.
+
+**To test on the robot:**
+- [ ] **Override:** the app's e-stop and the joystick take over from the LLM mid-skill.
+- [ ] **Wi-Fi drops:** the robot stops safely when the laptop goes out of range.
 
 **Done when:** 10 minutes of finding, sniffing and peeing on cones with no human input.
 
@@ -112,7 +143,7 @@ beam counts for that voxel. Deltas carry removals too. The floor (within
 73% → 92% on the walking bag, 97% with a 15 cm band (but then lower obstacles merge into the floor).
 Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_lidar` (Unitree's uses `toSec()`).
 
-**Prerequisites:**
+**Done:**
 - [x] **Matching timestamps.** `real_sensors` keeps the robot's stamps on cloud and IMU, shifted by one offset.
 - [x] **IMU rate:** 250 Hz, `imu_time_inte: 0.004`.
 - [x] **IMU rotation.** `ros2 run quadruped_perception lidar_imu_calib` fits the lidar IMU's gyro to the body
@@ -132,14 +163,32 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
       builds it from ~0.3 s of scans: all three starts hold within 1.5 deg. Start with the robot still.
 - [x] **Per-point times.** The cloud's `time` field is each point's time in the scan, in seconds: 0 to ~63 ms,
       rising, one value per point, ~4200 points per scan at 15.5 Hz (`timestamp_unit: 0`). Checked on both bags.
+- [x] **Body crop.** `real_sensors` blanks the robot's own hips and legs (`real_lidar.body_box`), so Point-LIO's
+      `blind` dropped from 0.5 to 0.1 m: the floor within ~0.4 m of the lidar is mapped (34% → 98% covered).
+- [x] **Voxel size from the robot** (`/lio/map_voxels/size`), paced deltas, voxel clearing, and removals in the app.
+
+**To build:**
+- [ ] **Start with the real driver, not Nav2.** LIO supplies `odom → base` (an `odometry.source: lio` switch in
+      `config.yaml`, with telemetry then dropping its own), so the pose never jumps and the app's view works
+      without [N]. An adapter turns LIO's `lio_odom → lio_imu` into `odom → base`, and leg odometry fills
+      `/odom`'s velocity if LIO leaves it empty. Gazebo keeps leg odometry, since its lidar has no point times.
+- [ ] Items 1-4 of **What builds on it**, below.
+
+**To test (bags or robot):**
 - [ ] **Raw scans.** Unitree's clouds carry about 59k points/s against the L1's 21.6k, so they overlap or are
       preprocessed. LIO may need the raw scans instead.
 - [ ] **Same data as Unitree's driver.** Point-LIO's L1 config expects the cloud and IMU as `unilidar_sdk`
       publishes them. Compare the Go2's DDS cloud with that: frame, point-time units, IMU rate.
-- [ ] **Start with the real driver, not Nav2.** LIO supplies `odom → base` (an `odometry.source: lio` switch in
-      `config.yaml`, with telemetry then dropping its own), so the pose never jumps and the app's view works
-      without [N]. An adapter turns LIO's `camera_init → body` into `odom → base`, and leg odometry fills
-      `/odom`'s velocity if LIO leaves it empty. Gazebo keeps leg odometry, since its lidar has no point times.
+
+**To test on the robot** (everything from 2026-10-08 on was checked on replayed bags only):
+- [ ] **Starts:** several [L] starts in a row, robot still for ~1 s each: no spinning map.
+- [ ] **Level floor:** the floor is flat in the app's 3D tab (body accelerometer), and the floor in front of
+      the robot is filled in (body crop).
+- [ ] **Doors and people:** open a door or walk past; their voxels clear in ~5 s.
+- [ ] **Long run:** 10 minutes at 5 cm voxels: the voxel count levels off, the heartbeat never drops (no
+      "Supervisor heartbeat lost"), and `lio_map_stream` stays around 10-15% of a core.
+- [ ] **Save the 3D map** ([L], save on exit) and look at the PCD.
+- [ ] **Big loop with Point-LIO:** how far `/lio/odom` is off when back at the start.
 
 **What builds on it:**
 1. **Odometry for Nav2: fuse, don't replace.** A filter blends legs + IMU with Point-LIO when it runs, and
@@ -227,6 +276,16 @@ Things to watch:
 - **SSH terminal in the app: built, not yet tried on the robot.** Shell tab, see `Android/README.md`.
   Still to check: `sshd` and the login user on the Go2's Jetson (the app defaults to `unitree@10.42.0.1`).
   The terminal can press ENTER on the driver, which releases an e-stop from the phone; not blocked.
-- **Save Map** button in the launcher or the app.
+- **Safety lie-down before going numb.** When the safety switch trips, run the Recovery module's
+  Go2-LieDown policy (`IsaacLab_Tasks/Recovery`, run `Lie2`) until the robot is lying on its belly pads, then
+  zero the gains. Today the trip latches a shutdown and holds the "safety" targets.
+  - The policy uses unitree's 45-wide observation with the velocity command at zero, so `policy_runner`'s
+    "unitree" layout should run it as is.
+  - The ROM check (`joint_rom_safety_margin` 0.15) trips at calves below about -2.39, and lying puts them at
+    -2.6 to -2.7: exempt the lying state, or anything that re-checks safety while lying trips again.
+  - Decide when it counts as lying (belly down, low, still for ~1 s) and how long to wait before numb.
+  - Try it in MuJoCo first, from standing, walking, and a fall.
+- **The app and the new Recovery work.** Show when the safety lie-down is running and when the robot has
+  gone numb.
 - **A custom rviz config.**
 - **Flags to ROS parameters.**
