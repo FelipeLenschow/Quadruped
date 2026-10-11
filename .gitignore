@@ -72,3 +72,6 @@ Tools/.viewer_cache/
 
 # Recorded rosbags for offline tests (lidar, IMU)
 lio_bag/
+
+# object_detector: downloaded weights, text encoder and TensorRT engines (built per machine)
+models/

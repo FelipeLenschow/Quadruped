@@ -1,4 +1,4 @@
-"""Cameras: camera_bridge for config.yaml's cameras, and optionally the lidar mount check.
+"""Cameras: camera_bridge for config.yaml's cameras, and optionally the lidar mount check and object detection.
 
 Needs the robot running: real.launch.py (or, with sim:=true, Gazebo's nav world, whose gazebo_sensors
 publishes the simulated image).
@@ -22,6 +22,8 @@ def setup(context):
     )]
     if flag(context, "check"):
         actions.append(node("quadruped_perception", "camera_lidar_check", f"--camera={get(context, 'check_camera')}"))
+    if flag(context, "detect"):
+        actions.append(node("quadruped_perception", "object_detector"))
     return actions
 
 
@@ -32,5 +34,6 @@ def generate_launch_description():
         arg("interface", "", "network interface for the Unitree SDK"),
         arg("check", "false", "also draw the lidar on a camera's image (camera_lidar_check)"),
         arg("check_camera", "front", "camera for the check"),
+        arg("detect", "false", "also run object_detector (config.yaml's detector:)"),
         OpaqueFunction(function=setup),
     ])

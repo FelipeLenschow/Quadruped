@@ -105,6 +105,20 @@ cameras:
   #   rpy: [0.0, 0.0, 0.0]
   #   rate: 9
 
+# Open-vocabulary detection (object_detector, YOLOE) on one camera:
+#   /camera/<camera>/detections (JSON) and /camera/<camera>/detections/image/compressed (boxes drawn).
+#   model: a *-seg-pf.pt model names objects from its own 4,585-word vocabulary and ignores classes;
+#          a *-seg.pt model looks only for classes. Downloaded to models/ on first use.
+#   On the Jetson, `ros2 run quadruped_perception object_detector --export` builds a TensorRT engine
+#   for this model, classes and imgsz (once, on the robot); the node uses it when it is there.
+detector:
+  camera: front
+  model: models/yoloe-26s-seg-pf.pt
+  classes: []
+  rate: 5
+  conf: 0.25
+  imgsz: 640
+
 # --- Motor Physical Parameters ---
 motor:
   max_torque: 45.0        # Nm (Saturation torque for Go2)

@@ -1,0 +1,135 @@
+# Robot image (Jetson Orin, JetPack 5 = L4T R35, Ubuntu 20.04) with the GPU: CUDA, TensorRT and CUDA torch.
+# Docker/Dockerfile stays the laptop/VDI image. ROS 2 Humble has no apt packages for 20.04, so the base is
+# dusty-nv's (Humble built from source) and the packages we use on the robot are built from source on top.
+#
+# The base's L4T major version must match the robot's (`cat /etc/nv_tegra_release`, on the robot itself).
+# All R35.x share CUDA 11.4; pick the closest tag with --build-arg BASE=dustynv/ros:humble-desktop-pytorch-l4t-r35.x.x
+ARG BASE=dustynv/ros:humble-desktop-pytorch-l4t-r35.4.1
+FROM ${BASE}
+
+LABEL org.opencontainers.image.source=https://github.com/FelipeLenschow/Quadruped
+
+ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-c"]
+ARG BUILD_JOBS=4
+
+# 1. The CUDA torch in the base must never be replaced by pip's CPU wheel: every pip install below (and
+#    ultralytics' own installs at runtime) is held to it.
+RUN python3 -c "import torch; print('torch==' + torch.__version__)" > /opt/pip-constraints.txt && \
+    cat /opt/pip-constraints.txt
+ENV PIP_CONSTRAINT=/opt/pip-constraints.txt
+
+# 1.5 The base's ROS apt key expired (it is from 2023): fetch the renewed one or apt refuses the repo
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg
+
+# 2. gcc 11 for the ROS packages below (Humble targets Ubuntu 22.04's gcc 11; MPPI needs it), plus build tools
+RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
+    add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    gcc-11 g++-11 git wget curl libjpeg-dev libpng-dev zlib1g-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# 3. xtensor for MPPI: no 20.04 package, so the versions Ubuntu 22.04 ships (Humble's binaries use them)
+RUN for repo in xtl:0.7.2 xsimd:7.6.0 xtensor:0.23.10; do \
+        name=${repo%%:*}; tag=${repo##*:}; \
+        git clone -q --depth 1 -b $tag https://github.com/xtensor-stack/$name /tmp/$name && \
+        cmake -S /tmp/$name -B /tmp/$name/build -DCMAKE_INSTALL_PREFIX=/usr/local && \
+        cmake --install /tmp/$name/build && rm -rf /tmp/$name || exit 1; \
+    done
+
+# 4. ROS packages the robot runs that the base lacks: Nav2 (only what nav.launch.py starts), slam_toolbox,
+#    pointcloud_to_laserscan, twist_mux, joy, teleop_twist_joy, the MCAP bag plugin and pcl_ros (Point-LIO).
+#    Laptop-only tools (rviz plugins, foxglove_bridge, plotjuggler, Gazebo) are left out.
+RUN source /opt/ros/humble/install/setup.bash && \
+    export ROS_PACKAGE_PATH="${AMENT_PREFIX_PATH}" CC=gcc-11 CXX=g++-11 MAKEFLAGS="-j${BUILD_JOBS}" && \
+    mkdir -p /opt/ros/extras/src && cd /opt/ros/extras && \
+    rosinstall_generator --deps --exclude RPP --rosdistro humble \
+        nav2_amcl nav2_behaviors nav2_bt_navigator nav2_controller nav2_costmap_2d nav2_lifecycle_manager \
+        nav2_map_server nav2_mppi_controller nav2_navfn_planner nav2_planner \
+        slam_toolbox pointcloud_to_laserscan twist_mux joy teleop_twist_joy rosbag2_storage_mcap pcl_ros \
+        > extras.rosinstall && \
+    cat extras.rosinstall && \
+    vcs import src < extras.rosinstall && \
+    apt-get update && (rosdep init || true) && rosdep update --rosdistro humble && \
+    (rosdep install -y -r --ignore-src --from-paths src --rosdistro humble \
+        --skip-keys "xtensor xsimd libopencv-dev libopencv-contrib-dev libopencv-imgproc-dev python3-opencv" \
+        || echo "some rosdep keys did not resolve; the build below shows whether they mattered") && \
+    colcon build --merge-install --parallel-workers 2 \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && \
+    rm -rf src build log extras.rosinstall /var/lib/apt/lists/*
+
+# 5. One setup file at the usual path, for .bashrc, the entrypoint and scripts that look for
+#    /opt/ros/<distro>/setup.bash
+RUN printf 'source /opt/ros/humble/install/setup.bash\nsource /opt/ros/extras/install/setup.bash\n' \
+    > /opt/ros/humble/setup.bash && \
+    printf '#!/bin/bash\nsource /opt/ros/humble/setup.bash\nexec "$@"\n' > /ros_entrypoint.sh && \
+    chmod +x /ros_entrypoint.sh
+
+# 6. CycloneDDS 0.10.x for the Unitree SDK (as in the laptop image)
+RUN git clone -q https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x /tmp/cyclonedds && \
+    cmake -S /tmp/cyclonedds -B /tmp/cyclonedds/build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_EXAMPLES=OFF && \
+    cmake --build /tmp/cyclonedds/build --target install -j${BUILD_JOBS} && \
+    rm -rf /tmp/cyclonedds
+ENV CYCLONEDDS_HOME=/usr/local
+ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+
+# 7. torchvision with CUDA ops (YOLO's NMS runs on the GPU), built against the base's torch: no wheel exists
+RUN git clone -q --depth 1 -b v0.15.1 https://github.com/pytorch/vision /tmp/torchvision && \
+    cd /tmp/torchvision && \
+    BUILD_VERSION=0.15.1 FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.7" MAX_JOBS=${BUILD_JOBS} python3 setup.py bdist_wheel && \
+    pip3 install --no-cache-dir dist/torchvision-*.whl && \
+    python3 -c "import torchvision; print('torchvision==' + torchvision.__version__)" >> /opt/pip-constraints.txt && \
+    cd / && rm -rf /tmp/torchvision
+
+# 8. TensorRT's Python bindings (for exporting YOLO engines), when the base did not bring them. Checked without
+#    importing: the GPU driver libraries are empty placeholders until `--runtime nvidia` mounts the robot's.
+RUN FIND='import importlib.util as u, sys; sys.exit(u.find_spec("tensorrt") is None)'; \
+    python3 -c "$FIND" || \
+    (apt-get update && apt-get install -y --no-install-recommends python3-libnvinfer python3-libnvinfer-dev && \
+     rm -rf /var/lib/apt/lists/* && python3 -c "$FIND")
+
+# 9. Python packages, the same list as the laptop image, into the system Python 3.8 (no venv: the base's torch
+#    and ROS live there). NVIDIA's OpenCV Python binding goes, so cv2 is pip's as on the laptop; its C++
+#    libraries stay for cv_bridge.
+RUN dpkg -r --force-depends opencv-python && \
+    pip3 install --no-cache-dir --upgrade pip wheel && \
+    pip3 install --no-cache-dir \
+    "setuptools<80" \
+    protobuf==3.20.3 \
+    cyclonedds==0.10.2 \
+    numpy \
+    pyyaml \
+    scipy \
+    mujoco \
+    onnxruntime \
+    skrl \
+    tensorboard \
+    mcap \
+    mcap-ros2-support \
+    ultralytics==8.4.175 \
+    onnxslim && \
+    pip3 uninstall -y opencv-python && \
+    rm -rf "$(pip3 show ultralytics | sed -n 's/^Location: //p')/cv2" && \
+    pip3 install --no-cache-dir opencv-python-headless && \
+    python3 -c "import cv2, torch, torchvision, ultralytics; print(cv2.__version__, torch.__version__, ultralytics.__version__)"
+
+# 10. Environment: Fast DDS like the laptop image (Tools/ros_env.sh's discovery server), not dusty-nv's Cyclone
+ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ENV ROS_DOMAIN_ID=1
+ENV ROS_LOCALHOST_ONLY=0
+ENV PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
+WORKDIR /app
+RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc && \
+    echo '[ -f /app/Tools/ros_env.sh ] && source /app/Tools/ros_env.sh' >> ~/.bashrc && \
+    echo 'export PS1="(Quadruped-Docker-GPU) \[\033[01;32m\]\u@docker\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]# "' >> ~/.bashrc
+
+# The repo is mounted from the host and owned by another user: let git work on it as root
+RUN git config --global --add safe.directory '*'
+
+# Up-arrow in a fresh container gives the usual start command
+RUN echo 'clear && python launcher.py' >> ~/.bash_history
+
+ENTRYPOINT ["/ros_entrypoint.sh"]
+CMD ["bash"]

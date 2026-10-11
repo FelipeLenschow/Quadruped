@@ -89,7 +89,9 @@ ENV LD_LIBRARY_PATH="/usr/local/lib"
 
 # 7. Install Python dependencies (Robot + Sim2Sim)
 # Upgrading pip and installing wheel first is good practice
+# torch's CUDA 12.6 build: the default (CUDA 13) needs NVIDIA driver 580+, this one runs on 525+
 RUN pip install --no-cache-dir --upgrade pip wheel && \
+    pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126 && \
     pip install --no-cache-dir \
     "setuptools<80" \
     protobuf==3.20.3 \
@@ -98,15 +100,17 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
     pyyaml \
     scipy \
     mujoco \
-    torch \
-    torchvision \
-    torchaudio \
     onnxruntime \
     skrl \
     tensorboard \
     mcap \
     mcap-ros2-support \
-    opencv-python-headless
+    ultralytics==8.4.175 \
+    onnxslim && \
+    pip uninstall -y opencv-python && \
+    rm -rf "$(pip show ultralytics | sed -n 's/^Location: //p')/cv2" && \
+    pip install --no-cache-dir opencv-python-headless && \
+    python -c "import cv2, torch, torchvision, ultralytics; print(cv2.__version__, torch.__version__, ultralytics.__version__)"
 
 # 8. Set environment variables for Domain Isolation and Protobuf compatibility
 ENV ROS_DOMAIN_ID=1
@@ -120,6 +124,12 @@ RUN echo '[ -f /app/Tools/ros_env.sh ] && source /app/Tools/ros_env.sh' >> ~/.ba
 
 # 10. Customize the bash prompt so you know you are inside the Docker container
 RUN echo 'export PS1="(Quadruped-Docker) \[\033[01;32m\]\u@docker\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]# "' >> ~/.bashrc
+
+# The repo is mounted from the host and owned by another user: let git work on it as root
+RUN git config --global --add safe.directory '*'
+
+# Up-arrow in a fresh container gives the usual start command
+RUN echo 'clear && python launcher.py' >> ~/.bash_history
 
 # Default command
 CMD ["bash"]

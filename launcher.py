@@ -1215,7 +1215,8 @@ def run_cli_menu():
         check_camera = ""
         if check:
             check_camera = input(f"Camera to check [{cams[0] if cams else 'front'}]: ").strip()
-        sweep_opts = {"only": only, "sim": sim, "check": check, "check_camera": check_camera}
+        detect = input("Also detect objects (object_detector, config.yaml's detector:)? [y/N]: ").lower().strip() == "y"
+        sweep_opts = {"only": only, "sim": sim, "check": check, "check_camera": check_camera, "detect": detect}
 
     if action == "lio":
         save = input("Save the 3D map to third_party/point_lio_ros2/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
@@ -1596,7 +1597,8 @@ def main():
             # Needs the robot running (real driver, or Gazebo's nav world for sim).
             cmd = ros2_launch("camera.launch.py", sim=sweep_opts.get("sim", False), only=sweep_opts.get("only"),
                               interface=None if sweep_opts.get("sim") else sdk_network_interface(),
-                              check=sweep_opts.get("check", False), check_camera=sweep_opts.get("check_camera"))
+                              check=sweep_opts.get("check", False), check_camera=sweep_opts.get("check_camera"),
+                              detect=sweep_opts.get("detect", False))
 
         elif action == "lio":
             # Needs the real driver running (its real_sensors publishes the lidar and its IMU).

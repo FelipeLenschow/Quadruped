@@ -72,25 +72,34 @@ Working: the L1 lidar (mount, yaw, range offset, leg filter), SLAM in a room, an
 
 **Done when:** a lidar point on a cone lands on the cone in the image.
 
-## Phase 3: Cone detection
+## Phase 3: Object detection
+
+YOLOE, an open-vocabulary YOLO: its prompt-free model names objects from a built-in 4,585-word vocabulary
+(cones included), so nothing is trained; with `classes:` in `config.yaml` it looks only for those names.
 
 **To build:**
-- [ ] **Colour filter first:** orange pixels → blobs → lidar distance. About 1–2 ms per image on the CPU, with no training or GPU. Move on to YOLO only if it gets fooled by other orange things or bad lighting.
-- [ ] **`cone_detector` node:**
+- [x] **GPU in the robot's Docker:** [Docker/Dockerfile.jetson](Docker/Dockerfile.jetson), see
+      [GPU on the robot](#gpu-on-the-robot-ros-with-cuda-torch) below. Built on the laptop under QEMU (about 1.5 h,
+      7 GB): everything builds and imports. Not run on the robot yet (no GPU or DDS under QEMU).
+- [x] **`object_detector` node:** `/camera/<name>/image_raw/compressed` → `/camera/<name>/detections`
+      (JSON boxes) and `/camera/<name>/detections/image/compressed`; `--export` builds the TensorRT engine.
+      `camera.launch.py detect:=true`, or [I] in the launcher. About 12 ms per image on the laptop's GPU.
+- [ ] **Objects on the map:**
   - the box gives a direction from the camera, and the lidar gives the distance;
-  - the cone becomes a point on the map, and repeated sightings are merged;
-  - the list is published on `/cones`.
-- [ ] **Show the cones** in rviz and in the app's map tab.
-- Only if the colour filter isn't enough:
-  - [ ] **GPU in the robot's Docker**, needed for YOLO. See [GPU on the robot](#gpu-on-the-robot-ros-with-cuda-torch) below.
+  - each object becomes a point on the map, and repeated sightings are merged;
+  - the list is published on `/objects` (cones are the ones labelled "traffic cone").
+- [ ] **Show the objects** in rviz and in the app's map tab, and the detection image in the app.
+- Only if YOLOE misses cones:
   - [ ] **Dataset:** Gazebo images, labelled automatically from the known cone poses; 100–200 real photos,
         labelled by hand.
-  - [ ] **Model:** a small YOLO, exported to TensorRT on the Jetson.
+  - [ ] **Model:** fine-tune YOLOE on them, exported to TensorRT on the Jetson.
 
 **To test on the robot:**
+- [ ] **Build the GPU image** on the robot; `torch.cuda.is_available()` is `True` inside it.
+- [ ] **Everything else still works** in the new image: driver, Nav2, SLAM, Point-LIO, the app.
 - [ ] **Detection** in different light, and with other orange things around.
-- [ ] **Speed:** ms per image (colour filter) or FPS (YOLO) on the Jetson.
-- [ ] **Positions:** cones on the map against tape-measured positions.
+- [ ] **Speed:** FPS of the TensorRT engine on the Jetson, and CPU/GPU/RAM while Nav2 runs.
+- [ ] **Positions:** objects on the map against tape-measured positions.
 
 **Done when:** every cone in a room appears on the map within about 20 cm.
 
@@ -257,41 +266,28 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
 
 ## GPU on the robot: ROS with CUDA torch
 
-The Go2's Jetson Orin Nano (40 TOPS) has a GPU with 1024 CUDA cores and 32 Tensor cores. Our Docker can't
-use it:
-- the image is based on `ros:humble-ros-base`, which has no CUDA;
-- pip's `torch` for ARM is CPU-only;
-- the container starts without NVIDIA's runtime.
+The Go2's Jetson Orin Nano (40 TOPS) has a GPU with 1024 CUDA cores and 32 Tensor cores. The `arm64` image
+can't use it: pip's `torch` for ARM is CPU-only, and `ros:humble-ros-base` has no CUDA.
 
-The laptop's image stays as it is; only the robot's ARM image changes.
+JetPack 5 is Ubuntu 20.04, and NVIDIA ships the R35 CUDA libraries and CUDA torch only for 20.04 (Python 3.8).
+ROS 2 Humble has no apt packages for 20.04, so [Docker/Dockerfile.jetson](Docker/Dockerfile.jetson) starts
+from dusty-nv's `dustynv/ros:humble-desktop-pytorch-l4t-r35.4.1` (Humble built from source, CUDA 11.4,
+TensorRT, torch 2.0) and builds on top:
+- the robot's ROS packages: Nav2 (with MPPI, gcc 11), slam_toolbox, pointcloud_to_laserscan, twist_mux,
+  joy, teleop_twist_joy, the MCAP plugin and pcl_ros;
+- torchvision with CUDA, CycloneDDS 0.10 for the Unitree SDK, our pip packages and ultralytics;
+- pip is held to the base's torch, so nothing replaces it with the CPU one.
 
-1. **Find the robot's JetPack version.** On the robot itself, not in Docker:
-   `cat /etc/nv_tegra_release`. For example, `R35` means JetPack 5 on Ubuntu 20.04. The container's L4T major
-   version must match the robot's, or CUDA won't load.
-2. **Pick a base image for that version.** dusty-nv's jetson-containers images already bundle ROS Humble
-   with CUDA torch, e.g. `dustynv/ros:humble-pytorch-l4t-r35.x.x`. Pick the tag closest to the robot's L4T.
-   The alternative is NVIDIA's `nvcr.io/nvidia/l4t-jetpack:r35.x.x` with ROS installed on top; it takes
-   longer to build.
-3. **Make the Dockerfile's base an argument:** `ARG BASE=ros:humble-ros-base` and `FROM ${BASE}`.
-   - The ARM build passes `--build-arg BASE=dustynv/ros:...`.
-   - Our own layers then go on top: CycloneDDS, the Unitree SDK, Nav2, `twist_mux`.
-   - Don't let pip install `torch` over the CUDA one. Skip it in the ARM build, or pin to the one already
-     in the image.
-   - Some apt packages may need building from source on that base, because dusty-nv builds ROS from source.
-4. **Run with the GPU.** Add `--runtime nvidia` to the robot's `quaddocker` alias. JetPack already ships
-   `nvidia-container-toolkit`.
-5. **Check:** `python3 -c "import torch; print(torch.cuda.is_available())"` prints `True` inside the
-   container.
-6. **YOLO on TensorRT.** Train the model on the laptop, then build the engine on the Jetson itself, since
-   engines don't move between GPUs: `yolo export model=cones.pt format=engine half=True imgsz=416`.
-   Expect about 5–10 ms per image.
-7. **Leave the policy on the CPU.** It runs in about 6 ms there, and the GPU would only add launch latency.
-   The GPU is for perception.
+The laptop's image stays as it is. How to build and run it: [Docker/README.md](Docker/README.md), section 1d.
 
-Things to watch:
-- **Size and build time.** The image grows to roughly 10+ GB and takes hours to build. Build it once on the
-  robot and push it to GHCR (`:arm64`).
-- **Memory.** The GPU shares the 8 GB of RAM with the CPU, so watch it with a usage monitor (backlog).
+- **Check the L4T version** on the robot (`cat /etc/nv_tegra_release`); the base's must be R35 too.
+- **Leave the policy on the CPU.** It runs in about 6 ms there, and the GPU would only add launch latency.
+  The GPU is for perception.
+- **Size and build time.** Roughly 10+ GB and a few hours. Build it once on the robot and push it to GHCR
+  (`:jetson`).
+- **Memory.** The GPU shares the 8 GB of RAM with the CPU; watch `/system_stats`.
+- **Later, JetPack 6** (Ubuntu 22.04, "Super" mode, ~67 TOPS) would allow Jazzy from apt with dusty-nv's
+  `jazzy-ros-base-r36.4.0-cu128-24.04`, with no source builds. That needs reflashing the Jetson.
 
 ## Backlog
 

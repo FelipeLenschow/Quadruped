@@ -14,7 +14,7 @@ setup(
     zip_safe=True,
     maintainer="Felipe Lenschow",
     maintainer_email="felipe10lenschow@gmail.com",
-    description="Perception: lidar body filter, cone detection.",
+    description="Perception: lidar body filter, object detection.",
     license="TODO: License declaration",
     entry_points={"console_scripts": [
         "lidar_filter = quadruped_perception.lidar_filter:main",
@@ -22,5 +22,6 @@ setup(
         "lidar_imu_calib = quadruped_perception.lidar_imu_calib:main",
         "lio_map_stream = quadruped_perception.lio_map_stream:main",
         "camera_lidar_check = quadruped_perception.camera_lidar_check:main",
+        "object_detector = quadruped_perception.object_detector:main",
     ]},
 )

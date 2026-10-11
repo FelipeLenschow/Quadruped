@@ -107,6 +107,36 @@ the package to this GitHub repo. The package itself only has to be switched to
 **Public** once, in the repo's *Packages* settings — otherwise every `docker pull`
 demands a login.
 
+## 1d. The Robot's GPU Image (`Dockerfile.jetson`)
+
+The `arm64` image above cannot use the Jetson's GPU: its torch is pip's CPU build and it starts
+without NVIDIA's runtime. `Dockerfile.jetson` is the robot image with the GPU (CUDA 11.4, TensorRT,
+CUDA torch), for `object_detector` (YOLOE). JetPack 5 is Ubuntu 20.04, where ROS 2 Humble has no apt
+packages, so it starts from dusty-nv's image (Humble built from source, Python 3.8) and builds Nav2,
+slam_toolbox and the rest from source on top. Laptop-only tools (rviz plugins, foxglove_bridge,
+PlotJuggler, Gazebo) are not in it.
+
+1. On the robot (not in Docker): `cat /etc/nv_tegra_release`. The base tag must have the same L4T
+   major version (`R35`); the default is `r35.4.1`. For another R35, pass
+   `--build-arg BASE=dustynv/ros:humble-desktop-pytorch-l4t-r35.x.x` (tags on Docker Hub, `dustynv/ros`).
+2. Build it on the laptop through QEMU (section 1c's `binfmt` setup; about 1.5 h with 20 jobs, 7 GB),
+   or natively on the robot with a lower `BUILD_JOBS` so it does not run out of memory:
+
+   ```bash
+   sudo docker buildx build --platform linux/arm64 --load --build-arg BUILD_JOBS=20 \
+     -t quadruped_env:jetson -f Docker/Dockerfile.jetson Docker
+   ```
+
+   Under QEMU nothing that needs the GPU or DDS can be tested (sockets fail), only that it builds and imports.
+
+3. Push it once so the build is not repeated: tag it `ghcr.io/felipelenschow/quadruped_env:jetson`
+   and push as in section 1c.
+4. Run it with `--runtime nvidia` (the robot alias in section 4). Check the GPU inside:
+   `python3 -c "import torch; print(torch.cuda.is_available())"` must print `True`.
+5. Build the YOLO engine once, on the robot (engines are tied to the GPU they are built on):
+   `ros2 run quadruped_perception object_detector --export` (after `colcon build`). Rebuild it after
+   changing `detector:` in `config.yaml`.
+
 ## 2. Running the Docker Container
 
 Run this from the **root of your project**. This form needs no display and is
@@ -164,12 +194,14 @@ Intel or AMD, where Mesa is the correct driver.
 ### On the robot (or any machine with no display)
 
 ```bash
-echo "alias quaddocker='sudo docker run -it --rm --name quadruped_container --network host --privileged -v \$(pwd):/app quadruped_env'" >> ~/.bashrc
+echo "alias quaddocker='sudo docker run -it --rm --name quadruped_container --network host --privileged --runtime nvidia -v \$(pwd):/app quadruped_env'" >> ~/.bashrc
 source ~/.bashrc
 ```
 
 No `xhost`, no `DISPLAY`, no X11 socket, no `--gpus all` — section 6 explains how
-each of those fails on a screenless box.
+each of those fails on a screenless box. `--runtime nvidia` is the Jetson's way of
+giving the container the GPU (JetPack ships the runtime); drop it on a machine
+without one.
 
 ### Using it
 
