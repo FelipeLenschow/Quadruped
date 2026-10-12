@@ -277,7 +277,9 @@ safety:
 #   protections: the checks that trip the safety switch while it runs. heartbeat (console alive), tilt (any
 #                direction past base_tilt_limit_deg), pitch (nose down past base_forward_tilt_limit_deg),
 #                rom (joints in the outer joint_rom_safety_margin). Left out = all four.
-#   commands:    false feeds a zero velocity command, for policies trained without one.
+#   commands:    false feeds a zero velocity command, for policies trained without one. "trick" feeds the trick's
+#                switches instead (IsaacLab_Tasks/Tricks): what keeps arriving on /pipeline/trick (skill_server),
+#                [1, 0, 0] to do it (Pee: [0, 1, 0] for the right leg), zeros once it stops.
 policy_switch_blend_s: 0.5   # Seconds to blend from the old policy's targets to the new one's.
 
 # --- Pose Generator ---

@@ -5,6 +5,7 @@ interface RosLink {
     fun publishBool(topic: String, v: Boolean): Boolean
     fun publishString(topic: String, v: String): Boolean
     fun publishTwist(topic: String, vx: Double, vy: Double, wz: Double): Boolean
+    fun publishFloat32Array(topic: String, values: FloatArray): Boolean
     fun latestText(topic: String): String?
     fun latestValues(topic: String): DoubleArray?
     fun latestAgeMs(topic: String): Long
@@ -61,6 +62,7 @@ object NativeLink : RosLink {
     external override fun publishBool(topic: String, v: Boolean): Boolean
     external override fun publishString(topic: String, v: String): Boolean
     external override fun publishTwist(topic: String, vx: Double, vy: Double, wz: Double): Boolean
+    external override fun publishFloat32Array(topic: String, values: FloatArray): Boolean
     external override fun latestText(topic: String): String?
     external override fun latestValues(topic: String): DoubleArray?
     external override fun latestAgeMs(topic: String): Long

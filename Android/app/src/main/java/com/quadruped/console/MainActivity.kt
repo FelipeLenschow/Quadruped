@@ -21,6 +21,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -83,6 +84,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -376,7 +378,12 @@ private fun DriveTab(s: Status, core: ConsoleCore) {
     LaunchedEffect(policy) { if (!policy && s.driveEnabled) core.setDrive(false) }
 
     ModeCard(s, core)
-    if (policy) DriveControls(s, core) else PoseCard(s, core)
+    if (policy) {
+        TrickCard(s, core)
+        DriveControls(s, core)
+    } else {
+        PoseCard(s, core)
+    }
     StatusCard(s, core)
 }
 
@@ -456,6 +463,56 @@ private fun PolicyPicker(rs: JSONObject?, core: ConsoleCore) {
         }
     }
     rs.stringOrNull("policy_error")?.let { Text(it, color = Palette.Danger, fontSize = 12.sp) }
+}
+
+/**
+ * For a trick policy (Pee, Sniff, Wiggle): hold a button to do the trick, let go and it stands back up. Pee has
+ * two switches, one per leg.
+ */
+@Composable
+private fun TrickCard(s: Status, core: ConsoleCore) {
+    val rs = s.robotState ?: return
+    val switches = rs.optInt("trick_switches", 0)
+    if (switches <= 0) return
+    val name = rs.optString("policy")
+    val labels = if (switches == 2) listOf("Left", "Right") else listOf("Hold: $name")
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionLabel("Trick")
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (s.trickHeld >= 0) "$name ${labels[s.trickHeld.coerceAtMost(labels.lastIndex)]}" else "hold to do it",
+                color = if (s.trickHeld >= 0) Palette.Accent else Palette.Muted, fontFamily = Mono, fontSize = 12.sp,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            labels.forEachIndexed { i, label ->
+                val held = s.trickHeld == i
+                Box(
+                    Modifier.weight(1f).height(64.dp).clip(RoundedCornerShape(14.dp))
+                        .background(if (held) Palette.Accent.copy(alpha = 0.18f) else Palette.Surface2)
+                        .border(1.dp, if (held) Palette.Accent else Color.Transparent, RoundedCornerShape(14.dp))
+                        .pointerInput(i, s.estopLatched) {
+                            if (s.estopLatched) return@pointerInput
+                            detectTapGestures(onPress = {
+                                core.setTrick(i)
+                                try {
+                                    awaitRelease()
+                                } finally {
+                                    core.setTrick(-1)
+                                }
+                            })
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        label, fontWeight = FontWeight.SemiBold,
+                        color = if (s.estopLatched) Palette.Muted else if (held) Palette.Accent else Palette.Text,
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

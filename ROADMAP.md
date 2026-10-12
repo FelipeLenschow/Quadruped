@@ -151,17 +151,32 @@ on the map", with [N] running. Needs the camera calibrated (`calibration/front.y
 
 ## Phase 4: Skills
 
-All skills go through `/skill`.
+All skills go through `/skill`. Two kinds:
+
+- **Tricks** (movements): one trained policy each, in `IsaacLab_Tasks/Tricks`. The skill switches to the trick's
+  policy, holds its switch on `/pipeline/trick` for the skill's duration, gives it 2 s to stand back up, then
+  switches back to the walker. If the switch stops arriving, the policy stands by itself. The app does the same
+  by hand: pick the trick policy, then hold its button (Left/Right for Pee).
+- **Behaviours**: code in `skill_server` on top of Nav2 and the walker.
 
 **To build:**
+- [x] **Tricks module:** `Go2-Pee` (two switches, left and right: rear foot 12 cm up and out, calf folded, the
+      front foot on that side forward), `Go2-Sniff` (nose 0.3 rad down, base at 26 cm, nose bobbing on a 1 Hz
+      clock), `Go2-Wiggle` (back end swinging ±0.08 rad about the front, feet planted). Trained inside the
+      robot's tilt and joint checks, so they keep all protections. `pee_left`, `pee_right`, `sniff`, `wiggle`
+      skills; `policies.json` `commands: "trick"`.
+- [x] **Trained** (`Pee1` 1000 iterations, `Sniff1` and `Wiggle1` 600) and in `policies.json` as `Pee`, `Sniff`,
+      `Wiggle`. Measured in Isaac: Sniff bobs ±0.058 rad every ~1.05 s, Wiggle swings ±0.095 rad every ~0.6 s.
+- [x] **App:** a Trick card in the Drive tab while a trick policy runs, hold to do it (`trick_switches` in
+      `/robot_state`).
+- [ ] **MuJoCo check:** each trick through `skill_server` and through the app, walker → trick → walker.
 - [ ] **`go_to_cone`:** a Nav2 goal about 0.5 m from the cone, facing it.
-- [ ] **`pee`:** lift a back leg and hold it. Balance it in sim first.
-- [ ] **`wiggle`.**
 - [ ] **`explore`:** frontier exploration, so the robot finds cones in an unknown place.
 - [ ] **`follow_me`:** track the person's legs in the lidar beside the robot, published on `/cmd_vel/skill`.
 
 **To test on the robot:**
-- [ ] **`pee` balance**, after MuJoCo: the robot holds the leg up without tipping.
+- [ ] **Tricks**, after MuJoCo: the walker → trick → walker switches are smooth, and `pee` holds the leg up
+      without tipping.
 - [ ] **`go_to_cone`** from different starts and angles.
 - [ ] **`explore`** in a room it has never mapped.
 - [ ] **`follow_me`** with one person, then with others nearby.

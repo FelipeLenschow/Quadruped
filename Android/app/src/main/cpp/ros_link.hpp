@@ -58,6 +58,7 @@ public:
     bool publish_bool(const std::string& topic, bool v);
     bool publish_string(const std::string& topic, const std::string& v);
     bool publish_twist(const std::string& topic, double vx, double vy, double wz);
+    bool publish_float32_array(const std::string& topic, const std::vector<float>& values);
     bool publish_pose2d(const std::string& topic, const std::string& frame, double x, double y, double yaw);
 
     // reliable=false for streams (no retransmits competing with the heartbeat);

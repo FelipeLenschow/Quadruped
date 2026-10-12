@@ -121,6 +121,12 @@ class LocomotionPipeline:
         self._cmd = [0.0, 0.0, 0.0, 0.0]
         self._cmd_time = None
         self.node.create_subscription(Twist, "/cmd_vel", self._cmd_vel_cb, 10)
+        # Trick policies (policies.json commands: "trick") read their switches instead of a velocity: the
+        # values arriving on /pipeline/trick (Pee: [left, right, 0]), all off once they stop for cmd_vel.timeout.
+        self._trick = [0.0, 0.0, 0.0]
+        self._trick_time = None
+        self._trick_phase = 0.0
+        self.node.create_subscription(Float32MultiArray, "/pipeline/trick", self._trick_cb, 10)
 
         self._state_pub = self.node.create_publisher(String, "/robot_state", 10)
         self._state_period = 1.0 / float(cmd_cfg.get("robot_state_rate", 10.0))
@@ -163,6 +169,7 @@ class LocomotionPipeline:
         self._safety_elapsed = None
         self._lying_for = 0.0
         self._pending_policy = None
+        self._trick_phase = 0.0
 
     def _wtw_runners(self):
         return [r for r in self.policy_manager.policies.values() if getattr(r, "_obs_layout", None) == "wtw"]
@@ -196,6 +203,30 @@ class LocomotionPipeline:
     def _cmd_vel_cb(self, msg: Twist):
         self._cmd = [msg.linear.x, msg.linear.y, msg.angular.z, 0.0]
         self._cmd_time = time.monotonic()
+
+    def _trick_cb(self, msg: Float32MultiArray):
+        self._trick = (list(msg.data) + [0.0, 0.0, 0.0])[:3]
+        self._trick_time = time.monotonic()
+
+    @property
+    def trick_command(self):
+        if self._trick_time is None or time.monotonic() - self._trick_time > self.cmd_timeout:
+            return [0.0, 0.0, 0.0]
+        return list(self._trick)
+
+    def _trick_input(self, spec):
+        """The trick's switches, or for a policy trained with a clock (Sniff), [on, sin, cos] of a phase that
+        starts at 0 when it goes on and advances clock_hz turns a second, one policy step at a time, as in
+        training (tricks mdp/commands.py)."""
+        command = self.trick_command
+        hz = spec.get("clock_hz") or 0.0
+        if not hz:
+            return command
+        if command[0] < 0.5:
+            self._trick_phase = 0.0
+            return [0.0, 0.0, 0.0]
+        self._trick_phase += 2.0 * np.pi * hz * self.policy_dt
+        return [1.0, float(np.sin(self._trick_phase)), float(np.cos(self._trick_phase))]
 
     @property
     def cmd_age(self):
@@ -267,6 +298,10 @@ class LocomotionPipeline:
             "tilt_deg": round(tilt, 1),
             "velocity": [round(v, 3) for v in vel] + [round(yaw_rate, 3)],
             "cmd": cmd,
+            "trick": self.trick_command,
+            # How many switches the running policy has: 0 not a trick, 1 most, 2 Pee (left, right).
+            "trick_switches": (self.policy_manager.spec(self.active_policy).get("switches", 0)
+                               if self.active_policy else 0),
             "gait": gait,
             "heartbeat": sp.heartbeat_stats.summary(time.monotonic()),
         })
@@ -555,8 +590,11 @@ class LocomotionPipeline:
                         self.safety_name, state, cmd_vel, self.mj_to_isaac,
                         current_time=sim_time, dt=self.policy_dt)
                 elif not takeover and name in pm.policies:
+                    command = cmd_vel
+                    if pm.spec(name)["commands"] == "trick":
+                        command = self._trick_input(pm.spec(name)) + [0.0]
                     proposed_targets["main"] = pm.step_single(
-                        name, state, cmd_vel, self.mj_to_isaac,
+                        name, state, command, self.mj_to_isaac,
                         current_time=sim_time, dt=self.policy_dt)
 
                 final_targets, max_torque = sp.process(

@@ -48,6 +48,13 @@ FN(jboolean, publishTwist)(JNIEnv* env, jobject, jstring topic, jdouble vx, jdou
     return g_link.publish_twist(str(env, topic), vx, vy, wz);
 }
 
+FN(jboolean, publishFloat32Array)(JNIEnv* env, jobject, jstring topic, jfloatArray values) {
+    jsize n = env->GetArrayLength(values);
+    std::vector<float> v(n);
+    env->GetFloatArrayRegion(values, 0, n, v.data());
+    return g_link.publish_float32_array(str(env, topic), v);
+}
+
 FN(jboolean, publishPose2d)(JNIEnv* env, jobject, jstring topic, jstring frame, jdouble x, jdouble y, jdouble yaw) {
     return g_link.publish_pose2d(str(env, topic), str(env, frame), x, y, yaw);
 }

@@ -27,6 +27,14 @@ GAITS = {
     "walk": (0.0, 0.75, 0.5),
 }
 GAIT_FIELDS = ["height", "frequency", "phase", "offset", "bound", "swing", "pitch", "width", "duty"]
+# Skill -> its policy in policies.json (IsaacLab_Tasks/Tricks, Go2-<policy>) and the switches it turns on.
+TRICKS = {
+    "pee": ("Pee", [1.0, 0.0, 0.0]),
+    "pee_left": ("Pee", [1.0, 0.0, 0.0]),
+    "pee_right": ("Pee", [0.0, 1.0, 0.0]),
+    "sniff": ("Sniff", [1.0, 0.0, 0.0]),
+    "wiggle": ("Wiggle", [1.0, 0.0, 0.0]),
+}
 
 
 class SkillServer(Node):
@@ -42,7 +50,8 @@ class SkillServer(Node):
         self.pose_pub = self.create_publisher(String, "/pose/command", 10)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel/skill", 10)
         self.gait_pub = self.create_publisher(Float32MultiArray, "/gait_command", 10)
-        self.override_pub = self.create_publisher(Float32MultiArray, "/gait_command/override", 10)
+        self.policy_pub = self.create_publisher(String, "/pipeline/policy", 10)
+        self.trick_pub = self.create_publisher(Float32MultiArray, "/pipeline/trick", 10)
         self.amcl_pose = None
         self.amcl_time = 0.0
         self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_cb, 10, callback_group=group)
@@ -99,8 +108,8 @@ class SkillServer(Node):
             return self._pose(POSES[name])
         if name == "walk":
             return self._walk()
-        if name == "sniff":
-            return self._sniff(duration or self.args.sniff_time)
+        if name in TRICKS:
+            return self._trick(name, duration or getattr(self.args, f"{name.split('_')[0]}_time"))
         if name == "localize":
             return self._localize(duration or self.args.localize_time)
         if name.startswith("gait_") and name[5:] in GAITS:
@@ -192,22 +201,51 @@ class SkillServer(Node):
             vec[GAIT_FIELDS.index(key)] = value
         return vec
 
-    def _sniff(self, seconds):
+    def _switch_policy(self, name):
+        self.policy_pub.publish(String(data=name))
+        done = self._wait(lambda s: (s["policy"] == name and not s["transition"])
+                          or (s["policy_error"] or "").startswith(f"{name}:"), self.args.policy_timeout)
+        if done is None:
+            return False, f"policy '{name}' not running after {self.args.policy_timeout:.0f} s"
+        if done["policy"] != name:
+            return False, done["policy_error"]
+        return True, ""
+
+    def _tripped(self):
+        s = self._fresh()
+        return s is None or s["safety_blocked"]
+
+    def _trick(self, skill, seconds):
+        """Switch to the trick's policy, hold its switch on, let it stand back up, then switch back."""
+        policy, switches = TRICKS[skill]
         s = self._fresh()
         if s["mode"] != "policy":
-            return False, "sniff needs policy mode; call walk first"
-        if not s["gait"]:
-            return False, "the running policy has no gait input (not a WTW policy)"
-        msg = Float32MultiArray(data=self._gait_vector(s["gait"], height=self.args.sniff_height,
-                                                       pitch=self.args.sniff_pitch))
-        end = time.monotonic() + seconds
+            return False, f"{skill} needs policy mode; call walk first"
+        if policy not in s["policies"]:
+            return False, f"no '{policy}' policy in policies.json: train Go2-{policy} (IsaacLab_Tasks/Tricks)"
+        walker = s["policy"]
+        self._hold_still(self.args.settle_time)
+        ok, msg = self._switch_policy(policy)
+        if not ok:
+            return False, msg
+        try:
+            end = time.monotonic() + seconds
+            while time.monotonic() < end:
+                self.trick_pub.publish(Float32MultiArray(data=switches))
+                time.sleep(0.05)
+                if self._tripped():
+                    return False, f"safety tripped during {skill}"
+        finally:
+            self.trick_pub.publish(Float32MultiArray(data=[0.0, 0.0, 0.0]))
+        end = time.monotonic() + self.args.trick_settle
         while time.monotonic() < end:
-            self.cmd_pub.publish(Twist())
-            self.override_pub.publish(msg)
             time.sleep(0.05)
-            if self._fresh()["safety_blocked"]:
-                return False, "safety tripped during the sniff"
-        return True, f"sniffed for {seconds:.1f} s"
+            if self._tripped():
+                return False, f"safety tripped after {skill}"
+        ok, msg = self._switch_policy(walker)
+        if not ok:
+            return False, f"{skill} done, but back to '{walker}' failed: {msg}"
+        return True, f"{skill} for {seconds:.1f} s, back on '{walker}'"
 
     def _gait(self, name):
         s = self._fresh()
@@ -225,14 +263,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--settle_time", type=float, default=1.0, help="s of zero velocity before leaving policy mode")
     ap.add_argument("--pose_timeout", type=float, default=10.0)
+    ap.add_argument("--pee_time", type=float, default=4.0)
     ap.add_argument("--sniff_time", type=float, default=3.0)
+    ap.add_argument("--wiggle_time", type=float, default=3.0)
+    ap.add_argument("--trick_settle", type=float, default=2.0, help="s for a trick policy to stand back up")
+    ap.add_argument("--policy_timeout", type=float, default=15.0, help="s to load and blend into a policy")
     ap.add_argument("--localize_time", type=float, default=30.0, help="s of turning before giving up")
     ap.add_argument("--localize_turn_rate", type=float, default=0.5, help="rad/s")
     ap.add_argument("--localize_xy", type=float, default=0.15, help="m: particle spread that counts as found")
     ap.add_argument("--localize_yaw", type=float, default=0.15, help="rad")
-    ap.add_argument("--sniff_height", type=float, default=-0.04,
-                    help="WTW body height offset; -0.05 already trips the calf ROM margin in Gazebo")
-    ap.add_argument("--sniff_pitch", type=float, default=0.2, help="WTW body pitch, + is nose down")
     args = ap.parse_args(remove_ros_args()[1:])
 
     rclpy.init()

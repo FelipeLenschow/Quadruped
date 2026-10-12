@@ -30,6 +30,7 @@ private class FakeLink : RosLink {
     override fun publishBool(topic: String, v: Boolean) = sent.add(topic to v)
     override fun publishString(topic: String, v: String) = sent.add(topic to v)
     override fun publishTwist(topic: String, vx: Double, vy: Double, wz: Double) = sent.add(topic to listOf(vx, vy, wz))
+    override fun publishFloat32Array(topic: String, values: FloatArray) = sent.add(topic to values.toList())
     override fun latestText(topic: String) = text[topic]
     override fun latestValues(topic: String) = values[topic]
     override fun latestAgeMs(topic: String) = ages[topic] ?: -1
@@ -187,6 +188,31 @@ class ConsoleCoreTest {
     fun setPolicySendsTheName() {
         core.setPolicy("stand_up")
         assertEquals(listOf("stand_up"), link.on(ConsoleCore.POLICY))
+    }
+
+    @Test
+    fun heldTrickRepeatsItsSwitchThenSendsAllOffOnce() {
+        core.setMode("policy", force = true)
+        core.setTrick(1)
+        core.tickDrive()
+        assertEquals(listOf(listOf(0f, 1f, 0f), listOf(0f, 1f, 0f)), link.on(ConsoleCore.TRICK))
+        link.sent.clear()
+        core.setTrick(-1)
+        core.tickDrive()
+        assertEquals(listOf(listOf(0f, 0f, 0f)), link.on(ConsoleCore.TRICK))
+    }
+
+    @Test
+    fun trickNeedsPolicyModeAndStopsOnEstop() {
+        core.setTrick(0)
+        assertTrue(link.on(ConsoleCore.TRICK).isEmpty())
+        core.setMode("policy", force = true)
+        core.setTrick(0)
+        link.sent.clear()
+        core.triggerEstop("test")
+        core.tickDrive()
+        assertEquals(listOf(listOf(0f, 0f, 0f)), link.on(ConsoleCore.TRICK))
+        assertEquals(-1, core.status().trickHeld)
     }
 
     @Test

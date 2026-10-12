@@ -358,6 +358,7 @@ bool Link::advertise(const std::string& topic, MsgType type) {
         case MsgType::Bool: return impl_->writer<Bool>(topic) != nullptr;
         case MsgType::String: return impl_->writer<String>(topic) != nullptr;
         case MsgType::Twist: return impl_->writer<Twist>(topic) != nullptr;
+        case MsgType::Float32MultiArray: return impl_->writer<Float32MultiArray>(topic) != nullptr;
         case MsgType::PoseStamped: return impl_->writer<PoseStamped>(topic) != nullptr;
         default: return false;
     }
@@ -386,6 +387,12 @@ bool Link::publish_twist(const std::string& topic, double vx, double vy, double 
     m.linear.x = vx;
     m.linear.y = vy;
     m.angular.z = wz;
+    return impl_->publish(topic, m);
+}
+
+bool Link::publish_float32_array(const std::string& topic, const std::vector<float>& values) {
+    Float32MultiArray m;
+    m.data = values;
     return impl_->publish(topic, m);
 }
 

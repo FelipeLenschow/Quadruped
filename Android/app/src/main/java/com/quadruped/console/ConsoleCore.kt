@@ -47,6 +47,7 @@ data class Status(
     val driveEnabled: Boolean,
     val turbo: Boolean,
     val driveCmd: DoubleArray,
+    val trickHeld: Int,
 )
 
 /**
@@ -87,6 +88,8 @@ class ConsoleCore(
         const val EST_CONTACT = "/estimator/feet_contact"
         // Its own twist_mux input: priority 80, above Nav2 and skills, below the F710 and keyboard.
         const val CMD_VEL = "/cmd_vel/phone"
+        // A trick policy's switches (IsaacLab_Tasks/Tricks): on while they keep arriving, all off after 0.5 s.
+        const val TRICK = "/pipeline/trick"
 
         // vx, vy (m/s), wz (rad/s) at full stick: joy_f710.config.yaml's scale_linear/angular.
         val DRIVE_SCALE = doubleArrayOf(0.5, 0.4, 0.5)
@@ -107,6 +110,7 @@ class ConsoleCore(
             KP to MsgType.FLOAT32, KD to MsgType.FLOAT32, POSE_INTERP to MsgType.FLOAT32,
             ESTOP to MsgType.BOOL, SAFETY_RESET to MsgType.BOOL, FREEZE_BASE to MsgType.BOOL, NUMB to MsgType.BOOL,
             MODE to MsgType.STRING, POLICY to MsgType.STRING, POSE_CMD to MsgType.STRING, CMD_VEL to MsgType.TWIST,
+            TRICK to MsgType.FLOAT32_MULTI_ARRAY,
         )
 
         const val PREFLIGHT_MAX_SPEED = 1.5
@@ -133,6 +137,7 @@ class ConsoleCore(
     private var driveEnabled = false
     private var turbo = false
     private val stick = DoubleArray(3)
+    private var trick = -1
     private var robotEstop: Boolean? = null
     private var robotEstopStreak = 0
 
@@ -233,6 +238,7 @@ class ConsoleCore(
         estopLatched = true
         estopConfirmed = false
         stopDrive()
+        stopTrick()
         link.publishBool(ESTOP, true)
         link.publishFloat32(MAX_TORQUE, 0f)
         mode = "pose"
@@ -281,6 +287,7 @@ class ConsoleCore(
                 return reasons
             }
         }
+        if (newMode != "policy") stopTrick()
         mode = newMode
         link.publishString(MODE, newMode)
         log("Mode = $newMode${if (force) " (forced)" else ""}")
@@ -290,6 +297,7 @@ class ConsoleCore(
     /** Which policy runs in policy mode; the robot loads it if needed and reports it in /robot_state. */
     @Synchronized
     fun setPolicy(name: String) {
+        stopTrick()
         link.publishString(POLICY, name)
         log("Policy = $name")
     }
@@ -297,7 +305,10 @@ class ConsoleCore(
     /** Numb: torque off with the e-stop damping. Unlike the e-stop, released from here, into pose mode. */
     @Synchronized
     fun setNumb(on: Boolean) {
-        if (on) stopDrive()
+        if (on) {
+            stopDrive()
+            stopTrick()
+        }
         link.publishBool(NUMB, on)
         log(if (on) "Numb: torque off" else "Numb released: robot holds where it is in POSE mode")
     }
@@ -388,8 +399,38 @@ class ConsoleCore(
         return DoubleArray(3) { stick[it] * k[it] }
     }
 
+    /**
+     * Hold a trick policy's switch (0, or 1 for Pee's right leg) on; -1 lets go. While held it goes out every
+     * tickDrive(); letting go sends all off once, and the robot stands back up from the trick.
+     */
+    @Synchronized
+    fun setTrick(switch: Int) {
+        if (switch < 0) {
+            stopTrick()
+            return
+        }
+        if (estopLatched || mode != "policy") {
+            log("Trick not sent: ${if (estopLatched) "e-stop is latched" else "not in policy mode"}")
+            return
+        }
+        trick = switch.coerceAtMost(2)
+        tickTrick()
+    }
+
+    private fun stopTrick() {
+        if (trick < 0) return
+        trick = -1
+        link.publishFloat32Array(TRICK, FloatArray(3))
+    }
+
+    private fun tickTrick() {
+        if (trick < 0) return
+        link.publishFloat32Array(TRICK, FloatArray(3) { if (it == trick) 1f else 0f })
+    }
+
     @Synchronized
     fun tickDrive() {
+        tickTrick()
         if (!driveEnabled) return
         val c = driveCmd()
         link.publishTwist(CMD_VEL, c[0], c[1], c[2])
@@ -421,6 +462,7 @@ class ConsoleCore(
             driveEnabled = driveEnabled,
             turbo = turbo,
             driveCmd = driveCmd(),
+            trickHeld = trick,
         )
     }
 

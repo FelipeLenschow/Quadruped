@@ -64,10 +64,16 @@ class PolicyManager:
                     f"[PolicyManager] Policy '{name}': unknown protections {unknown}, "
                     f"known: {list(PROTECTIONS)}. Using all of them.")
                 protections = PROTECTIONS
+            commands = spec.get("commands", True)
+            if commands not in (True, False, "trick"):
+                self.node.get_logger().error(
+                    f"[PolicyManager] Policy '{name}': commands {commands!r} is not true, false or \"trick\". "
+                    f"Using true.")
+                commands = True
             out[name] = {
                 "path": spec.get("path", ""),
                 "protections": protections,
-                "commands": bool(spec.get("commands", True)),
+                "commands": commands,
             }
         return out
 
@@ -151,11 +157,22 @@ class PolicyManager:
                 obs_dim_from_env=name == "main",
             )
             self.specs[name] = self._spec_for(name, checkpoint_path)
-            self.policies[name] = runner
             spec = self.specs[name]
+            if spec["commands"] == "trick":
+                env_cfg = PolicyRunner._run_params(checkpoint_path, "env.yaml") or {}
+                trick = (env_cfg.get("commands") or {}).get("trick") or {}
+                spec["clock_hz"] = float(trick.get("clock_hz") or 0.0)
+                spec["switches"] = int(trick.get("switches") or 1)
+            self.policies[name] = runner
+            extras = ""
+            if not spec["commands"]:
+                extras += ", zero velocity command"
+            if spec["commands"] == "trick":
+                extras += ", trick command"
+            if spec.get("clock_hz"):
+                extras += f", {spec['clock_hz']} Hz clock"
             self.node.get_logger().info(
-                f"[PolicyManager] '{name}': protections {list(spec['protections']) or 'none'}"
-                f"{', zero velocity command' if not spec['commands'] else ''}.")
+                f"[PolicyManager] '{name}': protections {list(spec['protections']) or 'none'}{extras}.")
             return True
         except Exception as e:
             self.node.get_logger().error(

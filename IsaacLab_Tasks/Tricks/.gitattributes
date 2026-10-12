@@ -1,0 +1,3 @@
+# copied and modified from https://github.com/NVIDIA/warp/blob/main/.gitattributes
+* text=auto
+*.sh text eol=LF

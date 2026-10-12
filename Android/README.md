@@ -16,6 +16,9 @@ Android, no bridge on the robot.
   Nav2 after 0.5 s. E-stop, leaving Policy or leaving the app turns it off. Under the switch, the
   policy picker (the list from `/robot_state`, sent on `/pipeline/policy`) and the Numb / Release
   numb button (`/safety/numb`), with a banner while the safety lie-down runs or the robot is numb.
+  When the running policy is a trick (`/robot_state` `trick_switches` > 0: Pee, Sniff, Wiggle), a Trick card
+  with hold buttons ("Left" and "Right" for Pee): held, its switch goes out on `/pipeline/trick` at 20 Hz;
+  let go (or e-stop, numb, another policy, leaving Policy) sends all off once and the robot stands back up.
   Robot state and safety reset below.
 - 3D tab: the Go2 URDF drawn with OpenGL ES 3, legs from `/sensors/joint_states`, standing in
   Point-LIO's voxel map: `/lio/map_voxels` (latched snapshot) replaces the map, `/lio/map_voxels/delta`
