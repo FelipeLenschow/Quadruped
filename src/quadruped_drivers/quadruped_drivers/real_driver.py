@@ -1,6 +1,11 @@
 import os
 import sys
 import time
+
+# numpy's OpenBLAS and torch's OpenMP pools busy-wait between calls; pinned to the policy core they starve the loop.
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
 import numpy as np
 import argparse
 import threading

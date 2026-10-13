@@ -92,9 +92,9 @@ sudo docker buildx build --network host --platform linux/amd64 \
   -t ghcr.io/felipelenschow/quadruped_env:amd64 \
   -f Docker/Dockerfile --push .
 
-sudo docker buildx build --network host --platform linux/arm64 \
+sudo docker buildx build --network host --platform linux/arm64 --build-arg BUILD_JOBS=20 \
   -t ghcr.io/felipelenschow/quadruped_env:arm64 \
-  -f Docker/Dockerfile --push .
+  -f Docker/Dockerfile.jetson --push Docker
 ```
 
 The `arm64` build runs under QEMU emulation on an x86 host, so expect it to be
@@ -129,13 +129,20 @@ PlotJuggler, Gazebo) are not in it.
 
    Under QEMU nothing that needs the GPU or DDS can be tested (sockets fail), only that it builds and imports.
 
-3. Push it once so the build is not repeated: tag it `ghcr.io/felipelenschow/quadruped_env:jetson`
-   and push as in section 1c.
+3. Push it once so the build is not repeated: tag it `ghcr.io/felipelenschow/quadruped_env:arm64`
+   (the robot's tag, section 1) and push as in section 1c.
 4. Run it with `--runtime nvidia` (the robot alias in section 4). Check the GPU inside:
    `python3 -c "import torch; print(torch.cuda.is_available())"` must print `True`.
 5. Build the YOLO engine once, on the robot (engines are tied to the GPU they are built on):
    `ros2 run quadruped_perception object_detector --export` (after `colcon build`). Rebuild it after
    changing `detector:` in `config.yaml`.
+
+   TensorRT compiles the `.pt` into an FP16 engine for this GPU, several times faster than running it in
+   PyTorch. It tries several kernels per layer and keeps the fastest, so it takes 10-30 min. Ctrl+C is held until
+   the build ends and then kills it before the engine is saved; to stop it, `sudo docker exec
+   quadruped_container pkill -9 -f object_detector`.
+   `Device memory is insufficient to use tactic` warnings are normal: the build itself fills most of the
+   shared CPU/GPU RAM, and it only skips those kernels. Without an engine the node runs the `.pt`, slower.
 
 ## 2. Running the Docker Container
 

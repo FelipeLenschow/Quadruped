@@ -327,6 +327,11 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
      which the LLM queries and updates. Related work: ConceptGraphs, Hydra.
 5. **3D map in the app's 3D tab: done.** `lio_map_stream` sends the LIO map as voxels (see Setup), and the
    app draws them around the robot model, colored by height.
+6. **Voxels colored by the camera.** `lio_map_stream` projects each new or updated voxel onto the front
+   camera image through TF at the image's stamp (as `camera_lidar_check` does, with `calibration/front.yaml`)
+   and keeps the pixel's RGB, averaged over the frames that see it. Voxels the camera never saw keep the
+   height color. The voxel messages gain an RGB field, and the app's 3D tab gets a height/camera color toggle.
+   Needs the fixed `base → lio_imu` offset from item 1, or colors land on the wrong voxels.
 
 ## GPU on the robot: ROS with CUDA torch
 
@@ -350,7 +355,7 @@ How to build and run it: [Docker/README.md](Docker/README.md), section 1d.
 - **Leave the policy on the CPU.** It runs in about 6 ms there, and the GPU would only add launch latency.
   The GPU is for perception.
 - **Size and build time.** About 7 GB, and 1.5 h on the laptop under QEMU (most of it Nav2). Push it to GHCR
-  (`:jetson`) so the robot only pulls it.
+  (`:arm64`) so the robot only pulls it.
 - **Memory.** The GPU shares the 8 GB of RAM with the CPU; watch `/system_stats`.
 - **Later, JetPack 6** (Ubuntu 22.04, "Super" mode, ~67 TOPS) would allow Jazzy from apt with dusty-nv's
   `jazzy-ros-base-r36.4.0-cu128-24.04`, with no source builds. That needs reflashing the Jetson.
@@ -381,5 +386,10 @@ checks and the robot goes numb once lying; the app and console pick policies and
 - **SSH terminal in the app: built, not yet tried on the robot.** Shell tab, see `Android/README.md`.
   Still to check: `sshd` and the login user on the Go2's Jetson (the app defaults to `unitree@10.42.0.1`).
   The terminal can press ENTER on the driver, which releases an e-stop from the phone; not blocked.
+- **Grow a saved map.** `map_save` writes only the `.pgm/.yaml` picture, which slam_toolbox cannot continue
+  from. Also call `/slam_toolbox/serialize_map` on save (`.posegraph` + `.data`), and add an `extend:=<name>`
+  arg to `nav.launch.py` that starts slam_toolbox in mapping mode from that pose graph (`map_file_name`,
+  `map_start_pose`) instead of AMCL. Same files would allow slam_toolbox's `mode: localization` as an
+  alternative to AMCL.
 - **A custom rviz config.**
 - **Flags to ROS parameters.**
