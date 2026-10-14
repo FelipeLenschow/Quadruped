@@ -47,7 +47,6 @@ class ControlLoop {
   // After stop() and once nothing else uses the robot: releases the SDK endpoints.
   void close();
 
-  int desired_brightness() const { return brightness_.load(); }
   RobotIO& robot() { return robot_; }
 
  private:
@@ -78,7 +77,6 @@ class ControlLoop {
   bool low_state_stale_ = false;
   LowCmd low_cmd_;
   std::optional<Eigen::Matrix<float, 12, 1>> last_targets_;
-  std::atomic<int> brightness_{-1};
 
   // Timing over the last stats period, logged with the next snapshot.
   double stats_start_ = 0.0, step_sum_ = 0.0, step_max_ = 0.0, late_max_ = 0.0;

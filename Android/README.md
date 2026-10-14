@@ -9,24 +9,30 @@ Android, no bridge on the robot.
 - `ConsoleCore.kt`: the console logic (heartbeat, safety params, e-stop latch, policy pre-flight).
 - `ConsoleService.kt`: foreground service with wake + low-latency Wi-Fi locks, runs the heartbeat.
   Disconnect or swiping the app away sends the e-stop, like Ctrl-C on the console.
-- Drive tab: Pose/Policy switch, then what the mode uses: poses in Pose; in Policy, two touch
-  sticks publish `geometry_msgs/Twist` on `/cmd_vel/phone` (twist_mux priority 80: above Nav2
+- Top bar: link state and heartbeat loss, then the robot's posture, tilt and the worst flag
+  (blocked, numb, no torque). The STOP button is the same size on every tab. Offline, every tab keeps its
+  layout, disabled.
+- Drive tab: Pose/Policy switch and the Numb / Release button (`/safety/numb`), then only what the mode
+  uses. Pose: the poses and the transition time. Policy: the policy picker (the list from `/robot_state`,
+  sent on `/pipeline/policy`), a Trick card when the policy is one, and the sticks docked at the bottom.
+  They publish `geometry_msgs/Twist` on `/cmd_vel/phone` (twist_mux priority 80: above Nav2
   and skills, below the F710 and keyboard) at 20 Hz while the "Phone drive" switch is on, zero
   when centred, so it holds Nav2 off. Off sends one zero and stops, and twist_mux hands back to
-  Nav2 after 0.5 s. E-stop, leaving Policy or leaving the app turns it off. Under the switch, the
-  policy picker (the list from `/robot_state`, sent on `/pipeline/policy`) and the Numb / Release
-  numb button (`/safety/numb`), with a banner while the safety lie-down runs or the robot is numb.
-  When the running policy is a trick (`/robot_state` `trick_switches` > 0: Pee, Sniff, Wiggle), a Trick card
-  with hold buttons ("Left" and "Right" for Pee): held, its switch goes out on `/pipeline/trick` at 20 Hz;
+  Nav2 after 0.5 s. E-stop, leaving Policy or leaving the app turns it off. A stick only takes touches
+  inside its circle. Banners show while the safety lie-down runs, the robot is numb or safety is blocked
+  (with Safety reset, also on the System tab).
+  When the running policy is a trick (`/robot_state` `trick_switches` > 0: Pee, Sniff, Wiggle), the Trick card
+  has hold buttons ("Left" and "Right" for Pee): held, its switch goes out on `/pipeline/trick` at 20 Hz;
   let go (or e-stop, numb, another policy, leaving Policy) sends all off once and the robot stands back up.
-  Robot state and safety reset below.
-- 3D tab: the Go2 URDF drawn with OpenGL ES 3, legs from `/sensors/joint_states`, standing in
+- Map tab, 2D / 3D switch in the corner.
+- 3D: the Go2 URDF drawn with OpenGL ES 3, legs from `/sensors/joint_states`, standing in
   Point-LIO's voxel map: `/lio/map_voxels` (latched snapshot) replaces the map, `/lio/map_voxels/delta`
   adds and removes voxels (what lidar beams now pass through: an opened door, someone who walked by), one box per voxel (instanced, up to 300k), coloured by height with turbo. The box size comes from
   `/lio/map_voxels/size` (latched; [L] asks for it, 5 cm default), and a new size clears the map. The base
   sits at `/lio/odom`; without it, at `/tf` odom -> base over a grid (`/tf` is only taken then).
   Streams are best-effort and only while shown. One finger orbits, two pan and pinch, "Follow"
-  re-centres. The URDF and its meshes (decimated, ~1 MB) live in `app/src/main/assets/go2/`;
+  re-centres, "Voxels" hides the map. "Save map" sends a name on `/lio/map_save`;
+  lio_map_stream writes every voxel to `maps/<name>.pcd` and answers on `/lio/map_save/result`. The URDF and its meshes (decimated, ~1 MB) live in `app/src/main/assets/go2/`;
   regenerate after changing the URDF with
   `unset PYTHONPATH; ~/env_isaacsim/bin/python tools/export_urdf.py`.
 - Shell tab: an SSH terminal on the robot (JSch + Termux's xterm emulator), to start the driver and
@@ -39,7 +45,7 @@ Android, no bridge on the robot.
 - Camera tab: camera_bridge's preview of each camera in `/cameras`, with rate and width sent back to the
   robot. "Objects" draws object_detector's boxes (`/camera/<name>/detections`, JSON) over the preview,
   so only a few kB a frame at most cross Wi-Fi on top of it.
-- Map tab: object_mapper's `/objects` as dots in their label's colour ("Clear objects" sends
+- 2D: object_mapper's `/objects` as dots in their label's colour ("Clear objects" sends
   `/objects/clear`), and `/map`, `/scan`, `/plan` and the robot (TF map -> base_footprint), RViz-style;
   "Goal" mode sends a drag as `/goal_pose`. "Save map" sends a name on `/map/save`; the robot's `map_save`
   (started with SLAM) writes `maps/<name>.pgm/.yaml` and answers on `/map/save/result`. These streams are subscribed only while shown,

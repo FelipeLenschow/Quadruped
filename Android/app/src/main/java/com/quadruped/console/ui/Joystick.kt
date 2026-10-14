@@ -49,6 +49,7 @@ fun Joystick(
             awaitEachGesture {
                 val down = awaitFirstDown()
                 val r = size.width / 2f
+                if ((down.position - Offset(r, r)).getDistance() > r) return@awaitEachGesture
                 fun update(p: Offset) {
                     var v = (p - Offset(r, r)) / r
                     if (horizontalOnly) v = Offset(v.x, 0f)

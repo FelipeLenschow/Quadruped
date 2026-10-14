@@ -353,13 +353,6 @@ void ControlLoop::send(const Eigen::Matrix<float, 12, 1>& targets) {
       m.kd() = static_cast<float>(cfg_.kd);
     }
   }
-  int brightness = 0;
-  if (ctl.safety().is_policy_blocked()) {
-    brightness = 10;
-  } else if (ctl.mode() == "pose") {
-    brightness = 3;
-  }
-  brightness_.store(brightness);
   robot_.write(low_cmd_);
 }
 

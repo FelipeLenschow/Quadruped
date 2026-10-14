@@ -5,6 +5,8 @@ new receiver subscribes, and every --snapshot_period s if set.
 /lio/map_voxels/delta: changes, every --delta_period s. Each message is a MARK_REMOVE point, the voxels to
 remove, a MARK_ADD point, the voxels to add. Both marks have x = NaN; y is 0 (remove) or 1 (add).
 /lio/map_voxels/size: the voxel edge in m (Float32, transient_local), for drawing and keying them.
+/lio/map_save: a name; writes every voxel centre to maps/<name>.pcd (binary, x y z float32, in lio_odom) and
+answers on /lio/map_save/result: "saved <path>" or "error: <why>". An existing file is never overwritten.
 
 The clouds are PointCloud2 with x, y, z float32 (12 bytes a point) in lio_odom: voxel centres.
 
@@ -26,6 +28,8 @@ merge into it. A column moves to another voxel only once its mean is well past t
 import argparse
 import array
 import math
+import os
+import re
 import signal
 from collections import deque
 
@@ -37,8 +41,9 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.utilities import remove_ros_args
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2, PointField
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 
+from quadruped_common import paths
 from quadruped_common.config_loader import load_config
 
 FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate("xyz")]
@@ -57,6 +62,7 @@ MARK_ADD = (math.nan, 1.0, 0.0)
 # seen from afar do not wear them away; clamped to 0.12 .. 0.92, so an opened door clears in ~5 s, not ~20.
 HIT, MISS, LOW, HIGH = 17, -4, -40, 50
 BLOCK = 4  # blocks of 16^3 voxels
+NAME = re.compile(r"[A-Za-z0-9_-]{1,40}")
 
 
 def keys_of(idx):
@@ -96,6 +102,14 @@ def rotate(q, v):
     x, y, z, w = q
     u = np.array([x, y, z])
     return v + 2.0 * np.cross(u, np.cross(u, v) + w * v)
+
+
+def write_pcd(path, pts):
+    pts = np.ascontiguousarray(pts, "<f4")
+    with open(path, "wb") as f:
+        f.write(f"# .PCD v0.7\nVERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nWIDTH {len(pts)}\n"
+                f"HEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS {len(pts)}\nDATA binary\n".encode())
+        f.write(pts.tobytes())
 
 
 class Occupancy:
@@ -289,6 +303,8 @@ class LioMapStream(Node):
         self.size_pub.publish(Float32(data=float(args.voxel)))
         self.create_subscription(PointCloud2, "/lio/cloud", self._cloud_cb, 20)
         self.create_subscription(Odometry, "/lio/odom", self._odom_cb, 50)
+        self.create_subscription(String, "/lio/map_save", self._save_cb, 10)
+        self.save_result = self.create_publisher(String, "/lio/map_save/result", 10)
         self.subscribers = 0
         self.create_timer(args.delta_period, self._send_delta)
         self.create_timer(SUBSCRIBER_POLL_S, self._watch_subscribers)
@@ -376,6 +392,29 @@ class LioMapStream(Node):
         self.snapshot_pub.publish(self._cloud(keys[:n]))
         self.shown = set(keys[:n].tolist())
         self.map.changed.update(keys[n:].tolist())
+
+    def _save_cb(self, msg):
+        name = msg.data.strip()
+        path = paths.repo("maps", name + ".pcd")
+        n = self.map.size()
+        if not NAME.fullmatch(name):
+            reply = "error: name must be 1-40 letters, digits, _ or -"
+        elif n == 0:
+            reply = "error: the 3D map is empty"
+        elif os.path.exists(path):
+            reply = f"error: maps/{name}.pcd exists; pick another name"
+        else:
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                write_pcd(path, centres_of(np.fromiter(self.map.all_keys(), np.int64, n), self.args.voxel))
+                reply = f"saved maps/{name}.pcd ({n:,} voxels @ {self.args.voxel:.2f} m)"
+            except OSError as e:
+                reply = f"error: {e}"
+        if reply.startswith("saved"):
+            self.get_logger().info(reply)
+        else:
+            self.get_logger().warn(reply)
+        self.save_result.publish(String(data=reply))
 
     def _watch_subscribers(self):
         n = self.snapshot_pub.get_subscription_count()

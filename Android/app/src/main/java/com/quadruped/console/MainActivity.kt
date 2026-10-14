@@ -24,6 +24,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
@@ -76,6 +77,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,6 +93,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.quadruped.console.ui.CameraView
@@ -138,7 +141,6 @@ class MainActivity : ComponentActivity() {
 
 private enum class Tab(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     DRIVE("Drive", Icons.Filled.PlayArrow),
-    VIEW("3D", Icons.Filled.Face),
     MAP("Map", Icons.Filled.LocationOn),
     CAMERA("Camera", Icons.Filled.Search),
     SHELL("Shell", Icons.AutoMirrored.Filled.KeyboardArrowRight),
@@ -149,7 +151,8 @@ private enum class Tab(val label: String, val icon: androidx.compose.ui.graphics
 fun ConsoleApp() {
     var status by remember { mutableStateOf<Status?>(null) }
     var info by remember { mutableStateOf("") }
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var map3d by rememberSaveable { mutableStateOf(false) }
     var core by remember { mutableStateOf<ConsoleCore?>(null) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -182,38 +185,23 @@ fun ConsoleApp() {
             Modifier.fillMaxSize().padding(bottom = pad.calculateBottomPadding()).consumeWindowInsets(pad)
                 .imePadding().statusBarsPadding().displayCutoutPadding().padding(horizontal = 16.dp),
         ) {
-            val t = Tab.entries[tab]
-            // Full-height views get a slimmer stop button; it never goes away.
-            val full = t == Tab.SHELL || t == Tab.VIEW || t == Tab.MAP || t == Tab.CAMERA
-            TopBar(status, core != null)
-            Spacer(Modifier.height(if (full) 8.dp else 12.dp))
-            EstopButton(status, core, compact = full)
-            Spacer(Modifier.height(if (full) 8.dp else 12.dp))
             val s = status
             val c = core
-            // The terminal, 3D view, map and camera need the remaining height, which a scrolling column cannot give.
-            if (full) Column(Modifier.weight(1f).padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                when {
-                    t == Tab.SHELL -> ShellTab(Modifier.weight(1f))
-                    s == null || c == null -> OfflineCard(info)
-                    t == Tab.VIEW -> ViewTab(s, Modifier.weight(1f))
-                    t == Tab.CAMERA -> CameraView(
-                        s.robotState?.optJSONObject("heartbeat"), s.params.watchdogTimeout,
-                        Modifier.fillMaxWidth().weight(1f),
-                    )
-                    else -> MapView(Modifier.fillMaxWidth().weight(1f))
+            TopBar(s, c != null, info)
+            Spacer(Modifier.height(8.dp))
+            EstopButton(s, c)
+            Spacer(Modifier.height(8.dp))
+            val body = Modifier.fillMaxWidth().weight(1f).padding(bottom = 8.dp)
+            when (Tab.entries[tab]) {
+                Tab.DRIVE -> DriveTab(s, c, body)
+                Tab.MAP -> MapTab(map3d, { map3d = it }, body)
+                Tab.CAMERA -> CameraView(
+                    s?.robotState?.optJSONObject("heartbeat"), (s?.params ?: SafetyParams()).watchdogTimeout, body,
+                )
+                Tab.SHELL -> Column(body) { ShellTab(Modifier.weight(1f)) }
+                Tab.SYSTEM -> Column(body.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SystemTab(s, c, info)
                 }
-            } else Column(
-                // The sticks consume their own drags, so the page only scrolls from elsewhere.
-                Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                when {
-                    t == Tab.SYSTEM -> SystemTab(s, c, info)
-                    s == null || c == null -> OfflineCard(info)
-                    else -> DriveTab(s, c)
-                }
-                Spacer(Modifier.height(8.dp))
             }
         }
     }
@@ -222,25 +210,55 @@ fun ConsoleApp() {
 // ---------------------------------------------------------------- chrome
 
 @Composable
-private fun TopBar(s: Status?, connected: Boolean) {
+private fun TopBar(s: Status?, connected: Boolean, info: String) {
     val ctx = LocalContext.current
     Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("QUADRUPED", style = MaterialTheme.typography.labelSmall, color = Palette.Muted)
-            Text("Console", style = MaterialTheme.typography.titleLarge)
-        }
         LinkPill(s, connected)
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f)) {
+            val rs = s?.robotState
+            when {
+                rs != null -> RobotSummary(rs)
+                !connected && info.isNotEmpty() && info != "stopped" ->
+                    Text(info, color = Palette.Warn, fontFamily = Mono, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
         Spacer(Modifier.width(8.dp))
         if (connected) {
             OutlinedButton(
-                { ConsoleService.stop(ctx) }, border = BorderStroke(1.dp, Palette.Outline),
-                contentPadding = PaddingValues(horizontal = 12.dp),
+                { ConsoleService.stop(ctx) }, Modifier.height(36.dp), border = BorderStroke(1.dp, Palette.Outline),
+                contentPadding = PaddingValues(horizontal = 10.dp),
             ) { Text("Disconnect", color = Palette.Muted, fontSize = 13.sp) }
         } else {
             Button(
-                { ConsoleService.start(ctx) },
+                { ConsoleService.start(ctx) }, Modifier.height(36.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Palette.Accent, contentColor = Palette.Bg),
+                contentPadding = PaddingValues(horizontal = 14.dp),
             ) { Text("Connect", fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
+/** Posture and tilt, and the one thing most wrong with the robot, if anything. */
+@Composable
+private fun RobotSummary(rs: JSONObject) {
+    val posture = rs.optString("posture").ifEmpty { "—" }
+    val flag = when {
+        rs.optBoolean("safety_blocked") -> "blocked" to Palette.Danger
+        rs.optBoolean("numb") -> "numb" to Palette.Warn
+        !rs.optBoolean("torque_on") -> "no torque" to Palette.Muted
+        else -> null
+    }
+    Column {
+        Text(
+            posture, color = if (posture == "fallen") Palette.Danger else Palette.Text,
+            fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        Row {
+            Text("${rs.optDouble("tilt_deg").f(0)}°", color = Palette.Muted, fontFamily = Mono, fontSize = 11.sp)
+            flag?.let { (text, color) ->
+                Text("  $text", color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            }
         }
     }
 }
@@ -294,7 +312,7 @@ private fun LossGraph(loss: DoubleArray, color: Color, modifier: Modifier) = Can
 }
 
 @Composable
-private fun EstopButton(s: Status?, core: ConsoleCore?, compact: Boolean = false) {
+private fun EstopButton(s: Status?, core: ConsoleCore?) {
     val haptic = LocalHapticFeedback.current
     val latched = s?.estopLatched == true
     val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
@@ -303,7 +321,7 @@ private fun EstopButton(s: Status?, core: ConsoleCore?, compact: Boolean = false
     val shape = RoundedCornerShape(20.dp)
     val enabled = core != null
     Box(
-        Modifier.fillMaxWidth().height(if (compact) (if (latched) 64.dp else 52.dp) else if (latched) 96.dp else 84.dp).clip(shape)
+        Modifier.fillMaxWidth().height(if (latched) 64.dp else 52.dp).clip(shape)
             .background(
                 if (!enabled) Brush.verticalGradient(listOf(Palette.Surface2, Palette.Surface))
                 else if (latched) Brush.verticalGradient(listOf(Color(0xFF3A0D14), Color(0xFF240810)))
@@ -320,7 +338,7 @@ private fun EstopButton(s: Status?, core: ConsoleCore?, compact: Boolean = false
             Text(
                 if (latched) "E-STOP LATCHED" else "STOP",
                 color = if (enabled) Color.White else Palette.Muted,
-                fontSize = if (latched) (if (compact) 18.sp else 24.sp) else if (compact) 24.sp else 34.sp,
+                fontSize = if (latched) 18.sp else 24.sp,
                 fontWeight = FontWeight.Black, letterSpacing = 4.sp,
             )
             if (latched) {
@@ -355,79 +373,86 @@ private fun RowScope.Metric(label: String, value: String, color: Color = Palette
         Text(value, color = color, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 
-@Composable
-private fun OfflineCard(info: String) = Card {
-    Text("Not connected", style = MaterialTheme.typography.titleMedium)
-    Text(
-        "Join the robot's Wi-Fi and tap Connect. The phone becomes the console: it sends the " +
-            "heartbeat, and closing the app e-stops the robot.",
-        color = Palette.Muted, fontSize = 14.sp,
-    )
-    if (info.isNotEmpty() && info != "stopped") Text(info, color = Palette.Warn, fontFamily = Mono, fontSize = 12.sp)
-}
-
 private fun Double.f(n: Int) = "%.${n}f".format(this)
 
 // ---------------------------------------------------------------- drive
 
-/** Everything to operate the robot: mode, then what that mode uses, then its state. */
+/**
+ * Mode, then only what that mode uses: poses in Pose; policies, tricks and the sticks in Policy, the
+ * sticks docked at the bottom. Offline it is the same page, disabled.
+ */
 @Composable
-private fun DriveTab(s: Status, core: ConsoleCore) {
-    val policy = s.mode == "policy"
+private fun DriveTab(s: Status?, core: ConsoleCore?, modifier: Modifier) {
+    val live = s != null && core != null
+    val policy = s?.mode == "policy"
     // Sticks only walk in policy; leaving it hands control back to Nav2 and the others.
-    LaunchedEffect(policy) { if (!policy && s.driveEnabled) core.setDrive(false) }
-
-    ModeCard(s, core)
-    if (policy) {
-        TrickCard(s, core)
-        DriveControls(s, core)
-    } else {
-        PoseCard(s, core)
-    }
-    StatusCard(s, core)
-}
-
-@Composable
-private fun ModeCard(s: Status, core: ConsoleCore) {
+    LaunchedEffect(policy) { if (!policy && s?.driveEnabled == true) core?.setDrive(false) }
     var refusal by remember { mutableStateOf<List<String>>(emptyList()) }
-    val rs = s.robotState
+    val rs = s?.robotState
     val numb = rs?.optBoolean("numb") == true
-    Card {
-        if (rs?.optBoolean("safety_policy_active") == true) {
-            Banner("Safety lie-down", "Tripped: ${rs.optString("trip_reason")}. Goes numb once lying still.", Palette.Danger)
-        } else if (numb) {
-            Banner("Numb", "${rs?.optString("numb_reason")}. Release to hold where it is in pose mode.", Palette.Warn)
-        }
-        Segmented(listOf("Pose", "Policy"), if (s.mode == "policy") 1 else 0) {
-            refusal = core.setMode(if (it == 1) "policy" else "pose")
-        }
-        if (refusal.isNotEmpty()) {
-            Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Palette.Danger.copy(alpha = 0.12f))
-                    .padding(12.dp),
-            ) {
-                Text("Policy refused", color = Palette.Danger, fontWeight = FontWeight.Bold)
-                refusal.forEach { Text("• $it", color = Palette.Text, fontSize = 13.sp) }
-                Spacer(Modifier.height(6.dp))
+
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+            Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            when {
+                rs?.optBoolean("safety_policy_active") == true ->
+                    Banner("Safety lie-down", "Tripped: ${rs.optString("trip_reason")}. Goes numb once lying still.", Palette.Danger)
+                numb -> Banner("Numb", "${rs?.optString("numb_reason")}. Release to hold where it is in pose mode.", Palette.Warn)
+            }
+            if (rs?.optBoolean("safety_blocked") == true) {
+                Banner("Safety blocked", "A safety limit tripped. Reset once the cause is gone.", Palette.Danger) {
+                    OutlinedButton({ core?.safetyReset() }, border = BorderStroke(1.dp, Palette.Danger)) {
+                        Text("Safety reset", color = Palette.Danger)
+                    }
+                }
+            }
+            if (refusal.isNotEmpty() && core != null) {
+                Banner("Policy refused", refusal.joinToString("\n") { "• $it" }, Palette.Danger) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton({ refusal = core.setMode("policy", force = true) }, border = BorderStroke(1.dp, Palette.Danger)) {
+                            Text("Force policy", color = Palette.Danger)
+                        }
+                        OutlinedButton({ refusal = emptyList() }, border = BorderStroke(1.dp, Palette.Outline)) {
+                            Text("Dismiss", color = Palette.Muted)
+                        }
+                    }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.weight(1f)) {
+                    Segmented(listOf("Pose", "Policy"), if (policy) 1 else 0, enabled = live) {
+                        refusal = core?.setMode(if (it == 1) "policy" else "pose") ?: emptyList()
+                    }
+                }
                 OutlinedButton(
-                    { refusal = core.setMode("policy", force = true) },
-                    border = BorderStroke(1.dp, Palette.Danger),
-                ) { Text("Force policy anyway", color = Palette.Danger) }
+                    { core?.setNumb(!numb) }, Modifier.height(48.dp), enabled = live,
+                    border = BorderStroke(1.dp, if (live) Palette.Warn else Palette.Outline), shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp),
+                ) { Text(if (numb) "Release" else "Numb", color = if (live) Palette.Warn else Palette.Muted) }
+            }
+            if (policy && s != null && core != null) {
+                PolicyCard(rs, core)
+                TrickCard(s, core)
+            } else {
+                PoseCard(s, core)
             }
         }
-        PolicyPicker(rs, core)
-        OutlinedButton(
-            { core.setNumb(!numb) }, Modifier.fillMaxWidth(), border = BorderStroke(1.dp, Palette.Warn),
-        ) { Text(if (numb) "Release numb" else "Numb (torque off)", color = Palette.Warn) }
+        if (policy && s != null && core != null) DriveDock(s, core)
     }
 }
 
 @Composable
-private fun Banner(title: String, body: String, color: Color) = Column(
+private fun Banner(title: String, body: String, color: Color, action: (@Composable () -> Unit)? = null) = Column(
     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(color.copy(alpha = 0.12f)).padding(12.dp),
 ) {
     Text(title, color = color, fontWeight = FontWeight.Bold)
     Text(body, color = Palette.Text, fontSize = 13.sp)
+    if (action != null) {
+        Spacer(Modifier.height(6.dp))
+        action()
+    }
 }
 
 private fun JSONObject.stringOrNull(key: String) = if (isNull(key)) null else optString(key)
@@ -435,12 +460,11 @@ private fun JSONObject.stringOrNull(key: String) = if (isNull(key)) null else op
 /** The policies /robot_state lists; the robot loads the one tapped and switches once it is ready. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PolicyPicker(rs: JSONObject?, core: ConsoleCore) {
-    val names = rs?.optJSONArray("policies")?.let { a -> List(a.length()) { a.optString(it) } } ?: return
-    if (names.isEmpty()) return
-    val active = rs.stringOrNull("policy")
-    val loading = rs.stringOrNull("policy_loading")
-    val checks = rs.optJSONArray("protections")?.let { a -> List(a.length()) { a.optString(it) } }.orEmpty()
+private fun PolicyCard(rs: JSONObject?, core: ConsoleCore) = Card {
+    val names = rs?.optJSONArray("policies")?.let { a -> List(a.length()) { a.optString(it) } }.orEmpty()
+    val active = rs?.stringOrNull("policy")
+    val loading = rs?.stringOrNull("policy_loading")
+    val checks = rs?.optJSONArray("protections")?.let { a -> List(a.length()) { a.optString(it) } }.orEmpty()
     Row(verticalAlignment = Alignment.CenterVertically) {
         SectionLabel("Policy")
         Spacer(Modifier.weight(1f))
@@ -448,6 +472,10 @@ private fun PolicyPicker(rs: JSONObject?, core: ConsoleCore) {
             if (loading != null) "loading $loading…" else "checks: ${checks.joinToString(" ").ifEmpty { "none" }}",
             color = Palette.Muted, fontFamily = Mono, fontSize = 12.sp,
         )
+    }
+    if (names.isEmpty()) {
+        Text("The robot lists no policies.", color = Palette.Muted, fontSize = 13.sp)
+        return@Card
     }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         names.forEach { n ->
@@ -462,7 +490,7 @@ private fun PolicyPicker(rs: JSONObject?, core: ConsoleCore) {
             ) { Text(n, fontWeight = FontWeight.SemiBold, color = if (on || n == loading) color else Palette.Text) }
         }
     }
-    rs.stringOrNull("policy_error")?.let { Text(it, color = Palette.Danger, fontSize = 12.sp) }
+    rs?.stringOrNull("policy_error")?.let { Text(it, color = Palette.Danger, fontSize = 12.sp) }
 }
 
 /**
@@ -515,82 +543,88 @@ private fun TrickCard(s: Status, core: ConsoleCore) {
     }
 }
 
+/** The sticks, fixed at the bottom of the page so it scrolls without touching them. */
 @Composable
-private fun DriveControls(s: Status, core: ConsoleCore) {
-    Card {
+private fun DriveDock(s: Status, core: ConsoleCore) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Palette.Surface)
+            .border(1.dp, Palette.Outline.copy(alpha = 0.6f), RoundedCornerShape(18.dp)).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Phone drive", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    if (s.driveEnabled) "Overriding Nav2 (${ConsoleCore.CMD_VEL})" else "Off — Nav2 and others drive",
-                    color = if (s.driveEnabled) Palette.Accent else Palette.Muted, fontSize = 13.sp,
-                )
-            }
             Switch(
                 s.driveEnabled, { core.setDrive(it) }, enabled = !s.estopLatched,
                 colors = SwitchDefaults.colors(checkedTrackColor = Palette.Accent, checkedThumbColor = Palette.Bg),
             )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Turbo", Modifier.weight(1f), color = if (s.turbo) Palette.Warn else Palette.Muted)
-            Text(
-                if (s.turbo) "1.0 m/s · 1.0 rad/s" else "0.5 m/s · 0.5 rad/s",
-                color = Palette.Muted, fontFamily = Mono, fontSize = 12.sp,
-            )
             Spacer(Modifier.width(10.dp))
-            Switch(
-                s.turbo, { core.setTurbo(it) },
-                colors = SwitchDefaults.colors(checkedTrackColor = Palette.Warn, checkedThumbColor = Palette.Bg),
-            )
+            Column(Modifier.weight(1f)) {
+                Text("Phone drive", fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (s.driveEnabled) "Overriding Nav2" else "Off: Nav2 and others drive",
+                    color = if (s.driveEnabled) Palette.Accent else Palette.Muted, fontSize = 12.sp,
+                )
+            }
+            Box(
+                Modifier.clip(RoundedCornerShape(50)).background(if (s.turbo) Palette.Warn else Palette.Surface2)
+                    .clickable { core.setTurbo(!s.turbo) }.padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    if (s.turbo) "Turbo 1.0" else "Turbo", color = if (s.turbo) Palette.Bg else Palette.Text,
+                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val d = minOf(168.dp, (maxWidth - 16.dp) / 2)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Joystick(s.driveEnabled, horizontalOnly = false, diameter = d, onMove = { x, y -> core.setMove(-y.toDouble(), -x.toDouble()) })
+                Joystick(s.driveEnabled, horizontalOnly = true, diameter = d, onMove = { x, _ -> core.setTurn(-x.toDouble()) })
+            }
+        }
+        val c = s.driveCmd
+        val vel = s.robotState?.optJSONArray("velocity")
+        Text(
+            "cmd ${c[0].f(2)} ${c[1].f(2)} ${c[2].f(2)}   meas ${vel?.optDouble(0)?.f(2) ?: "—"} ${vel?.optDouble(1)?.f(2) ?: "—"} ${vel?.optDouble(2)?.f(2) ?: "—"}",
+            Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+            color = if (s.driveEnabled) Palette.Text else Palette.Muted, fontFamily = Mono, fontSize = 12.sp,
+        )
     }
-
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Joystick(s.driveEnabled, horizontalOnly = false, onMove = { x, y -> core.setMove(-y.toDouble(), -x.toDouble()) })
-            Spacer(Modifier.height(6.dp))
-            SectionLabel("Move")
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Joystick(s.driveEnabled, horizontalOnly = true, onMove = { x, _ -> core.setTurn(-x.toDouble()) })
-            Spacer(Modifier.height(6.dp))
-            SectionLabel("Turn")
-        }
-    }
-    val c = s.driveCmd
-    Text(
-        "cmd  vx ${c[0].f(2)}  vy ${c[1].f(2)}  wz ${c[2].f(2)}",
-        Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
-        color = if (s.driveEnabled) Palette.Text else Palette.Muted, fontFamily = Mono, fontSize = 13.sp,
-    )
 }
 
 @Composable
-private fun PoseCard(s: Status, core: ConsoleCore) = Card {
+private fun PoseCard(s: Status?, core: ConsoleCore?) = Card {
+    val live = core != null
     Row(verticalAlignment = Alignment.CenterVertically) {
         SectionLabel("Poses")
         Spacer(Modifier.weight(1f))
-        Text(
-            "${s.poseName}${if (s.poseLabel.isNotEmpty()) " · ${s.poseLabel}" else ""}",
-            color = Palette.Muted, fontFamily = Mono, fontSize = 12.sp,
-        )
+        if (s != null) {
+            Text(
+                "${s.poseName}${if (s.poseLabel.isNotEmpty()) " · ${s.poseLabel}" else ""}",
+                color = Palette.Muted, fontFamily = Mono, fontSize = 12.sp,
+            )
+        }
     }
     LinearProgressIndicator(
-        { s.poseProgress.toFloat() }, Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
+        { (s?.poseProgress ?: 0.0).toFloat() }, Modifier.fillMaxWidth().height(6.dp).clip(CircleShape),
         color = Palette.Accent, trackColor = Palette.Surface2,
     )
     val poses = listOf("stand" to "Stand", "sit" to "Sit", "lie_flat" to "Lie flat", "pushup" to "Push-up")
     poses.chunked(2).forEach { row ->
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             row.forEach { (key, label) ->
-                val active = s.poseName == key
+                val active = s?.poseName == key
                 Box(
                     Modifier.weight(1f).height(64.dp).clip(RoundedCornerShape(14.dp))
                         .background(if (active) Palette.Accent.copy(alpha = 0.18f) else Palette.Surface2)
                         .border(1.dp, if (active) Palette.Accent else Color.Transparent, RoundedCornerShape(14.dp))
-                        .clickable { core.sendPose(key) },
+                        .clickable(enabled = live) { core?.sendPose(key) },
                     contentAlignment = Alignment.Center,
-                ) { Text(label, fontWeight = FontWeight.SemiBold, color = if (active) Palette.Accent else Palette.Text) }
+                ) {
+                    Text(
+                        label, fontWeight = FontWeight.SemiBold,
+                        color = if (active) Palette.Accent else if (live) Palette.Text else Palette.Muted,
+                    )
+                }
             }
         }
     }
@@ -598,8 +632,8 @@ private fun PoseCard(s: Status, core: ConsoleCore) = Card {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("Transition", color = Palette.Muted, fontSize = 13.sp)
         Slider(
-            interp, { interp = it }, Modifier.weight(1f).padding(horizontal = 10.dp), valueRange = 0.5f..6f,
-            onValueChangeFinished = { core.setInterp((Math.round(interp * 10) / 10.0)) },
+            interp, { interp = it }, Modifier.weight(1f).padding(horizontal = 10.dp), enabled = live, valueRange = 0.5f..6f,
+            onValueChangeFinished = { core?.setInterp((Math.round(interp * 10) / 10.0)) },
             colors = sliderColors(),
         )
         Text("${"%.1f".format(interp)} s", fontFamily = Mono, fontSize = 13.sp)
@@ -607,59 +641,44 @@ private fun PoseCard(s: Status, core: ConsoleCore) = Card {
 }
 
 @Composable
-private fun StatusCard(s: Status, core: ConsoleCore) = Card {
-    SectionLabel("Robot")
-    val rs = s.robotState
-    RobotMetrics(s)
-    if (rs != null) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Metric("Torque", if (rs.optBoolean("torque_on")) "ON" else "OFF", if (rs.optBoolean("torque_on")) Palette.Ok else Palette.Muted)
-            Metric("Safety", if (rs.optBoolean("safety_blocked")) "BLOCKED" else "OK", if (rs.optBoolean("safety_blocked")) Palette.Danger else Palette.Ok)
-        }
-    }
-    OutlinedButton(
-        { core.safetyReset() }, Modifier.fillMaxWidth(), border = BorderStroke(1.dp, Palette.Warn),
-    ) { Text("Safety reset", color = Palette.Warn) }
-}
-
-@Composable
-private fun RobotMetrics(s: Status) {
-    val rs = s.robotState
-    val vel = rs?.optJSONArray("velocity")
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Metric("Posture", rs?.optString("posture") ?: "—")
-        Metric("Tilt", rs?.let { "${it.optDouble("tilt_deg").f(0)}°" } ?: "—")
-        Metric("vx", vel?.optDouble(0)?.f(2) ?: "—")
-        Metric("wz", vel?.optDouble(2)?.f(2) ?: "—")
-    }
-}
-
-@Composable
-private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+private fun Segmented(options: List<String>, selected: Int, enabled: Boolean = true, onSelect: (Int) -> Unit) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Palette.Surface2).padding(4.dp),
     ) {
         options.forEachIndexed { i, o ->
-            val bg by animateColorAsState(if (i == selected) Palette.Accent else Color.Transparent, label = "seg")
+            val on = i == selected && enabled
+            val bg by animateColorAsState(if (on) Palette.Accent else Color.Transparent, label = "seg")
             Box(
-                Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(bg).clickable { onSelect(i) }
+                Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).background(bg).clickable(enabled = enabled) { onSelect(i) }
                     .padding(vertical = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(o, color = if (i == selected) Palette.Bg else Palette.Text, fontWeight = FontWeight.SemiBold)
+                Text(o, color = if (on) Palette.Bg else if (enabled) Palette.Text else Palette.Muted, fontWeight = FontWeight.SemiBold)
             }
         }
     }
 }
 
-// ---------------------------------------------------------------- 3D
+// ---------------------------------------------------------------- map
 
+/** Nav2's 2D map or the 3D view in Point-LIO's voxels, one tab, switched from the corner. */
 @Composable
-private fun ViewTab(s: Status, modifier: Modifier) {
-    Box(modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Palette.Surface)) {
-        Robot3D(Modifier.fillMaxSize())
+private fun MapTab(threeD: Boolean, onToggle: (Boolean) -> Unit, modifier: Modifier) {
+    Box(modifier.clip(RoundedCornerShape(18.dp)).background(Palette.Surface)) {
+        if (threeD) Robot3D(Modifier.fillMaxSize()) else MapView(Modifier.fillMaxSize())
+        Row(
+            Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(50))
+                .background(Palette.Surface.copy(alpha = 0.9f)).padding(3.dp),
+        ) {
+            listOf("2D" to false, "3D" to true).forEach { (label, v) ->
+                val on = v == threeD
+                Box(
+                    Modifier.clip(RoundedCornerShape(50)).background(if (on) Palette.Accent else Color.Transparent)
+                        .clickable { onToggle(v) }.padding(horizontal = 14.dp, vertical = 5.dp),
+                ) { Text(label, color = if (on) Palette.Bg else Palette.Text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+            }
+        }
     }
-    RobotMetrics(s)
 }
 
 // ---------------------------------------------------------------- system
@@ -836,6 +855,9 @@ private fun ParamsCard(s: Status?, core: ConsoleCore?) {
                 colors = ButtonDefaults.buttonColors(containerColor = Palette.Accent, contentColor = Palette.Bg),
             ) { Text("Apply", fontWeight = FontWeight.Bold) }
         }
+        OutlinedButton(
+            { core?.safetyReset() }, Modifier.fillMaxWidth(), enabled = core != null, border = BorderStroke(1.dp, Palette.Warn),
+        ) { Text("Safety reset", color = Palette.Warn) }
         if (error.isNotEmpty()) Text(error, color = Palette.Danger, fontSize = 13.sp)
         if (s?.estopLatched == true) Text("E-stop latched: torque is held at 0 % regardless.", color = Palette.Danger, fontSize = 12.sp)
     }

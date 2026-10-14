@@ -285,7 +285,7 @@ DriverNode::DriverNode(Paths paths, YAML::Node config, ControlLoop& loop, Comman
 
   drain_timer_ = create_wall_timer(std::chrono::milliseconds(5), [this] { drain_snapshots(); });
   calibration_timer_ = create_wall_timer(std::chrono::seconds(1), [this] { publish_calibration(); });
-  light_timer_ = create_wall_timer(std::chrono::milliseconds(20), [this] { update_brightness(); });
+  light_timer_ = create_wall_timer(std::chrono::milliseconds(20), [this] { update_light(); });
   light_thread_ = std::thread(&DriverNode::light_worker, this);
   stdin_thread_ = std::thread(&DriverNode::stdin_loop, this);
   stdin_thread_.detach();
@@ -304,15 +304,12 @@ void DriverNode::light_worker() {
   // VUI calls are RPCs with a timeout: kept off the ROS thread and off the control loop.
   std::unique_lock<std::mutex> lock(light_mutex_);
   while (true) {
-    light_cv_.wait(lock, [this] { return light_stop_ || light_request_ || color_request_; });
+    light_cv_.wait(lock, [this] { return light_stop_ || color_request_; });
     if (light_stop_) return;
-    const std::optional<int> level = light_request_;
-    const std::optional<std::string> color = color_request_;
-    light_request_.reset();
+    const std::string color = *color_request_;
     color_request_.reset();
     lock.unlock();
-    if (level) loop_.robot().set_brightness(*level);
-    if (color && loop_.robot().set_color(*color, kColorHold) != 0 && !color_warned_) {
+    if (loop_.robot().set_color(color, kColorHold) != 0 && !color_warned_) {
       color_warned_ = true;
       RCLCPP_WARN(get_logger(), "[RealDriver] The robot refused the light color (vui api 1007); the colors stay its own.");
     }
@@ -485,19 +482,14 @@ void DriverNode::stdin_loop() {
   stdin_ok_ = false;
 }
 
-void DriverNode::update_brightness() {
-  const int want = loop_.desired_brightness();
+void DriverNode::update_light() {
   // The color lasts kColorHold seconds on the robot, so it is sent again before it runs out.
   const double now = steady_now();
-  const bool resend_color = !color_.empty() && !color_warned_ && (color_ != sent_color_ || now - color_time_ >= kColorHold - 1.0);
-  if ((want < 0 || want == brightness_) && !resend_color) return;
+  if (color_.empty() || color_warned_ || (color_ == sent_color_ && now - color_time_ < kColorHold - 1.0)) return;
   {
     std::lock_guard<std::mutex> lock(light_mutex_);
-    if (want >= 0 && want != brightness_) light_request_ = brightness_ = want;
-    if (resend_color) {
-      color_request_ = sent_color_ = color_;
-      color_time_ = now;
-    }
+    color_request_ = sent_color_ = color_;
+    color_time_ = now;
   }
   light_cv_.notify_one();
 }

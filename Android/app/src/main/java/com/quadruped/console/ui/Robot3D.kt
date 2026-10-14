@@ -2,13 +2,14 @@ package com.quadruped.console.ui
 
 import android.opengl.GLSurfaceView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,6 +22,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +55,9 @@ const val LIO_SNAPSHOT = "/lio/map_voxels"
 const val LIO_DELTA = "/lio/map_voxels/delta"
 const val LIO_VOXEL_SIZE = "/lio/map_voxels/size"
 const val LIO_ODOM = "/lio/odom"
+private const val LIO_SAVE = "/lio/map_save"
+private const val LIO_SAVE_RESULT = "/lio/map_save/result"
+private const val SAVE_RESULT_SHOWN_MS = 10_000L
 
 /** Nothing for this long and the mapper is taken to be off; it is optional. */
 private const val NOT_RUNNING_MS = 15_000L
@@ -73,6 +78,10 @@ fun Robot3D(modifier: Modifier = Modifier) {
     val map = remember { VoxelMap() }
     var glView by remember { mutableStateOf<GLSurfaceView?>(null) }
     var follow by remember { mutableStateOf(true) }
+    var showVoxels by rememberSaveable { mutableStateOf(true) }
+    var saveName by remember { mutableStateOf<String?>(null) }
+    var saveResult by remember { mutableStateOf("") }
+    var saveResultAt by remember { mutableLongStateOf(0L) }
     var base by remember { mutableStateOf(Pose3(Vec3(0.0, 0.0, 0.33), Quat.IDENTITY)) }
     var jointsLive by remember { mutableStateOf(false) }
     var onLio by remember { mutableStateOf(false) }
@@ -84,12 +93,13 @@ fun Robot3D(modifier: Modifier = Modifier) {
 
     DisposableEffect(Unit) {
         onDispose {
-            for (t in listOf(JOINTS, "/tf", LIO_SNAPSHOT, LIO_DELTA, LIO_VOXEL_SIZE, LIO_ODOM)) NativeLink.unsubscribe(t)
+            for (t in listOf(JOINTS, "/tf", LIO_SNAPSHOT, LIO_DELTA, LIO_VOXEL_SIZE, LIO_ODOM, LIO_SAVE_RESULT)) NativeLink.unsubscribe(t)
         }
     }
     LaunchedEffect(Unit) {
         val trail = ArrayDeque<Vec3>()
         var snapshotCount = 0L
+        var saveCount = NativeLink.latestCount(LIO_SAVE_RESULT)
         withContext(Dispatchers.Default) {
             while (true) {
                 // Idempotent; also re-subscribes after a reconnect. The latched snapshot
@@ -99,7 +109,14 @@ fun Robot3D(modifier: Modifier = Modifier) {
                 NativeLink.subscribe(LIO_DELTA, MsgType.POINT_CLOUD2, reliable = true, queue = true)
                 NativeLink.subscribe(LIO_ODOM, MsgType.ODOMETRY, reliable = false)
                 NativeLink.subscribe(LIO_VOXEL_SIZE, MsgType.FLOAT32, reliable = true, transientLocal = true)
+                NativeLink.advertise(LIO_SAVE, MsgType.STRING)
+                NativeLink.subscribe(LIO_SAVE_RESULT, MsgType.STRING)
                 val t = System.currentTimeMillis()
+                if (NativeLink.latestCount(LIO_SAVE_RESULT) != saveCount) {
+                    saveCount = NativeLink.latestCount(LIO_SAVE_RESULT)
+                    saveResult = NativeLink.latestText(LIO_SAVE_RESULT) ?: ""
+                    saveResultAt = t
+                }
 
                 NativeLink.latestValues(LIO_VOXEL_SIZE)?.firstOrNull()?.takeIf { it > 0.0 && it != map.voxel }?.let {
                     map.setVoxel(it)
@@ -141,7 +158,7 @@ fun Robot3D(modifier: Modifier = Modifier) {
                 val joints = if (names != null && q != null) names.zip(q.toList()).toMap() else emptyMap()
                 jointsLive = joints.isNotEmpty()
                 val links = urdf.linkPoses(joints.ifEmpty { STAND }).mapValues { (_, p) -> base * p }
-                renderer.scene = RobotScene(base, links, trail.toList(), grid = !onLio, cloud = map)
+                renderer.scene = RobotScene(base, links, trail.toList(), grid = !onLio || !showVoxels, cloud = map.takeIf { showVoxels })
                 voxels = map.size
                 now = t
                 glView?.requestRender()
@@ -184,7 +201,7 @@ fun Robot3D(modifier: Modifier = Modifier) {
         )
 
         Column(
-            Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(10.dp))
+            Modifier.align(Alignment.BottomStart).padding(10.dp).clip(RoundedCornerShape(10.dp))
                 .background(Palette.Bg.copy(alpha = 0.7f)).padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
             val quiet = if (lastMapMs < 0) now - startedMs else now - lastMapMs
@@ -203,25 +220,37 @@ fun Robot3D(modifier: Modifier = Modifier) {
                 }
             }
             Text(if (onLio) "pose: $LIO_ODOM" else "pose: /tf", color = Palette.Muted, fontSize = 12.sp, fontFamily = Mono)
+            if (!jointsLive) Text("Waiting for $JOINTS", color = Palette.Warn, fontSize = 11.sp)
+            if (saveResult.isNotEmpty() && now - saveResultAt < SAVE_RESULT_SHOWN_MS) {
+                Text(saveResult, color = if (saveResult.startsWith("error")) Palette.Danger else Palette.Ok, fontSize = 12.sp)
+            }
         }
 
-        Box(
-            Modifier.align(Alignment.TopEnd).padding(10.dp).clip(RoundedCornerShape(50))
-                .background(if (follow) Palette.Accent else Palette.Surface2)
-                .clickable {
-                    follow = !follow
-                    camera.focus = if (follow) null else base.t
-                    glView?.requestRender()
-                }
-                .padding(horizontal = 12.dp, vertical = 7.dp),
-        ) { Text("Follow", color = if (follow) Palette.Bg else Palette.Text, fontSize = 12.sp) }
+        if (voxels > 0) {
+            MapChip("Save map", saveName != null, Palette.Ok, Modifier.align(Alignment.BottomEnd).padding(10.dp)) {
+                saveName = defaultMapName()
+            }
+        }
 
-        if (!jointsLive) {
-            Text(
-                "Waiting for $JOINTS",
-                Modifier.align(Alignment.BottomCenter).padding(10.dp),
-                color = Palette.Warn, fontSize = 11.sp,
-            )
+        Row(Modifier.align(Alignment.TopEnd).padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MapChip("Voxels", showVoxels, Palette.Accent) {
+                showVoxels = !showVoxels
+                glView?.requestRender()
+            }
+            MapChip("Follow", follow, Palette.Accent) {
+                follow = !follow
+                camera.focus = if (follow) null else base.t
+                glView?.requestRender()
+            }
+        }
+    }
+
+    saveName?.let { name ->
+        SaveMapDialog(name, "Every voxel, written on the robot to maps/<name>.pcd.", { saveName = it }) {
+            NativeLink.publishString(LIO_SAVE, name.trim())
+            saveResult = "Saving maps/${name.trim()}.pcd…"
+            saveResultAt = System.currentTimeMillis()
+            saveName = null
         }
     }
 }

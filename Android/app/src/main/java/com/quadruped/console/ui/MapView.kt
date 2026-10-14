@@ -271,22 +271,27 @@ fun MapView(modifier: Modifier = Modifier) {
         }
 
         Row(Modifier.align(Alignment.TopEnd).padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MapChip("Follow", follow, Palette.Accent) { follow = !follow }
+            MapChip(if (goalMode) "Drag to set goal" else "Goal", goalMode, Palette.Warn) { goalMode = !goalMode }
+        }
+        Column(
+            Modifier.align(Alignment.BottomEnd).padding(10.dp),
+            horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (scene.objects.isNotEmpty()) {
+                MapChip("Clear objects", false, Palette.Danger) { NativeLink.publishString(OBJECTS_CLEAR, "clear") }
+            }
             if (grid != null) {
-                Chip("Save map", saveName != null, Palette.Ok) {
-                    saveName = "map_" + SimpleDateFormat("MMdd_HHmm", Locale.US).format(Date())
+                MapChip("Save map", saveName != null, Palette.Ok) {
+                    saveName = defaultMapName()
                 }
             }
-            if (scene.objects.isNotEmpty()) {
-                Chip("Clear objects", false, Palette.Danger) { NativeLink.publishString(OBJECTS_CLEAR, "clear") }
-            }
-            Chip("Follow", follow, Palette.Accent) { follow = !follow }
-            Chip(if (goalMode) "Drag to set goal" else "Goal", goalMode, Palette.Warn) { goalMode = !goalMode }
         }
         Column(Modifier.align(Alignment.BottomStart).padding(12.dp)) {
             val g = grid
             Text(
                 if (g == null) "No /map yet — start navigation (launcher [N])"
-                else "${g.w}×${g.h} @ ${"%.2f".format(g.res)} m · frame ${scene.fixed}",
+                else "${g.w}×${g.h} @ ${"%.2f".format(g.res)} m · ${scene.fixed}",
                 color = Palette.Muted, fontSize = 11.sp, fontFamily = Mono,
             )
             if (scene.robot == null) Text("No TF to base_footprint", color = Palette.Warn, fontSize = 11.sp)
@@ -297,32 +302,36 @@ fun MapView(modifier: Modifier = Modifier) {
     }
 
     saveName?.let { name ->
-        AlertDialog(
-            onDismissRequest = { saveName = null },
-            title = { Text("Save map") },
-            text = {
-                Column {
-                    OutlinedTextField(name, { saveName = it }, singleLine = true, label = { Text("Name") })
-                    Text("Written on the robot to maps/<name>, listed by launcher [N].", color = Palette.Muted, fontSize = 12.sp)
-                }
-            },
-            confirmButton = {
-                TextButton({
-                    NativeLink.publishString(SAVE, name.trim())
-                    saveResult = "Saving maps/${name.trim()}…"
-                    saveResultAt = System.currentTimeMillis()
-                    saveName = null
-                }) { Text("Save") }
-            },
-            dismissButton = { TextButton({ saveName = null }) { Text("Cancel") } },
-        )
+        SaveMapDialog(name, "Written on the robot to maps/<name>, listed by launcher [N].", { saveName = it }) {
+            NativeLink.publishString(SAVE, name.trim())
+            saveResult = "Saving maps/${name.trim()}…"
+            saveResultAt = System.currentTimeMillis()
+            saveName = null
+        }
     }
 }
 
+fun defaultMapName() = "map_" + SimpleDateFormat("MMdd_HHmm", Locale.US).format(Date())
+
+/** Asks for a map name; [onName] with null closes it. */
 @Composable
-private fun Chip(text: String, on: Boolean, color: Color, onClick: () -> Unit) =
+fun SaveMapDialog(name: String, hint: String, onName: (String?) -> Unit, onSave: () -> Unit) = AlertDialog(
+    onDismissRequest = { onName(null) },
+    title = { Text("Save map") },
+    text = {
+        Column {
+            OutlinedTextField(name, { onName(it) }, singleLine = true, label = { Text("Name") })
+            Text(hint, color = Palette.Muted, fontSize = 12.sp)
+        }
+    },
+    confirmButton = { TextButton(onSave) { Text("Save") } },
+    dismissButton = { TextButton({ onName(null) }) { Text("Cancel") } },
+)
+
+@Composable
+fun MapChip(text: String, on: Boolean, color: Color, modifier: Modifier = Modifier, onClick: () -> Unit) =
     Box(
-        Modifier.clip(RoundedCornerShape(50)).background(if (on) color else Palette.Surface.copy(alpha = 0.9f))
+        modifier.clip(RoundedCornerShape(50)).background(if (on) color else Palette.Surface.copy(alpha = 0.9f))
             .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp),
     ) { Text(text, color = if (on) Palette.Bg else Palette.Text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
 

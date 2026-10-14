@@ -33,7 +33,6 @@ class RobotIO {
   // Copies the newest LowState if one arrived after `seq`, and advances `seq`.
   bool take(LowState& out, uint64_t& seq);
   void write(LowCmd& cmd);
-  void set_brightness(int level);
   // The light's color ("blue", "green", "red", ...) for `seconds`, then the robot's own again. 0 when accepted.
   int32_t set_color(const std::string& color, int seconds);
   // Drops the DDS endpoints and clients while the SDK is still whole.

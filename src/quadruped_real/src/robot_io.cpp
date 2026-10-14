@@ -78,10 +78,6 @@ void RobotIO::write(LowCmd& cmd) {
   publisher_->Write(cmd);
 }
 
-void RobotIO::set_brightness(int level) {
-  if (vui_) vui_->SetBrightness(level);
-}
-
 int32_t RobotIO::set_color(const std::string& color, int seconds) { return vui_ ? vui_->SetColor(color, seconds) : -1; }
 
 void RobotIO::close() {

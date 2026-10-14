@@ -68,7 +68,7 @@ class DriverNode : public rclcpp::Node {
   void publish_robot_state(const Snapshot& s);
   void publish_calibration();
   void stdin_loop();
-  void update_brightness();
+  void update_light();
   void light_worker();
 
   Paths paths_;
@@ -97,10 +97,8 @@ class DriverNode : public rclcpp::Node {
   Eigen::Vector4d fsr_offset_ = Eigen::Vector4d::Zero();
   double contact_threshold_ = 0.0;
   bool have_calibration_ = false;
-  int brightness_ = -1;
   std::mutex light_mutex_;
   std::condition_variable light_cv_;
-  std::optional<int> light_request_;
   std::optional<std::string> color_request_;
   std::string color_, sent_color_;  // policy blue, pose green, e-stop / numb / trip red
   double color_time_ = 0.0;
