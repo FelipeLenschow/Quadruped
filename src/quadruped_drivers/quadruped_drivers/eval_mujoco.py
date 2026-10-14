@@ -12,7 +12,7 @@ import rclpy
 from rclpy.node import Node
 import argparse
 import threading
-from quadruped_core.pipeline import LocomotionPipeline
+from quadruped_core.pipeline import make_pipeline
 from quadruped_core.config_loader import load_config
 from quadruped_core import paths
 from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
@@ -52,7 +52,7 @@ class MujocoEvaluator(Node):
         self._init_physics()
 
         # 2. Locomotion Pipeline
-        self.pipeline = LocomotionPipeline(
+        self.pipeline = make_pipeline(
             node=self,
             robot_type=robot_type,
             checkpoint=checkpoint,
@@ -63,7 +63,7 @@ class MujocoEvaluator(Node):
             safety_switch=False,
         )
         # The sweep measures the response to a step command.
-        self.pipeline.command_slew.enabled = False
+        self.pipeline.set_slew_enabled(False)
 
         # 3. Arm the pipeline for an unattended sweep.
         #
@@ -144,18 +144,7 @@ class MujocoEvaluator(Node):
         loses the occasional race -- and one lost race is a latched stop that ends the sweep. The
         safe joint bounds are only ever recomputed inside _recompute_safety_limits, so forcing the
         margin there closes the window completely."""
-        sp = self.pipeline.safety_processor
-        if getattr(sp, "_rom_margin_pinned", False):
-            return
-        original = sp._recompute_safety_limits
-
-        def pinned_recompute():
-            sp.rom_safety_margin = self.rom_margin
-            original()
-
-        sp._recompute_safety_limits = pinned_recompute
-        sp._rom_margin_pinned = True
-        pinned_recompute()
+        self.pipeline.safety_processor.pin_rom_margin(self.rom_margin)
 
     def _clear_safety_stop(self):
         """Stand in for the operator on the emergency stop.
@@ -179,10 +168,8 @@ class MujocoEvaluator(Node):
         sp = self.pipeline.safety_processor
         if not sp.is_policy_blocked:
             return
-        # Exactly what _reset_worker does when the operator hits ENTER.
-        sp._robot_safe = True
-        sp._shutdown_logged = False
-        sp._policy_blocked = False
+        # What the operator's ENTER does after a trip, keeping the reason for the report.
+        sp.clear_block(clear_reason=False)
         self.safety_resets += 1
         if self.safety_resets in (1, 10, 100) or self.safety_resets % 1000 == 0:
             print(f"[MujocoEvaluator] cleared safety stop #{self.safety_resets} "

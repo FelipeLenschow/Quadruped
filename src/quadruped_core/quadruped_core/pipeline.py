@@ -171,6 +171,9 @@ class LocomotionPipeline:
         self._pending_policy = None
         self._trick_phase = 0.0
 
+    def set_slew_enabled(self, on: bool):
+        self.command_slew.enabled = bool(on)
+
     def _wtw_runners(self):
         return [r for r in self.policy_manager.policies.values() if getattr(r, "_obs_layout", None) == "wtw"]
 
@@ -578,7 +581,8 @@ class LocomotionPipeline:
                     self._safety_elapsed = None
                 takeover = not is_safe or sp.is_policy_blocked
                 proposed_targets = {}
-                if takeover and self.safety_name in pm.policies and not sp.is_numb:
+                # Under an e-stop nothing runs, the safety policy included.
+                if takeover and self.safety_name in pm.policies and not sp.is_numb and not sp.is_estopped:
                     if self._safety_elapsed is None:
                         self._safety_elapsed = 0.0
                         self._lying_for = 0.0
@@ -652,3 +656,19 @@ class LocomotionPipeline:
 
         return self.latest_targets
 
+
+
+def make_pipeline(node, **kwargs):
+    """The pipeline the drivers run: the C++ controller (quadruped_control) unless config.yaml's control.pipeline or
+    QUADRUPED_PIPELINE says "python". Without a quadruped_control build for this Python, the Python one."""
+    backend = os.environ.get("QUADRUPED_PIPELINE") or (load_config().get("control") or {}).get("pipeline", "cpp")
+    if backend == "cpp":
+        try:
+            from quadruped_control.pipeline import CppPipeline
+        except ImportError as e:
+            node.get_logger().warn(f"[LocomotionPipeline] C++ controller not available ({e}); using the Python pipeline.")
+        else:
+            return CppPipeline(node, **kwargs)
+    elif backend != "python":
+        node.get_logger().warn(f"[LocomotionPipeline] Unknown pipeline '{backend}'; using the Python pipeline.")
+    return LocomotionPipeline(node, **kwargs)

@@ -21,7 +21,7 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, Float32, Float32MultiArray
 import argparse
 import threading
-from quadruped_core.pipeline import LocomotionPipeline
+from quadruped_core.pipeline import make_pipeline
 from quadruped_core.config_loader import load_config
 from quadruped_core import paths
 from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
@@ -154,7 +154,7 @@ class Ros2MujocoDriver(Node):
         self._init_physics()
 
         # 2. Locomotion Pipeline
-        self.pipeline = LocomotionPipeline(
+        self.pipeline = make_pipeline(
             node=self,
             robot_type=robot_type,
             checkpoint=checkpoint,

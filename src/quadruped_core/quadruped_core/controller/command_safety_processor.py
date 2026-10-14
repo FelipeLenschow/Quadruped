@@ -366,6 +366,8 @@ class CommandSafetyProcessor:
     # ======================================================================
     def _recompute_safety_limits(self):
         """Recalculate all derived safety thresholds from current params."""
+        if getattr(self, "_rom_margin_pin", None) is not None:
+            self.rom_safety_margin = self._rom_margin_pin
         self.tilt_thresh = float(np.cos(np.radians(self.base_tilt_limit_deg)))
 
         # Joint ROM safe boundaries based on hard limits and safety margin fraction:
@@ -534,3 +536,16 @@ class CommandSafetyProcessor:
     @property
     def is_policy_blocked(self) -> bool:
         return self._policy_blocked
+
+    def clear_block(self, clear_reason=True):
+        """Drop the trip latch only, as ENTER after a trip does without touching numb."""
+        self._robot_safe = True
+        self._shutdown_logged = False
+        self._policy_blocked = False
+        if clear_reason:
+            self.trip_reason = ""
+
+    def pin_rom_margin(self, margin):
+        """Hold the joint ROM margin at this value whatever the supervisor sends (eval sweeps); None follows it again."""
+        self._rom_margin_pin = margin
+        self._recompute_safety_limits()

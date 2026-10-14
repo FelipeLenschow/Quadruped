@@ -65,7 +65,7 @@ from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
-from quadruped_core.pipeline import LocomotionPipeline
+from quadruped_core.pipeline import make_pipeline
 from quadruped_core.config_loader import load_config
 
 from isaaclab_assets.robots.unitree import (
@@ -150,7 +150,7 @@ class Ros2IsaacDriver(Node):
 
         # Handles internal policy inference, physics stepping,
         # and standardizes telemetry for ROS 2 monitoring.
-        self.pipeline = LocomotionPipeline(
+        self.pipeline = make_pipeline(
             node=self,
             robot_type=robot_type,
             checkpoint=checkpoint,

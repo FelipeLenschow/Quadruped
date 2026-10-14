@@ -7,8 +7,10 @@ from quadruped_bringup.launch_common import arg, flag, get, include, interface, 
 def setup(context):
     checkpoint = get(context, "checkpoint")
     net_interface = get(context, "interface")
+    # cpp: quadruped_real's driver, the control loop alone on its core; python: quadruped_drivers' (fallback).
+    package = "quadruped_real" if get(context, "driver") == "cpp" else "quadruped_drivers"
     actions = [node(
-        "quadruped_drivers", "real_driver",
+        package, "real_driver",
         f"--robot={get(context, 'robot')}",
         f"--obs_dim={get(context, 'obs_dim')}",
         f"--interface={net_interface}" if net_interface else "",
@@ -28,6 +30,7 @@ def setup(context):
 def generate_launch_description():
     return LaunchDescription([
         arg("robot", "go2"),
+        arg("driver", "cpp", "cpp (quadruped_real) or python (quadruped_drivers)"),
         *interface_args(),
         arg("checkpoint", "", "policy .pt; empty runs telemetry only"),
         arg("obs_dim", "45"),

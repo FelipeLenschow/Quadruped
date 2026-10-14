@@ -24,10 +24,11 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
     -o /usr/share/keyrings/ros-archive-keyring.gpg
 
 # 2. gcc 11 for the ROS packages below (Humble targets Ubuntu 22.04's gcc 11; MPPI needs it), plus build tools
+#    (Eigen and yaml-cpp: quadruped_control / quadruped_real)
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
     apt-get update && apt-get install -y --no-install-recommends \
-    gcc-11 g++-11 git wget curl libjpeg-dev libpng-dev zlib1g-dev && \
+    gcc-11 g++-11 git wget curl libjpeg-dev libpng-dev zlib1g-dev libeigen3-dev libyaml-cpp-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # 3. xtensor for MPPI: no 20.04 package, so the versions Ubuntu 22.04 ships (Humble's binaries use them)
@@ -91,8 +92,9 @@ RUN FIND='import importlib.util as u, sys; sys.exit(u.find_spec("tensorrt") is N
 
 # 9. Python packages, the same list as the laptop image, into the system Python 3.8 (no venv: the base's torch
 #    and ROS live there). NVIDIA's OpenCV Python binding goes, so cv2 is pip's as on the laptop; its C++
-#    libraries stay for cv_bridge.
-RUN dpkg -r --force-depends opencv-python && \
+#    libraries stay for cv_bridge. JetPack 5's TensorRT uses np.bool, gone in numpy 1.24.
+RUN echo "numpy==1.23.5" >> /opt/pip-constraints.txt && \
+    dpkg -r --force-depends opencv-python && \
     pip3 install --no-cache-dir --upgrade pip wheel && \
     pip3 install --no-cache-dir \
     "setuptools<80" \
