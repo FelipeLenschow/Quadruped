@@ -16,8 +16,8 @@ import mujoco
 import mujoco.viewer
 
 
-from quadruped_core.telemetry.estimator import rot_from_quat
-from quadruped_core import paths
+from quadruped_common.kinematics import rot_from_quat
+from quadruped_common import paths
 from quadruped_drivers.foot_contact_overlay import FootContactOverlay, FOOT_NAMES
 from quadruped_drivers.velocity_arrow_overlay import VelocityArrowOverlay
 from geometry_msgs.msg import Twist

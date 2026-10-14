@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>quadruped_common</name>
+  <version>0.1.0</version>
+  <description>Python helpers shared by every node: paths, config, realtime core, stance, kinematics (library, no nodes).</description>
+  <maintainer email="felipe10lenschow@gmail.com">Felipe Lenschow</maintainer>
+  <license>TODO: License declaration</license>
+  <exec_depend>quadruped_description</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

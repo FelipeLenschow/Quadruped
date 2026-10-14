@@ -20,6 +20,6 @@ Train from the repo root with `python launcher.py` -> train -> WalkTheseWays, or
 
     PYTHONPATH=source/walk_these_ways python scripts/rsl_rl/train.py --task=Go2-WTW --headless
 
-`Controller/policy_runner.py` recognises these runs from their `params/env.yaml` (layout `wtw`)
-and builds the stacked observation for MuJoCo and the robot. Pick the gait with
-`QUADRUPED_GAIT=trot|pace|bound|pronk` or `QUADRUPED_GAIT_CMD="height,freq,phase,offset,bound,swing,pitch,width"`.
+`quadruped_control`'s export recognises these runs from their `params/env.yaml` (layout `wtw`), and
+the C++ controller builds the stacked observation for MuJoCo and the robot. Pick the gait at runtime
+on `/gait_command` (`height,freq,phase,offset,bound,swing,pitch,width[,duty]`), e.g. from the gait or keyboard teleop.

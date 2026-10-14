@@ -12,11 +12,11 @@ import rclpy
 from rclpy.node import Node
 import argparse
 import threading
-from quadruped_core.pipeline import LocomotionPipeline
-from quadruped_core.config_loader import load_config
-from quadruped_core import paths
-from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
-from quadruped_core.controller.motor_model import Go2MotorModel
+from quadruped_control.driver_node import Pipeline
+from quadruped_common.config_loader import load_config
+from quadruped_common import paths
+from quadruped_common.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_drivers.motor_model import Go2MotorModel
 from quadruped_drivers import gait_metrics
 from rclpy.utilities import remove_ros_args
 
@@ -52,7 +52,7 @@ class MujocoEvaluator(Node):
         self._init_physics()
 
         # 2. Locomotion Pipeline
-        self.pipeline = LocomotionPipeline(
+        self.pipeline = Pipeline(
             node=self,
             robot_type=robot_type,
             checkpoint=checkpoint,
@@ -63,14 +63,14 @@ class MujocoEvaluator(Node):
             safety_switch=False,
         )
         # The sweep measures the response to a step command.
-        self.pipeline.command_slew.enabled = False
+        self.pipeline.set_slew_enabled(False)
 
         # 3. Arm the pipeline for an unattended sweep.
         #
         # Two things a Console operator would normally do, and nobody is at a console here:
         #
         #  a) Wait for the supervisor. The physics thread evaluates safety on its very first step;
-        #     if no heartbeat has arrived by then, CommandSafetyProcessor latches an emergency stop
+        #     if no heartbeat has arrived by then, the safety processor latches an emergency stop
         #     ("No supervisor heartbeat received yet") that only a console can clear, and the whole
         #     sweep then measures a limp robot -- silently, because the report still comes out
         #     well-formed and full of zeros. Waiting has to happen here, and has to spin the node
@@ -90,7 +90,7 @@ class MujocoEvaluator(Node):
         #     sweep. Guessing that way left every latched stop uncleared, and one ROM trip at
         #     x=1.0 m/s zeroed the rest of that sweep -- x=1.0 and the whole y and yaw axes.
         #
-        #     stdin is detached with it: CommandSafetyProcessor answers a latched stop by blocking
+        #     stdin is detached with it: the safety processor answers a latched stop by blocking
         #     on input() in a background thread, which on an inherited terminal swallows the
         #     keystrokes meant for the launcher. Reading /dev/null makes that thread give up at
         #     once, and this sweep needs no input of its own.
@@ -144,23 +144,12 @@ class MujocoEvaluator(Node):
         loses the occasional race -- and one lost race is a latched stop that ends the sweep. The
         safe joint bounds are only ever recomputed inside _recompute_safety_limits, so forcing the
         margin there closes the window completely."""
-        sp = self.pipeline.safety_processor
-        if getattr(sp, "_rom_margin_pinned", False):
-            return
-        original = sp._recompute_safety_limits
-
-        def pinned_recompute():
-            sp.rom_safety_margin = self.rom_margin
-            original()
-
-        sp._recompute_safety_limits = pinned_recompute
-        sp._rom_margin_pinned = True
-        pinned_recompute()
+        self.pipeline.safety_processor.pin_rom_margin(self.rom_margin)
 
     def _clear_safety_stop(self):
         """Stand in for the operator on the emergency stop.
 
-        CommandSafetyProcessor latches a stop on the first safety violation and clears it only when
+        the safety processor latches a stop on the first safety violation and clears it only when
         a human presses ENTER (its _reset_worker blocks on input()) or a console sends
         'safety = reset'. A sweep started from a launcher, a watcher or any pipe has no terminal,
         so input() raises EOFError, the latch never clears, and every commanded speed is measured on
@@ -179,10 +168,8 @@ class MujocoEvaluator(Node):
         sp = self.pipeline.safety_processor
         if not sp.is_policy_blocked:
             return
-        # Exactly what _reset_worker does when the operator hits ENTER.
-        sp._robot_safe = True
-        sp._shutdown_logged = False
-        sp._policy_blocked = False
+        # What the operator's ENTER does after a trip, keeping the reason for the report.
+        sp.clear_block(clear_reason=False)
         self.safety_resets += 1
         if self.safety_resets in (1, 10, 100) or self.safety_resets % 1000 == 0:
             print(f"[MujocoEvaluator] cleared safety stop #{self.safety_resets} "

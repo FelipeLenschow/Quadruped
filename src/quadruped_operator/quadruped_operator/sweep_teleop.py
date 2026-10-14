@@ -22,7 +22,7 @@ It measures nothing itself. Every state change goes out on /sweep/state as a JSO
 recording keeps that next to the telemetry, and Tools/sweep_report.py cuts the recording into
 segments afterwards.
 
-Runs in place of teleop_twist_joy, never beside it: two /cmd_vel sources fight, and real_driver.py
+Runs in place of teleop_twist_joy, never beside it: two /cmd_vel sources fight, and real_driver
 holds whatever it heard last. It refuses to start if /cmd_vel already has a publisher.
 """
 
@@ -41,8 +41,8 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool, String
 
-from quadruped_core import paths
-from quadruped_core.config_loader import load_config
+from quadruped_common import paths
+from quadruped_common.config_loader import load_config
 from rclpy.utilities import remove_ros_args
 
 # Same table as MujocoEvaluator._evaluation_loop in quadruped_drivers/eval_mujoco.py, copied rather than
@@ -413,7 +413,7 @@ class SweepTeleop(Node):
     def stop(self, reason):
         """Zero the command and close the session.
 
-        Published a few times with a flush window: real_driver.py keeps the last /cmd_vel it heard
+        Published a few times with a flush window: real_driver keeps the last /cmd_vel it heard
         for as long as it runs, so this message is what stops the robot."""
         if self._stopped:
             return

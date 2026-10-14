@@ -14,8 +14,8 @@ import mujoco
 import mujoco.viewer
 
 
-from quadruped_core.telemetry.estimator import rot_from_quat
-from quadruped_core import paths
+from quadruped_common.kinematics import rot_from_quat
+from quadruped_common import paths
 from rclpy.utilities import remove_ros_args
 
 class MujocoTwin(Node):

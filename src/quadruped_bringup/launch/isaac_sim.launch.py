@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch.actions import ExecuteProcess, OpaqueFunction, Shutdown
 
 from quadruped_bringup.launch_common import arg, common_args, flag, get, include, interface, interface_args, record, reward, reward_args
-from quadruped_core import paths
+from quadruped_common import paths
 
 
 def setup(context):

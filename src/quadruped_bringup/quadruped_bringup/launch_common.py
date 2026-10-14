@@ -7,7 +7,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-from quadruped_core import paths, realtime
+from quadruped_common import paths, realtime
 
 LAUNCH_DIR = os.path.join(get_package_share_directory("quadruped_bringup"), "launch")
 

@@ -26,8 +26,8 @@ IS_DOCKER = os.path.exists("/.dockerenv")
 IS_ROBOT = platform.machine().lower() in ["aarch64", "arm64"]
 
 if IS_ROBOT:
-    sys.path.insert(0, os.path.join(REPO_DIR, "src", "quadruped_core"))
-    from quadruped_core import realtime
+    sys.path.insert(0, os.path.join(REPO_DIR, "src", "quadruped_common"))
+    from quadruped_common import realtime
     realtime.avoid_reserved_core()
 
 def discovery_server_address():
@@ -785,9 +785,9 @@ def run_cli_menu():
         # the others (the eval viewer and the checkpoint list both read them in place), but they
         # carry their own rsl_rl scripts and no Quadruped task package. Train goes through its own
         # scripts/rsl_rl/train.py; the rest load the checkpoint through
-        # quadruped_core/controller/policy_runner.py, which reads rsl_rl archives directly.
+        # quadruped_control/export.py, which reads rsl_rl archives directly.
         # Deploy is one of them: its run's params/deploy.yaml (kp 25, kd 0.5, 50 Hz, action
-        # scale 0.25, default pose) matches what real_driver.py and robot_defaults.py apply.
+        # scale 0.25, default pose) matches what real_driver and robot_defaults.py apply.
         if action not in ("train", "eval_policy", "mujoco", "gazebo", "mujoco_twin", "real_deploy", "teleop_sweep"):
             modules = [m for m in modules if not is_rsl_rl_module(os.path.join(TASKS_DIR, m))]
         
@@ -1566,7 +1566,7 @@ def main():
             cmd = [sys_python, bridge_script] + list(sweep_opts.get("recordings", []))
 
         elif action == "test_joints":
-            cmd = ros2_run("quadruped_drivers", "test_joints")
+            cmd = ros2_run("quadruped_real", "test_joints")
             sdk_iface = sdk_network_interface()
             if sdk_iface:
                 cmd.append(f"--interface={sdk_iface}")

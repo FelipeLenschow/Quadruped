@@ -71,23 +71,12 @@ RUN apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=fa
 # 4. Create a workspace
 WORKDIR /app
 
-# 5. Pre-compile CycloneDDS (0.10.x) for Unitree SDK compatibility
-RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x /tmp/cyclonedds && \
-    mkdir -p /tmp/cyclonedds/build && cd /tmp/cyclonedds/build && \
-    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && \
-    cmake --build . --target install && \
-    rm -rf /tmp/cyclonedds
-
-# 6. Setup Python Virtual Environment (Allow access to system site-packages for Gazebo bindings)
+# 5. Setup Python Virtual Environment (Allow access to system site-packages for Gazebo bindings)
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv --system-site-packages $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# 6.5 Define paths for CycloneDDS (required for pip install cyclonedds)
-ENV CYCLONEDDS_HOME=/usr/local
-ENV LD_LIBRARY_PATH="/usr/local/lib"
-
-# 7. Install Python dependencies (Robot + Sim2Sim)
+# 6. Install Python dependencies (Robot + Sim2Sim)
 # Upgrading pip and installing wheel first is good practice
 # torch's CUDA 12.6 build: the default (CUDA 13) needs NVIDIA driver 580+, this one runs on 525+
 RUN pip install --no-cache-dir --upgrade pip wheel && \
@@ -95,7 +84,6 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
     pip install --no-cache-dir \
     "setuptools<80" \
     protobuf==3.20.3 \
-    cyclonedds==0.10.2 \
     numpy \
     pyyaml \
     scipy \
@@ -112,17 +100,17 @@ RUN pip install --no-cache-dir --upgrade pip wheel && \
     pip install --no-cache-dir opencv-python-headless && \
     python -c "import cv2, torch, torchvision, ultralytics; print(cv2.__version__, torch.__version__, ultralytics.__version__)"
 
-# 8. Set environment variables for Domain Isolation and Protobuf compatibility
+# 7. Set environment variables for Domain Isolation and Protobuf compatibility
 ENV ROS_DOMAIN_ID=1
 ENV ROS_LOCALHOST_ONLY=0
 ENV PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 
-# 9. Source ROS 2 automatically when entering the container
+# 8. Source ROS 2 automatically when entering the container
 RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 RUN echo "source /opt/venv/bin/activate" >> ~/.bashrc
 RUN echo '[ -f /app/Tools/ros_env.sh ] && source /app/Tools/ros_env.sh' >> ~/.bashrc
 
-# 10. Customize the bash prompt so you know you are inside the Docker container
+# 9. Customize the bash prompt so you know you are inside the Docker container
 RUN echo 'export PS1="(Quadruped-Docker) \[\033[01;32m\]\u@docker\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]# "' >> ~/.bashrc
 
 # The repo is mounted from the host and owned by another user: let git work on it as root

@@ -18,7 +18,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
-from quadruped_core import paths
+from quadruped_common import paths
 
 NAME = re.compile(r"[A-Za-z0-9_-]{1,40}")
 # map_server reads a pixel as free below free_thresh: 0.196 keeps unknown's grey 205 ((255 - 205) / 255) unknown.

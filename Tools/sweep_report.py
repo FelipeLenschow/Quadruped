@@ -35,22 +35,16 @@ import json
 import glob
 import time
 import argparse
-import importlib.util
 
 import numpy as np
 from mcap_ros2.reader import read_ros2_messages
 
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(REPO_DIR, "src", "quadruped_core"))
+sys.path.insert(0, os.path.join(REPO_DIR, "src", "quadruped_common"))
 
-# By path: importing the telemetry package runs its __init__, which pulls the estimator in too.
-# kinematics.py itself needs only numpy and yaml.
-_spec = importlib.util.spec_from_file_location(
-    "go2_kinematics", os.path.join(REPO_DIR, "src", "quadruped_core", "quadruped_core", "telemetry", "kinematics.py"))
-_kin = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_kin)
+from quadruped_common import kinematics as _kin  # noqa: E402  (needs only numpy and yaml)
 
-# Isaac order, the one quadruped_core/telemetry/kinematics.py indexes as [leg, leg + 4, leg + 8].
+# Isaac order, the one quadruped_common/kinematics.py indexes as [leg, leg + 4, leg + 8].
 JOINT_ORDER = [
     "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
     "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
@@ -317,7 +311,7 @@ def measure(seg, settle_s=0.0):
             if len(stance) and len(swing):
                 lift[f] = max(0.0, float(swing.max() - np.median(stance)))
 
-    # --- FSR load in counts, gated exactly as real_driver.py gates contact ---
+    # --- FSR load in counts, gated exactly as real_driver gates contact ---
     fsr_mean = fsr_peak = None
     sf = _window(rec.fsr_t, t0, t1)
     cal = [d for t, d in rec.calibration if t <= t1 and len(d) >= 5]

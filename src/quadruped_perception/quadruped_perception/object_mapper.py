@@ -30,7 +30,7 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
-from quadruped_core.config_loader import load_config
+from quadruped_common.config_loader import load_config
 from quadruped_perception.camera_lidar_check import pixel_ray, project, xyz
 from quadruped_perception.lidar_filter import rotation
 from quadruped_perception.object_detector import label_color

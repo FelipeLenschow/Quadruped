@@ -11,7 +11,7 @@ import os
 import sys
 
 # Isaac Sim's Python 3.12 cannot load the colcon install, so the library is imported from src/.
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", "quadruped_core")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src", "quadruped_common")))
 
 import time
 import numpy as np
@@ -65,8 +65,8 @@ from isaaclab.assets import Articulation, ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
-from quadruped_core.pipeline import LocomotionPipeline
-from quadruped_core.config_loader import load_config
+from quadruped_control.driver_node import Pipeline
+from quadruped_common.config_loader import load_config
 
 from isaaclab_assets.robots.unitree import (
     UNITREE_A1_CFG,
@@ -150,7 +150,7 @@ class Ros2IsaacDriver(Node):
 
         # Handles internal policy inference, physics stepping,
         # and standardizes telemetry for ROS 2 monitoring.
-        self.pipeline = LocomotionPipeline(
+        self.pipeline = Pipeline(
             node=self,
             robot_type=robot_type,
             checkpoint=checkpoint,

@@ -8,7 +8,7 @@ def setup(context):
     checkpoint = get(context, "checkpoint")
     net_interface = get(context, "interface")
     actions = [node(
-        "quadruped_drivers", "real_driver",
+        "quadruped_real", "real_driver",
         f"--robot={get(context, 'robot')}",
         f"--obs_dim={get(context, 'obs_dim')}",
         f"--interface={net_interface}" if net_interface else "",
@@ -16,7 +16,7 @@ def setup(context):
         main=True,
     )]
     if flag(context, "sensors"):
-        actions.append(node("quadruped_drivers", "real_sensors", f"--interface={net_interface}" if net_interface else ""))
+        actions.append(node("quadruped_real", "real_sensors", f"--interface={net_interface}" if net_interface else ""))
     if flag(context, "monitor"):
         actions.append(node("quadruped_drivers", "system_monitor"))
     actions += interface(context)

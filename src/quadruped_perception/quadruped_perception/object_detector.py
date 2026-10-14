@@ -30,8 +30,8 @@ from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 
-from quadruped_core import paths
-from quadruped_core.config_loader import load_config
+from quadruped_common import paths
+from quadruped_common.config_loader import load_config
 
 JPEG = "bgr8; jpeg compressed bgr8"
 DRAW_WIDTH = 640

@@ -24,9 +24,9 @@ from sensor_msgs.msg import JointState, Imu
 from geometry_msgs.msg import Twist, Vector3
 import time
 
-from quadruped_core.controller.kinematics import Kinematics
-from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
-from quadruped_core import paths
+from quadruped_common.kinematics import Go2Kinematics
+from quadruped_common.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_common import paths
 
 # Terms that exist in training but have no robot-side signal. Published as 0.0.
 UNAVAILABLE_TERMS = (
@@ -87,8 +87,8 @@ def quat_to_projected_gravity(qx, qy, qz, qw):
     if n < 1e-9:
         return np.array([0.0, 0.0, -1.0])
     qx, qy, qz, qw = qx / n, qy / n, qz / n, qw / n
-    # R^T @ [0, 0, -1] is just the negated third ROW of R, matching the quat_to_rot_matrix
-    # convention used by policy_runner (quaternion ordered w, x, y, z).
+    # R^T @ [0, 0, -1] is just the negated third ROW of R, matching the rot_from_quat
+    # convention used by the policies (quaternion ordered w, x, y, z).
     return np.array(
         [
             -(2.0 * qx * qz - 2.0 * qw * qy),
@@ -146,7 +146,7 @@ class RewardEstimatorNode(Node):
             f"-- these publish 0.0 and are excluded from the total."
         )
 
-        self.kin = Kinematics(self.robot_type)
+        self.kin = Go2Kinematics()
         self.action_scale = float(self.env_cfg.get('action_scale', 0.25))
         self.default_qpos = DEFAULT_STANCE_QPOS.astype(np.float64)
 
@@ -336,7 +336,7 @@ class RewardEstimatorNode(Node):
         # the landing step. Split into the two scales the env uses -- penalty on the mismatch
         # (negative scale) and reward on the match (positive scale) -- rather than the single
         # rew_scale_foot_height_exp of the older reward set, which no longer exists.
-        foot_positions = self.kin.get_foot_positions(self.q)
+        foot_positions = np.array([self.kin.foot_position_body(leg, self.q[[leg, leg + 4, leg + 8]]) for leg in range(4)])
         foot_heights_z = foot_positions[:, 2] + 0.30
         target_fh = float(self._rew('target_foot_height', 0.1))
         sigma_fh = max(float(self._rew('foot_height_sigma', 0.01)), 1e-9)

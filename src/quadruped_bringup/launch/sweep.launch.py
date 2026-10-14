@@ -3,7 +3,7 @@ from launch.actions import OpaqueFunction
 from launch_ros.actions import Node
 
 from quadruped_bringup.launch_common import arg, common_args, get, node, record
-from quadruped_core import paths
+from quadruped_common import paths
 
 
 def setup(context):

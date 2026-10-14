@@ -5,14 +5,14 @@ Per camera <name>: /camera/<name>/image_raw/compressed, /camera/<name>/image_raw
 subscribed) and the mount TF. /cameras lists them with their preview settings (JSON, latched). Nothing is read
 or encoded while nobody subscribes. camera_calibration's Commit (/camera/<name>/set_camera_info) writes the
 calibration yaml. /camera/<name>/preview/settings ({"rate": Hz, "width": px}, JSON) changes the preview until
-the bridge restarts.
+the bridge restarts. Cameras with source: unitree come from quadruped_real's go2_camera (the Go2's videohub),
+subscribed to only while one of the camera's own topics is.
 """
 
 import argparse
 import array
 import json
 import os
-import sys
 import threading
 import time
 
@@ -28,8 +28,8 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from sensor_msgs.srv import SetCameraInfo
 from std_msgs.msg import String
 
-from quadruped_core import paths
-from quadruped_core.config_loader import load_config
+from quadruped_common import paths
+from quadruped_common.config_loader import load_config
 from quadruped_drivers.sensor_mounts import optical_frame, publish_static_tf
 
 JPEG = "bgr8; jpeg compressed bgr8"
@@ -37,6 +37,7 @@ PNG16 = "mono16; png compressed mono16"
 STALE_S = 2.0
 PREVIEW_RATE = (0.2, 15.0)
 PREVIEW_WIDTH = (80, 1280)
+GO2_CAMERA_TOPIC = "/go2_camera/image/compressed"  # go2_camera.cpp's kTopic
 RAW_ENCODINGS = {"rgb8": (np.uint8, 3), "bgr8": (np.uint8, 3), "mono8": (np.uint8, 1), "mono16": (np.uint16, 1),
                  "16UC1": (np.uint16, 1), "32FC1": (np.float32, 1)}
 
@@ -75,26 +76,6 @@ def save_camera_info(path, info, name):
                        f, default_flow_style=None, sort_keys=False)
 
 
-class UnitreeSource:
-    """The Go2's front camera: one JPEG per videohub request."""
-
-    def __init__(self, cfg):
-        from unitree_sdk2py.go2.video.video_client import VideoClient
-        self.client = VideoClient()
-        self.client.SetTimeout(float(cfg.get("timeout", 1.0)))
-        self.client.Init()
-
-    def read(self):
-        code, data = self.client.GetImageSample()
-        return {"data": bytes(data), "format": JPEG} if code == 0 and data else None
-
-    def idle(self):
-        pass
-
-    def close(self):
-        pass
-
-
 class V4l2Source:
     """Any camera OpenCV opens: USB/UVC webcams, and thermal cameras that give 16-bit frames (fourcc Y16)."""
 
@@ -123,7 +104,7 @@ class V4l2Source:
         self.cap.release()
 
 
-SOURCES = {"unitree": UnitreeSource, "v4l2": V4l2Source}
+SOURCES = {"v4l2": V4l2Source}
 
 
 class Camera:
@@ -155,6 +136,7 @@ class Camera:
                 self.log.warn(f"{name}: no calibration at {self.calibration}, no camera_info until one is saved")
 
         self.source = None
+        self.go2_sub = None
         self.stop = threading.Event()
         topic = cfg.get("sim_topic") if sim else cfg.get("topic")
         source = "ros" if sim else cfg.get("source", "unitree")
@@ -163,10 +145,14 @@ class Camera:
             node.create_subscription(CompressedImage if compressed else Image, topic,
                                      self._compressed_cb if compressed else self._raw_cb, 2)
             self.thread = None
+        elif source == "unitree":
+            topic = GO2_CAMERA_TOPIC
+            node.create_timer(0.5, self._follow_go2)
+            self.thread = None
         else:
             self.source = SOURCES[source](cfg)
             self.thread = threading.Thread(target=self._run, daemon=True)
-        self.log.info(f"{name}: {source}{' ' + topic if source == 'ros' else ''} -> {base}/..., "
+        self.log.info(f"{name}: {source}{' ' + topic if source in ('ros', 'unitree') else ''} -> {base}/..., "
                       f"{1 / self.period:.0f} Hz, preview {self.preview_width} px {1 / self.preview_period:.1f} Hz")
 
     def describe(self):
@@ -222,6 +208,17 @@ class Camera:
                 continue
             self.publish(**frame)
             self.stop.wait(max(0.0, self.period - (time.monotonic() - t0)))
+
+    def _follow_go2(self):
+        """Subscribed to go2_camera only while watched: it asks the robot for a frame only while subscribed."""
+        watched = self._watched()
+        if watched and self.go2_sub is None:
+            self.go2_sub = self.node.create_subscription(CompressedImage, GO2_CAMERA_TOPIC, self._compressed_cb, 2)
+        elif not watched and self.go2_sub is not None:
+            self.node.destroy_subscription(self.go2_sub)
+            self.go2_sub = None
+        if watched:
+            self._check_stale(time.monotonic())
 
     def _check_stale(self, now):
         if self.last_frame and not self.stale and now - self.last_frame > STALE_S:
@@ -367,7 +364,6 @@ class CameraBridge(Node):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--interface", default=None, help="network interface for the Unitree SDK")
     ap.add_argument("--sim", action="store_true", help="Gazebo: read each camera's sim_topic")
     ap.add_argument("--only", default="", help="comma-separated camera names (default all)")
     ap.add_argument("--base_frame", default="base")
@@ -384,14 +380,6 @@ def main():
         return
 
     if not args.sim:
-        if any(c.get("source", "unitree") == "unitree" for c in cams.values()):
-            from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-            os.environ.pop("CYCLONEDDS_URI", None)
-            try:
-                ChannelFactoryInitialize(0, networkInterface=args.interface)
-            except Exception as e:
-                print(f"[SDK2] Failed to initialize ChannelFactory: {e}")
-                sys.exit(1)
         os.environ["ROS_DOMAIN_ID"] = str(cfg.get("network", {}).get("ros_domain_id", "1"))
 
     rclpy.init()

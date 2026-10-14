@@ -7,7 +7,7 @@ Gait teleop - Walk These Ways gait commands from the gamepad (F710 in X mode), b
     LT / RT                 duty (stance share) -/+ duty_step
 
 Publishes the 9 gait commands [height, frequency, phase, offset, bound, swing, pitch, width, duty] on
-/gait_command, which LocomotionPipeline hands to a WTW policy (PolicyRunner clamps them to the ranges
+/gait_command, which the controller hands to a WTW policy (the policy runner clamps them to the ranges
 the run trained on, snaps the gait to one it trained, and drops duty for a run without it). The right
 stick's other axis is yaw in joy_f710.config.yaml; its up/down axis, the D-pad and the triggers are not
 used by teleop_twist_joy or by the console's e-stop buttons.

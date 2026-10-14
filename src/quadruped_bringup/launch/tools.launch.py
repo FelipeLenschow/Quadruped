@@ -6,7 +6,7 @@ from launch.actions import ExecuteProcess, OpaqueFunction, Shutdown
 from launch_ros.actions import Node
 
 from quadruped_bringup.launch_common import arg, get
-from quadruped_core import paths
+from quadruped_common import paths
 
 TOOLS = {
     "plotjuggler": ("plotjuggler", "plotjuggler"),

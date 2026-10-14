@@ -3,7 +3,7 @@
 Goal: the Go2 explores on its own, finds cones, sniffs them and pees on them, driven by an LLM over MCP.
 
 Each phase ends with a test on the real robot. Phases are in order; each one needs the one before.
-Each lists what is left **to build** (code) and what is left **to test on the robot**.
+Each lists what is left **to build** (code); what is left to test on the robot is in [ROBOT_TESTS.md](ROBOT_TESTS.md).
 
 ## Phase 1: Real-robot navigation (now)
 
@@ -16,21 +16,7 @@ Working: the L1 lidar (mount, yaw, range offset, leg filter), SLAM in a room, an
       `ros2 topic pub --once /map/save std_msgs/msg/String "data: room1"`.
 - [x] **Keepout zones:** `scripts/make_keepout_mask.py` on a saved map.
 
-**To test on the robot:**
-- [ ] **Save a map** of a room from the app, and find it in [N].
-- [ ] **Big loop.** Walk one large loop (a corridor, or around a building) and check:
-  - when the robot gets back to the start, the map closes without a doubled wall;
-  - how far the pose drifted before SLAM corrected it.
-  If leg odometry drifts badly, compare it with Point-LIO's (`/lio/odom`).
-- [ ] **Keepout zones** on the saved map: Nav2 plans around them.
-- [ ] **Localize on the saved map:**
-  1. AMCL with a known start pose.
-  2. Unknown start pose plus the `localize` skill. Never confirmed, not even in Gazebo, so try Gazebo first.
-- [ ] **Goals and obstacles:** several goals on the saved map from the app, then someone stepping into the path.
-- [ ] **Jetson load:** the app's CPU/GPU/RAM with the policy, SLAM or AMCL, and Nav2 all running.
-- [ ] **Lidar checks:**
-  - the 12 cm range offset, against walls to the side and behind at tape-measured distances;
-  - narrowing the body box back from ±0.35 m toward ±0.25 m, now that the leg filter exists.
+**To test:** see [ROBOT_TESTS.md](ROBOT_TESTS.md).
 
 **Done when:** the robot reaches 10 goals in a row across the saved map with no help.
 
@@ -56,19 +42,7 @@ Working: the L1 lidar (mount, yaw, range offset, leg filter), SLAM in a room, an
       clouds on the image, coloured by distance, on `/camera/front/lidar_check/compressed` (2 Hz); view it in
       `rqt_image_view`. Checked in sim on a synthetic cloud: points land on their projected pixels.
 
-**To test on the robot:**
-- [ ] **Bridge:** the front camera's resolution and rate, and the Jetson CPU with it running. Needs the Docker
-      image rebuilt (OpenCV, `camera_calibration`, `image_transport_plugins`, `rqt_image_view`).
-- [ ] **Calibration:** checkerboard with `camera_calibration`; its Commit button saves `calibration/front.yaml`
-      through the bridge's `set_camera_info`. Run it on a laptop on the robot's Ethernet (full-rate JPEGs over
-      Wi-Fi starve the heartbeat), decoding there rather than pulling the robot's raw `image_raw`:
-      `ros2 run image_transport republish compressed raw --ros-args -r in/compressed:=/camera/front/image_raw/compressed -r out:=/calib/image`,
-      then `ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 --ros-args -r image:=/calib/image -p camera:=/camera/front`.
-      If the lens is too wide for `plumb_bob`, try camera_calibration's fisheye model; the bridge stores it and
-      `camera_lidar_check` handles `equidistant`.
-- [ ] **Camera mount:** the lidar points land on the objects in the image.
-- [ ] **Preview rate:** the app's preview doesn't load the Wi-Fi: 0 heartbeats lost in the camera tab at each
-      rate and width, to find the largest that is safe.
+**To test:** see [ROBOT_TESTS.md](ROBOT_TESTS.md).
 
 **Done when:** a lidar point on a cone lands on the cone in the image.
 
@@ -83,7 +57,7 @@ YOLOE, an open-vocabulary YOLO: its prompt-free model names objects from a built
 **To build:**
 - [x] **GPU in the robot's Docker:** [Docker/Dockerfile.jetson](Docker/Dockerfile.jetson), see
       [GPU on the robot](#gpu-on-the-robot-ros-with-cuda-torch) below. Built on the laptop under QEMU (about 1.5 h,
-      7 GB): everything builds and imports. Not run on the robot yet (no GPU or DDS under QEMU).
+      7 GB); runs on the robot with the GPU (2026-10-14).
 - [x] **`object_detector` node:** `/camera/<name>/image_raw/compressed` → `/camera/<name>/detections`
       (JSON boxes) and `/camera/<name>/detections/image/compressed`; `--export` builds the TensorRT engine.
       `camera.launch.py detect:=true`, or [I] in the launcher. About 12 ms per image on the laptop's GPU.
@@ -98,11 +72,7 @@ YOLOE, an open-vocabulary YOLO: its prompt-free model names objects from a built
         labelled by hand.
   - [ ] **Model:** fine-tune YOLOE on them, exported to TensorRT on the Jetson.
 
-**To test on the robot:**
-- [ ] **Build the GPU image** on the robot; `torch.cuda.is_available()` is `True` inside it.
-- [ ] **Everything else still works** in the new image: driver, Nav2, SLAM, Point-LIO, the app.
-- [ ] **Detection** in different light, and with other orange things around.
-- [ ] **Speed:** FPS of the TensorRT engine on the Jetson, and CPU/GPU/RAM while Nav2 runs.
+**To test:** see [ROBOT_TESTS.md](ROBOT_TESTS.md).
 
 **Done when:** the camera tab shows boxes on the real robot's objects, at the detector's rate.
 
@@ -143,9 +113,7 @@ on the map", with [N] running. Needs the camera calibrated (`calibration/front.y
       are odd with the prompt-free model ("extrude", "stupa"); with `classes: [traffic cone, box, pillar, wall]`
       it is "traffic cone" and nothing else gets mapped. A cone behind an obstacle is not mapped (correct).
 
-**To test on the robot:**
-- [ ] **Positions:** objects on the map against tape-measured positions.
-- [ ] **Moving robot:** positions stay put while it walks and turns.
+**To test:** see [ROBOT_TESTS.md](ROBOT_TESTS.md).
 
 **Done when:** every cone in a room appears on the map within about 20 cm.
 
@@ -169,17 +137,11 @@ All skills go through `/skill`. Two kinds:
       `Wiggle`. Measured in Isaac: Sniff bobs ±0.058 rad every ~1.05 s, Wiggle swings ±0.095 rad every ~0.6 s.
 - [x] **App:** a Trick card in the Drive tab while a trick policy runs, hold to do it (`trick_switches` in
       `/robot_state`).
-- [ ] **MuJoCo check:** each trick through `skill_server` and through the app, walker → trick → walker.
 - [ ] **`go_to_cone`:** a Nav2 goal about 0.5 m from the cone, facing it.
 - [ ] **`explore`:** frontier exploration, so the robot finds cones in an unknown place.
 - [ ] **`follow_me`:** track the person's legs in the lidar beside the robot, published on `/cmd_vel/skill`.
 
-**To test on the robot:**
-- [ ] **Tricks**, after MuJoCo: the walker → trick → walker switches are smooth, and `pee` holds the leg up
-      without tipping.
-- [ ] **`go_to_cone`** from different starts and angles.
-- [ ] **`explore`** in a room it has never mapped.
-- [ ] **`follow_me`** with one person, then with others nearby.
+**To test:** see [ROBOT_TESTS.md](ROBOT_TESTS.md).
 
 **Done when:** go to cone → sniff → pee works on the real robot.
 
@@ -198,9 +160,7 @@ All skills go through `/skill`. Two kinds:
   - the app's e-stop and the joystick always win.
 - [ ] **A "having fun" prompt:** explore, pick a cone, go sniff it, sometimes pee, then repeat.
 
-**To test on the robot:**
-- [ ] **Override:** the app's e-stop and the joystick take over from the LLM mid-skill.
-- [ ] **Wi-Fi drops:** the robot stops safely when the laptop goes out of range.
+**To test:** see [ROBOT_TESTS.md](ROBOT_TESTS.md).
 
 **Done when:** 10 minutes of finding, sniffing and peeing on cones with no human input.
 
@@ -272,21 +232,7 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
       `/odom`'s velocity if LIO leaves it empty. Gazebo keeps leg odometry, since its lidar has no point times.
 - [ ] Items 1-4 of **What builds on it**, below.
 
-**To test (bags or robot):**
-- [ ] **Raw scans.** Unitree's clouds carry about 59k points/s against the L1's 21.6k, so they overlap or are
-      preprocessed. LIO may need the raw scans instead.
-- [ ] **Same data as Unitree's driver.** Point-LIO's L1 config expects the cloud and IMU as `unilidar_sdk`
-      publishes them. Compare the Go2's DDS cloud with that: frame, point-time units, IMU rate.
-
-**To test on the robot** (everything from 2026-10-08 on was checked on replayed bags only):
-- [ ] **Starts:** several [L] starts in a row, robot still for ~1 s each: no spinning map.
-- [ ] **Level floor:** the floor is flat in the app's 3D tab (body accelerometer), and the floor in front of
-      the robot is filled in (body crop).
-- [ ] **Doors and people:** open a door or walk past; their voxels clear in ~5 s.
-- [ ] **Long run:** 10 minutes at 5 cm voxels: the voxel count levels off, the heartbeat never drops (no
-      "Supervisor heartbeat lost"), and `lio_map_stream` stays around 10-15% of a core.
-- [ ] **Save the 3D map** ([L], save on exit) and look at the PCD.
-- [ ] **Big loop with Point-LIO:** how far `/lio/odom` is off when back at the start.
+**To test:** see [ROBOT_TESTS.md](ROBOT_TESTS.md).
 
 **What builds on it:**
 1. **Odometry for Nav2: fuse, don't replace.** A filter blends legs + IMU with Point-LIO when it runs, and
@@ -372,8 +318,7 @@ checks and the robot goes numb once lying; the app and console pick policies and
 - [x] **Safety lie-down**, then numb (lying: level, near `lie_flat`, still for 1 s; or after 10 s).
 - [x] **Numb** on `/safety/numb`, released from the app or console into pose mode.
 - [x] **App and console**: policy picker, Numb / Release numb, banner.
-- [ ] **Real robot**, on the rope first: a heartbeat cut while standing, then while walking; Numb and release.
-- [ ] **Load time and RAM** per policy on the Jetson, and whether the background load shows up as control-loop jitter.
+- [x] **Real robot** (2026-10-14): heartbeat cuts standing and walking, Numb and release, load time and RAM.
 - [ ] **Per-policy action scale and default pose** from each run's `params/deploy.yaml` (today the same for all,
       which the current ones share).
 - [ ] **Skills** (`skill_server`): use `Reco2` after a fall, and `Lie2` for `lie`.
@@ -383,9 +328,8 @@ checks and the robot goes numb once lying; the app and console pick policies and
 - **CPU, GPU, RAM and temperature in the app: done.** `system_monitor` publishes `/system_stats` at 1 Hz,
   shown in the app's Robot tab.
 
-- **SSH terminal in the app: built, not yet tried on the robot.** Shell tab, see `Android/README.md`.
-  Still to check: `sshd` and the login user on the Go2's Jetson (the app defaults to `unitree@10.42.0.1`).
-  The terminal can press ENTER on the driver, which releases an e-stop from the phone; not blocked.
+- **SSH terminal in the app: built, not yet tried on the robot** (see ROBOT_TESTS.md). Shell tab, see
+  `Android/README.md`. The terminal can press ENTER on the driver, which releases an e-stop from the phone; not blocked.
 - **Grow a saved map.** `map_save` writes only the `.pgm/.yaml` picture, which slam_toolbox cannot continue
   from. Also call `/slam_toolbox/serialize_map` on save (`.posegraph` + `.data`), and add an `extend:=<name>`
   arg to `nav.launch.py` that starts slam_toolbox in mapping mode from that pose graph (`map_file_name`,
