@@ -86,7 +86,7 @@ class DriverNode : public rclcpp::Node {
 
   HeartbeatStats heartbeat_stats_;
   std::mutex stats_mutex_;
-  std::atomic<bool> estop_{false}, blocked_{false}, stdin_ok_{true};
+  std::atomic<bool> estop_{false}, blocked_{false}, numb_{false}, stdin_ok_{true};
   bool last_estop_ = false;
   double state_period_ = 0.1, state_time_ = 0.0;
   double odom_height_ = 0.33;
@@ -101,6 +101,11 @@ class DriverNode : public rclcpp::Node {
   std::mutex light_mutex_;
   std::condition_variable light_cv_;
   std::optional<int> light_request_;
+  std::optional<std::string> color_request_;
+  std::string color_, sent_color_;  // policy blue, pose green, e-stop / numb / trip red
+  double color_time_ = 0.0;
+  std::atomic<bool> color_warned_{false};
+  static constexpr int kColorHold = 3;
   bool light_stop_ = false;
   std::thread light_thread_;
 

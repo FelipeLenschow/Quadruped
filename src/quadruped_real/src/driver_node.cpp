@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 
 #include <ament_index_cpp/get_package_prefix.hpp>
@@ -303,12 +304,18 @@ void DriverNode::light_worker() {
   // VUI calls are RPCs with a timeout: kept off the ROS thread and off the control loop.
   std::unique_lock<std::mutex> lock(light_mutex_);
   while (true) {
-    light_cv_.wait(lock, [this] { return light_stop_ || light_request_; });
+    light_cv_.wait(lock, [this] { return light_stop_ || light_request_ || color_request_; });
     if (light_stop_) return;
-    const int level = *light_request_;
+    const std::optional<int> level = light_request_;
+    const std::optional<std::string> color = color_request_;
     light_request_.reset();
+    color_request_.reset();
     lock.unlock();
-    loop_.robot().set_brightness(level);
+    if (level) loop_.robot().set_brightness(*level);
+    if (color && loop_.robot().set_color(*color, kColorHold) != 0 && !color_warned_) {
+      color_warned_ = true;
+      RCLCPP_WARN(get_logger(), "[RealDriver] The robot refused the light color (vui api 1007); the colors stay its own.");
+    }
     lock.lock();
   }
 }
@@ -462,11 +469,14 @@ std::unique_ptr<qc::Controller> DriverNode::make_controller(const std::string& c
 // ---- operator ----
 
 void DriverNode::stdin_loop() {
+  // ros2 launch hands its nodes a stdin nobody types into; the terminal itself is still theirs.
+  std::ifstream tty("/dev/tty");
+  std::istream& in = tty.is_open() ? static_cast<std::istream&>(tty) : std::cin;
   std::string line;
-  while (std::getline(std::cin, line)) {
+  while (std::getline(in, line)) {
     if (estop_) {
       send(at(Command::Kind::ReleaseEstop));
-    } else if (blocked_) {
+    } else if (blocked_ || numb_) {
       send(at(Command::Kind::ReleaseTrip));
       std::cout << kYellow << kBold << ">>> Safety RESET. Re-enabling main policy..." << kReset << std::endl;
       RCLCPP_INFO(get_logger(), "[Safety] Operator pressed ENTER. Main policy re-enabled.");
@@ -477,11 +487,17 @@ void DriverNode::stdin_loop() {
 
 void DriverNode::update_brightness() {
   const int want = loop_.desired_brightness();
-  if (want < 0 || want == brightness_) return;
-  brightness_ = want;
+  // The color lasts kColorHold seconds on the robot, so it is sent again before it runs out.
+  const double now = steady_now();
+  const bool resend_color = !color_.empty() && !color_warned_ && (color_ != sent_color_ || now - color_time_ >= kColorHold - 1.0);
+  if ((want < 0 || want == brightness_) && !resend_color) return;
   {
     std::lock_guard<std::mutex> lock(light_mutex_);
-    light_request_ = want;
+    if (want >= 0 && want != brightness_) light_request_ = brightness_ = want;
+    if (resend_color) {
+      color_request_ = sent_color_ = color_;
+      color_time_ = now;
+    }
   }
   light_cv_.notify_one();
 }
@@ -512,6 +528,8 @@ void DriverNode::handle(const Snapshot& s) {
   }
   estop_ = s.estop;
   blocked_ = s.blocked;
+  numb_ = s.numb;
+  color_ = s.estop || s.numb || s.blocked ? "red" : s.mode == "pose" ? "green" : "blue";
   if (s.estop != last_estop_) {
     std_msgs::msg::Bool b;
     b.data = s.estop;

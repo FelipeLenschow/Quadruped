@@ -90,6 +90,8 @@ RUN echo "numpy==1.23.5" >> /opt/pip-constraints.txt && \
     pip3 install --no-cache-dir --upgrade pip wheel && \
     pip3 install --no-cache-dir \
     "setuptools<80" \
+    "colcon-core>=0.18.4" \
+    "empy<4" \
     protobuf==3.20.3 \
     numpy \
     pyyaml \

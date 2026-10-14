@@ -1,5 +1,7 @@
 #include "paths.hpp"
 
+#include <unistd.h>
+
 #include <climits>
 #include <cstdlib>
 
@@ -12,6 +14,16 @@ namespace {
 std::string dirname(const std::string& p) {
   const auto slash = p.find_last_of('/');
   return slash == std::string::npos ? "." : p.substr(0, slash);
+}
+
+// The folder holding src/quadruped_bringup, above the first start that has one; "." when none does.
+std::string find_repo(const std::initializer_list<std::string>& starts) {
+  for (std::string dir : starts) {
+    for (; !dir.empty() && dir != "."; dir = dirname(dir)) {
+      if (::access((dir + "/src/quadruped_bringup/package.xml").c_str(), F_OK) == 0) return dir;
+    }
+  }
+  return ".";
 }
 
 }  // namespace
@@ -39,8 +51,8 @@ Paths Paths::find() {
   p.policies = bringup + "/config/policies.json";
   p.geometry = description + "/config/go2_kinematics.yaml";
   p.description = description;
-  // --symlink-install links config/ back into src/quadruped_bringup, which sits in the repo.
-  p.repo = repo_env ? repo_env : dirname(dirname(dirname(dirname(realpath_or(p.config)))));
+  // --symlink-install links config/ back into src/; a plain build copies it, and the install sits in the repo.
+  p.repo = repo_env ? repo_env : find_repo({realpath_or(p.config), p.config, realpath_or(".")});
   return p;
 }
 

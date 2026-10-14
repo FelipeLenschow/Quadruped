@@ -10,6 +10,22 @@ namespace quadruped_real {
 
 using namespace unitree::robot;
 
+// VuiClient plus the light color call the Go2 app uses (api 1007), which the SDK leaves out.
+class LightClient : public go2::VuiClient {
+ public:
+  void Init() {
+    go2::VuiClient::Init();
+    RegistApi(kSetColor, 0);
+  }
+  int32_t SetColor(const std::string& color, int seconds) {
+    std::string reply;
+    return Call(kSetColor, "{\"color\":\"" + color + "\",\"time\":" + std::to_string(seconds) + "}", reply);
+  }
+
+ private:
+  static constexpr int32_t kSetColor = 1007;
+};
+
 RobotIO::RobotIO() = default;
 RobotIO::~RobotIO() = default;
 
@@ -19,7 +35,7 @@ void RobotIO::init(const std::string& interface) {
   publisher_->InitChannel();
   subscriber_.reset(new ChannelSubscriber<LowState>("rt/lowstate"));
   subscriber_->InitChannel([this](const void* msg) { on_low_state(msg); }, 1);
-  vui_ = std::make_unique<go2::VuiClient>();
+  vui_ = std::make_unique<LightClient>();
   vui_->SetTimeout(5.0f);
   vui_->Init();
 }
@@ -65,6 +81,8 @@ void RobotIO::write(LowCmd& cmd) {
 void RobotIO::set_brightness(int level) {
   if (vui_) vui_->SetBrightness(level);
 }
+
+int32_t RobotIO::set_color(const std::string& color, int seconds) { return vui_ ? vui_->SetColor(color, seconds) : -1; }
 
 void RobotIO::close() {
   if (subscriber_) subscriber_->CloseChannel();

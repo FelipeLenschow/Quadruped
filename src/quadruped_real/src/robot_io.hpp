@@ -12,11 +12,9 @@
 #include <unitree/robot/channel/channel_publisher.hpp>
 #include <unitree/robot/channel/channel_subscriber.hpp>
 
-namespace unitree::robot::go2 {
-class VuiClient;
-}
-
 namespace quadruped_real {
+
+class LightClient;
 
 using LowState = unitree_go::msg::dds_::LowState_;
 using LowCmd = unitree_go::msg::dds_::LowCmd_;
@@ -36,6 +34,8 @@ class RobotIO {
   bool take(LowState& out, uint64_t& seq);
   void write(LowCmd& cmd);
   void set_brightness(int level);
+  // The light's color ("blue", "green", "red", ...) for `seconds`, then the robot's own again. 0 when accepted.
+  int32_t set_color(const std::string& color, int seconds);
   // Drops the DDS endpoints and clients while the SDK is still whole.
   void close();
 
@@ -44,7 +44,7 @@ class RobotIO {
 
   unitree::robot::ChannelPublisherPtr<LowCmd> publisher_;
   unitree::robot::ChannelSubscriberPtr<LowState> subscriber_;
-  std::unique_ptr<unitree::robot::go2::VuiClient> vui_;
+  std::unique_ptr<LightClient> vui_;
   std::mutex state_mutex_;
   LowState state_{};
   uint64_t state_seq_ = 0;
