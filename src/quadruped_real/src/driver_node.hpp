@@ -24,14 +24,9 @@
 #include <yaml-cpp/yaml.h>
 
 #include "control_loop.hpp"
+#include "paths.hpp"
 
 namespace quadruped_real {
-
-struct Paths {
-  std::string config, policies, geometry, repo;
-  static Paths find();
-  std::string resolve(const std::string& path) const;  // policies.json paths are relative to the repo
-};
 
 // command_safety_processor.HeartbeatStats: gaps between heartbeats over the last 10 s.
 class HeartbeatStats {

@@ -11,8 +11,8 @@
 #include <iostream>
 
 #include <ament_index_cpp/get_package_prefix.hpp>
-#include <ament_index_cpp/get_package_share_directory.hpp>
 
+#include "config_loader.hpp"
 #include "json.hpp"
 
 extern char** environ;
@@ -30,11 +30,6 @@ const std::vector<std::pair<std::string, Eigen::Vector3f>> kWtwGaits = {
     {"trot", {0.5f, 0.0f, 0.0f}}, {"pace", {0.0f, 0.0f, 0.5f}}, {"bound", {0.0f, 0.5f, 0.0f}},
     {"pronk", {0.0f, 0.0f, 0.0f}}, {"walk", {0.0f, 0.75f, 0.5f}}};
 
-std::string realpath_or(const std::string& p) {
-  char buf[PATH_MAX];
-  return ::realpath(p.c_str(), buf) ? std::string(buf) : p;
-}
-
 bool exists(const std::string& p) {
   struct stat st;
   return ::stat(p.c_str(), &st) == 0;
@@ -45,11 +40,6 @@ double mtime(const std::string& p) {
   return ::stat(p.c_str(), &st) == 0 ? st.st_mtim.tv_sec + st.st_mtim.tv_nsec * 1e-9 : 0.0;
 }
 
-std::string dirname(const std::string& p) {
-  const auto slash = p.find_last_of('/');
-  return slash == std::string::npos ? "." : p.substr(0, slash);
-}
-
 std::string trim(const std::string& s) {
   const auto a = s.find_first_not_of(" \t\r\n");
   const auto b = s.find_last_not_of(" \t\r\n");
@@ -57,12 +47,6 @@ std::string trim(const std::string& s) {
 }
 
 double r3(double v) { return std::round(v * 1000.0) / 1000.0; }
-
-template <typename T>
-T get(const YAML::Node& n, const char* key, T fallback) {
-  if (!n || !n.IsMap() || !n[key] || n[key].IsNull()) return fallback;
-  return n[key].as<T>();
-}
 
 void print_shutdown_banner(const std::string& reason) {
   std::cout << "\r" << std::string(120, ' ') << "\r";
@@ -115,37 +99,6 @@ builtin_interfaces::msg::Time stamp(double seconds) {
 }
 
 }  // namespace
-
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
-
-Paths Paths::find() {
-  Paths p;
-  std::string bringup, description;
-  try {
-    bringup = ament_index_cpp::get_package_share_directory("quadruped_bringup");
-    description = ament_index_cpp::get_package_share_directory("quadruped_description");
-  } catch (const std::exception&) {
-  }
-  const char* repo_env = std::getenv("QUADRUPED_REPO");
-  if (bringup.empty() || description.empty()) {
-    const std::string repo = repo_env ? repo_env : ".";
-    bringup = repo + "/src/quadruped_bringup";
-    description = repo + "/src/quadruped_description";
-  }
-  p.config = bringup + "/config/config.yaml";
-  p.policies = bringup + "/config/policies.json";
-  p.geometry = description + "/config/go2_kinematics.yaml";
-  // --symlink-install links config/ back into src/quadruped_bringup, which sits in the repo.
-  p.repo = repo_env ? repo_env : dirname(dirname(dirname(dirname(realpath_or(p.config)))));
-  return p;
-}
-
-std::string Paths::resolve(const std::string& path) const {
-  if (path.empty() || path[0] == '/') return path;
-  return repo + "/" + path;
-}
 
 // ---------------------------------------------------------------------------
 // Heartbeat statistics
@@ -231,7 +184,7 @@ DriverNode::DriverNode(Paths paths, YAML::Node config, ControlLoop& loop, Comman
       c.entry.protections = spec["protections"] ? qc::protections_from_names(spec["protections"].as<std::vector<std::string>>())
                                                 : static_cast<uint8_t>(qc::kAllProtections);
     } catch (const std::exception& e) {
-      RCLCPP_ERROR(get_logger(), "[PolicyManager] Policy '%s': %s. Using all of them.", name.c_str(), e.what());
+      RCLCPP_ERROR(get_logger(), "[Policies] Policy '%s': %s. Using all of them.", name.c_str(), e.what());
       c.entry.protections = qc::kAllProtections;
     }
     const YAML::Node cmd = spec["commands"];
@@ -376,23 +329,23 @@ void DriverNode::send(Command c) {
 std::shared_ptr<qc::PolicyRunner> DriverNode::load_runner(const std::string& name, const std::string& checkpoint,
                                                           qc::PolicyEntry& entry) {
   if (checkpoint.empty() || !exists(checkpoint)) {
-    RCLCPP_WARN(get_logger(), "[PolicyManager] Policy file not found: %s", checkpoint.c_str());
+    RCLCPP_WARN(get_logger(), "[Policies] Policy file not found: %s", checkpoint.c_str());
     return nullptr;
   }
-  RCLCPP_INFO(get_logger(), "[PolicyManager] Loading policy '%s' from: %s", name.c_str(), checkpoint.c_str());
+  RCLCPP_INFO(get_logger(), "[Policies] Loading policy '%s' from: %s", name.c_str(), checkpoint.c_str());
   const std::string base = checkpoint.substr(0, checkpoint.find_last_of('.'));
   const std::string qpol = base + ".qpol";
 
-  // The checkpoint is read by quadruped_core in Python once, into a .qpol beside it; reused while it is newer.
+  // The checkpoint is read by quadruped_control's export.py once, into a .qpol beside it; reused while it is newer.
   auto do_export = [&]() -> bool {
     std::string script;
     try {
       script = ament_index_cpp::get_package_prefix("quadruped_control") + "/lib/quadruped_control/export_policy.py";
     } catch (const std::exception& e) {
-      RCLCPP_ERROR(get_logger(), "[PolicyManager] quadruped_control not found: %s", e.what());
+      RCLCPP_ERROR(get_logger(), "[Policies] quadruped_control not found: %s", e.what());
       return false;
     }
-    RCLCPP_INFO(get_logger(), "[PolicyManager] Exporting %s to %s ...", checkpoint.c_str(), qpol.c_str());
+    RCLCPP_INFO(get_logger(), "[Policies] Exporting %s to %s ...", checkpoint.c_str(), qpol.c_str());
     std::vector<std::string> args = {"python3", script, checkpoint};
     std::vector<char*> argv;
     for (auto& a : args) argv.push_back(a.data());
@@ -410,7 +363,7 @@ std::shared_ptr<qc::PolicyRunner> DriverNode::load_runner(const std::string& nam
     try {
       spec = std::make_unique<qc::PolicySpec>(qc::PolicySpec::from_file(qpol));
     } catch (const std::exception& e) {
-      RCLCPP_WARN(get_logger(), "[PolicyManager] %s unreadable (%s); exporting it again.", qpol.c_str(), e.what());
+      RCLCPP_WARN(get_logger(), "[Policies] %s unreadable (%s); exporting it again.", qpol.c_str(), e.what());
       if (!do_export()) throw std::runtime_error("export failed");
       spec = std::make_unique<qc::PolicySpec>(qc::PolicySpec::from_file(qpol));
     }
@@ -424,11 +377,11 @@ std::shared_ptr<qc::PolicyRunner> DriverNode::load_runner(const std::string& nam
     if (entry.commands == qc::CommandMode::Trick) extras += ", trick command";
     if (entry.clock_hz) extras += ", " + json::num(entry.clock_hz) + " Hz clock";
     const auto prot = qc::protection_names(entry.protections);
-    RCLCPP_INFO(get_logger(), "[PolicyManager] '%s': protections %s%s.", name.c_str(),
+    RCLCPP_INFO(get_logger(), "[Policies] '%s': protections %s%s.", name.c_str(),
                 prot.empty() ? "none" : json::strings(prot).c_str(), extras.c_str());
     return runner;
   } catch (const std::exception& e) {
-    RCLCPP_ERROR(get_logger(), "[PolicyManager] Failed to load policy '%s': %s", name.c_str(), e.what());
+    RCLCPP_ERROR(get_logger(), "[Policies] Failed to load policy '%s': %s", name.c_str(), e.what());
     return nullptr;
   }
 }
@@ -481,13 +434,13 @@ std::unique_ptr<qc::Controller> DriverNode::make_controller(const std::string& c
       ctl->set_main_alias(alias);
     }
   } else {
-    RCLCPP_WARN(get_logger(), "[LocomotionPipeline] No main policy checkpoint provided. Policy runner disabled.");
+    RCLCPP_WARN(get_logger(), "[Pipeline] No main policy checkpoint provided. Policy runner disabled.");
   }
 
   std::string safety = safety_policy_;
   auto it = std::find_if(catalog_.begin(), catalog_.end(), [&](const auto& c) { return c.first == safety; });
   if (!safety.empty() && it == catalog_.end()) {
-    RCLCPP_ERROR(get_logger(), "[LocomotionPipeline] safety_policy '%s' is not in policies.json.", safety.c_str());
+    RCLCPP_ERROR(get_logger(), "[Pipeline] safety_policy '%s' is not in policies.json.", safety.c_str());
     safety.clear();
   } else if (!safety.empty()) {
     qc::PolicyEntry entry = it->second.entry;
@@ -499,7 +452,7 @@ std::unique_ptr<qc::Controller> DriverNode::make_controller(const std::string& c
   }
   ctl->set_safety_policy(safety);
   if (safety.empty()) {
-    RCLCPP_WARN(get_logger(), "[LocomotionPipeline] No safety policy: the robot goes numb as soon as a check trips.");
+    RCLCPP_WARN(get_logger(), "[Pipeline] No safety policy: the robot goes numb as soon as a check trips.");
   }
   ctl->set_active_policy(ctl->has_policy("main") ? std::optional<std::string>("main") : std::nullopt);
   for (const auto& e : ctl->drain_events()) RCLCPP_INFO(get_logger(), "%s", e.text.c_str());
@@ -516,7 +469,7 @@ void DriverNode::stdin_loop() {
     } else if (blocked_) {
       send(at(Command::Kind::ReleaseTrip));
       std::cout << kYellow << kBold << ">>> Safety RESET. Re-enabling main policy..." << kReset << std::endl;
-      RCLCPP_INFO(get_logger(), "[CommandSafetyProcessor] Operator pressed ENTER. Main policy re-enabled.");
+      RCLCPP_INFO(get_logger(), "[Safety] Operator pressed ENTER. Main policy re-enabled.");
     }
   }
   stdin_ok_ = false;
@@ -547,7 +500,7 @@ void DriverNode::handle(const Snapshot& s) {
     if (e.kind == qc::EventKind::SafetyTrip) {
       print_shutdown_banner(e.text);
       if (!stdin_ok_) {
-        RCLCPP_WARN(get_logger(), "[CommandSafetyProcessor] No interactive stdin; clear this stop from the console with 'safety = reset'.");
+        RCLCPP_WARN(get_logger(), "[Safety] No interactive stdin; clear this stop from the console with 'safety = reset'.");
       }
     } else if (e.level == qc::LogLevel::Error) {
       RCLCPP_ERROR(get_logger(), "%s", e.text.c_str());

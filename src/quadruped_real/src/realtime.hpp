@@ -5,7 +5,7 @@
 
 namespace quadruped_real {
 
-// config.yaml's realtime block (quadruped_core/realtime.py).
+// config.yaml's realtime block (quadruped_common/realtime.py).
 struct RealtimeConfig {
   bool enabled = true;
   int core = -1;  // -1: the last online CPU

@@ -9,7 +9,7 @@ from launch.actions import OpaqueFunction
 from launch_ros.actions import Node
 
 from quadruped_bringup.launch_common import arg, flag, get
-from quadruped_core import paths
+from quadruped_common import paths
 
 NAV2_NODES = ["controller_server", "planner_server", "behavior_server", "bt_navigator"]
 # The real L1 fills ~44 of /scan's 360 beams per cloud; 5 clouds (1/3 s at 15 Hz) fill ~160.

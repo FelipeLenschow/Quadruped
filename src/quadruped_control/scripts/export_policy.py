@@ -4,8 +4,8 @@ import argparse
 import os
 import sys
 
-from quadruped_core import paths
-from quadruped_core.config_loader import load_policies
+from quadruped_common import paths
+from quadruped_common.config_loader import load_policies
 from quadruped_control.export import export_checkpoint
 
 
@@ -25,8 +25,8 @@ def main():
         path = path if os.path.isabs(path) else paths.repo(path)
         out = os.path.join(args.out, f"{name}.qpol") if args.out else os.path.splitext(path)[0] + ".qpol"
         try:
-            runner = export_checkpoint(path, out, name=name)
-            print(f"{name:<12} {runner._obs_layout:<14} obs {runner.obs_dim:<5} -> {out}")
+            meta = export_checkpoint(path, out, name=name)
+            print(f"{name:<12} {meta['layout']:<14} obs {meta['obs_dim']:<5} -> {out}")
         except Exception as e:
             failed += 1
             print(f"{name:<12} FAILED: {e}")

@@ -7,7 +7,7 @@
   <maintainer email="felipe10lenschow@gmail.com">Felipe Lenschow</maintainer>
   <license>TODO: License declaration</license>
   <exec_depend>launch</exec_depend>
-  <exec_depend>quadruped_core</exec_depend>
+  <exec_depend>quadruped_common</exec_depend>
   <exec_depend>quadruped_drivers</exec_depend>
   <exec_depend>quadruped_operator</exec_depend>
   <exec_depend>launch_ros</exec_depend>

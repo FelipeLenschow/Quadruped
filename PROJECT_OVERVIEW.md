@@ -12,13 +12,14 @@ The system utilizes a **decentralized, high-speed control architecture** designe
 ## Project Structure
 - `launcher.py`: High-level entry point. Handles environment variables and process orchestration.
 - `src/`: the ROS 2 packages (colcon workspace, `colcon build --symlink-install --base-paths src`):
-  - `quadruped_core`: library, no nodes: `pipeline.py`, `controller/` (policy runner, safety processor, pose generator), `telemetry/` (TelemetryManager, LKF estimator, kinematics), `config_loader.py`, `paths.py`.
-  - `quadruped_drivers`: nodes for the real Go2 (`real_driver`, `test_joints`), MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`, `gazebo_sensors`: lidar and camera to ROS), and `camera_bridge` (every camera in `config.yaml`'s `cameras:`, real or Gazebo, to `/camera/<name>/...`).
+  - `quadruped_common`: Python helpers shared by every node, no nodes: `paths.py`, `config_loader.py`, `realtime.py` (keeps everything off the policy's core), `robot_defaults.py` (default stance), `kinematics.py` (leg kinematics and base rotation helpers, as `quadruped_control/src/kinematics.cpp`). The control decision is `quadruped_control`'s (C++).
+  - `quadruped_drivers`: Python nodes: MuJoCo (`mujoco_driver`, `eval_mujoco`) and Gazebo (`gazebo_driver`, `gazebo_sensors`: lidar and camera to ROS), and `camera_bridge` (every camera in `config.yaml`'s `cameras:`, real or Gazebo, to `/camera/<name>/...`).
+  - `quadruped_control`: the control core in C++ (estimator, policies, safety, poses), shared by every driver; `driver_node.py` is the simulators' ROS side, `export.py` turns checkpoints into the `.qpol` files it loads.
+  - `quadruped_real`: C++ nodes for the real Go2 on the Unitree SDK2: `real_driver` (the control loop alone on its core), `real_sensors` (L1 lidar and IMU to ROS), `go2_camera` (the Go2 camera, for `camera_bridge`), `test_joints`, and `mock_go2` (a MuJoCo Go2 to run `real_driver` on a PC).
   - `quadruped_operator`: console, supervisor, teleops, twins, reward estimator, MCAP tool.
   - `quadruped_description`: MuJoCo menagerie, Gazebo worlds (`scene`: flat, `nav`: walls, obstacles, 4 cones), Go2/Go1/A1 models (the Go2 carries an L1-style lidar and a front camera), kinematics yaml, bundled policies.
   - `quadruped_bringup`: `launch/*.launch.py` and `config/` (`config.yaml`, `joy_f710.config.yaml`).
-  - `unitree_sdk2py`: wraps the `third_party/unitree_sdk2_python` submodule.
-- `IsaacSim/isaac_driver.py`: stays outside the packages (Isaac Sim's Python 3.12); imports `quadruped_core` from `src/`.
+- `IsaacSim/isaac_driver.py`: stays outside the packages (Isaac Sim's Python 3.12); imports `quadruped_common` from `src/`. Broken for now: it needs `quadruped_control` built for Python 3.12, which nothing builds yet.
 
 ## Key Architectural Patterns
 

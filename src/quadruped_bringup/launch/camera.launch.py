@@ -2,13 +2,15 @@
 objects on the map (object_mapper, which needs nav.launch.py's map and filtered lidar).
 
 Needs the robot running: real.launch.py (or, with sim:=true, Gazebo's nav world, whose gazebo_sensors
-publishes the simulated image).
+publishes the simulated image). The Go2's own camera (source: unitree) comes through quadruped_real's go2_camera,
+started here.
 """
 
 from launch import LaunchDescription
 from launch.actions import OpaqueFunction
 
 from quadruped_bringup.launch_common import arg, flag, get, node
+from quadruped_common.config_loader import load_config
 
 
 def setup(context):
@@ -18,9 +20,12 @@ def setup(context):
         "quadruped_drivers", "camera_bridge",
         "--sim" if flag(context, "sim") else "",
         f"--only={only}" if only else "",
-        f"--interface={net_interface}" if net_interface else "",
         main=True,
     )]
+    cams = load_config().get("cameras") or {}
+    wanted = [c for name, c in cams.items() if not only or name in only.split(",")]
+    if not flag(context, "sim") and any(c.get("source", "unitree") == "unitree" for c in wanted):
+        actions.append(node("quadruped_real", "go2_camera", f"--interface={net_interface}" if net_interface else ""))
     if flag(context, "check"):
         actions.append(node("quadruped_perception", "camera_lidar_check", f"--camera={get(context, 'check_camera')}"))
     if flag(context, "detect"):

@@ -27,6 +27,19 @@ const char* kLegNames[4] = {"FL", "FR", "RL", "RR"};
 
 }  // namespace
 
+Mat3 rot_from_quat(const Vec4& q) {
+  const double w = q[0], x = q[1], y = q[2], z = q[3];
+  Mat3 r;
+  r << 1 - 2 * y * y - 2 * z * z, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y,
+       2 * x * y + 2 * w * z, 1 - 2 * x * x - 2 * z * z, 2 * y * z - 2 * w * x,
+       2 * x * z - 2 * w * y, 2 * y * z + 2 * w * x, 1 - 2 * x * x - 2 * y * y;
+  return r;
+}
+
+Vec3 projected_gravity_b(const Vec4& quat_wxyz) {
+  return rot_from_quat(quat_wxyz).transpose() * Vec3(0.0, 0.0, -9.81);
+}
+
 LegGeometry LegGeometry::from_yaml(const std::string& path) {
   YAML::Node root;
   try {

@@ -13,9 +13,9 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from nav_msgs.msg import Odometry
 
-from quadruped_core.config_loader import load_config
-from quadruped_core import paths
-from quadruped_core.telemetry.estimator import rot_from_quat
+from quadruped_common.config_loader import load_config
+from quadruped_common import paths
+from quadruped_common.kinematics import rot_from_quat
 from rclpy.utilities import remove_ros_args
 
 # Gazebo Transport & Msgs

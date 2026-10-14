@@ -13,7 +13,7 @@
 
 namespace quadruped_control {
 
-// Observation layouts of quadruped_core/controller/policy_runner.py build_obs.
+// Observation layouts the policies were trained on (export.py reads which one a checkpoint uses).
 enum class ObsLayout { Isaac, Unitree, UnitreeVel, Wtw, UnitreeClock };
 
 ObsLayout layout_from_string(const std::string& name);
@@ -95,6 +95,7 @@ class PolicyRunner {
 
   const PolicySpec& spec() const { return spec_; }
   const VecXf& last_actions() const { return last_actions_; }
+  void set_last_actions(const VecXf& actions) { last_actions_ = actions; }
   const VecXf& last_obs() const { return last_obs_; }
   const VecXf& gait_command() const { return gait_command_; }
 

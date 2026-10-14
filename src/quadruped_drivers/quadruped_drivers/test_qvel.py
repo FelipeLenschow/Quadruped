@@ -1,7 +1,7 @@
 import mujoco
 import numpy as np
 
-from quadruped_core import paths
+from quadruped_common import paths
 
 model = mujoco.MjModel.from_xml_path(paths.description("mujoco_menagerie", "unitree_go2", "go2.xml"))
 data = mujoco.MjData(model)

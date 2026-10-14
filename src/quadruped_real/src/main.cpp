@@ -8,29 +8,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <yaml-cpp/yaml.h>
 
+#include "config_loader.hpp"
 #include "control_loop.hpp"
 #include "driver_node.hpp"
 #include "realtime.hpp"
 
 using namespace quadruped_real;
-
-namespace {
-
-template <typename T>
-T get(const YAML::Node& n, const char* key, T fallback) {
-  if (!n || !n.IsMap() || !n[key] || n[key].IsNull()) return fallback;
-  return n[key].as<T>();
-}
-
-std::string arg(const std::vector<std::string>& args, const std::string& name) {
-  for (size_t i = 1; i < args.size(); ++i) {
-    if (args[i].rfind(name + "=", 0) == 0) return args[i].substr(name.size() + 1);
-    if (args[i] == name && i + 1 < args.size()) return args[i + 1];
-  }
-  return "";
-}
-
-}  // namespace
 
 int main(int argc, char** argv) {
   const std::vector<std::string> args = rclcpp::remove_ros_arguments(argc, argv);
@@ -38,20 +21,9 @@ int main(int argc, char** argv) {
   const std::string checkpoint = arg(args, "--internal_policy");
 
   const Paths paths = Paths::find();
-  YAML::Node config;
-  try {
-    config = YAML::LoadFile(paths.config);
-  } catch (const std::exception& e) {
-    std::cerr << "[RealDriver] Cannot read " << paths.config << ": " << e.what() << std::endl;
-    return 1;
-  }
-
-  // The SDK talks on DDS domain 0; ROS gets its own domain, and a CYCLONEDDS_URI meant for ROS must not
-  // reconfigure the SDK's participant.
-  const char* domain_override = std::getenv("QUADRUPED_ROS_DOMAIN_ID");  // tests: keep off the stack's domain
-  setenv("ROS_DOMAIN_ID",
-         domain_override ? domain_override : get<std::string>(config["network"], "ros_domain_id", "1").c_str(), 1);
-  unsetenv("CYCLONEDDS_URI");
+  const YAML::Node config = load_config(paths, "RealDriver");
+  if (!config.IsMap()) return 1;
+  use_ros_domain(config);
 
   RealtimeConfig rt;
   rt.enabled = get<bool>(config["realtime"], "enabled", true);

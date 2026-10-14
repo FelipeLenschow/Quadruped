@@ -9,7 +9,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from quadruped_bringup.launch_common import arg
-from quadruped_core import paths
+from quadruped_common import paths
 
 
 def generate_launch_description():

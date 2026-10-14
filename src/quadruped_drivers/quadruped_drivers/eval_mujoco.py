@@ -12,11 +12,11 @@ import rclpy
 from rclpy.node import Node
 import argparse
 import threading
-from quadruped_core.pipeline import make_pipeline
-from quadruped_core.config_loader import load_config
-from quadruped_core import paths
-from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
-from quadruped_core.controller.motor_model import Go2MotorModel
+from quadruped_control.driver_node import Pipeline
+from quadruped_common.config_loader import load_config
+from quadruped_common import paths
+from quadruped_common.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_drivers.motor_model import Go2MotorModel
 from quadruped_drivers import gait_metrics
 from rclpy.utilities import remove_ros_args
 
@@ -52,7 +52,7 @@ class MujocoEvaluator(Node):
         self._init_physics()
 
         # 2. Locomotion Pipeline
-        self.pipeline = make_pipeline(
+        self.pipeline = Pipeline(
             node=self,
             robot_type=robot_type,
             checkpoint=checkpoint,
@@ -70,7 +70,7 @@ class MujocoEvaluator(Node):
         # Two things a Console operator would normally do, and nobody is at a console here:
         #
         #  a) Wait for the supervisor. The physics thread evaluates safety on its very first step;
-        #     if no heartbeat has arrived by then, CommandSafetyProcessor latches an emergency stop
+        #     if no heartbeat has arrived by then, the safety processor latches an emergency stop
         #     ("No supervisor heartbeat received yet") that only a console can clear, and the whole
         #     sweep then measures a limp robot -- silently, because the report still comes out
         #     well-formed and full of zeros. Waiting has to happen here, and has to spin the node
@@ -90,7 +90,7 @@ class MujocoEvaluator(Node):
         #     sweep. Guessing that way left every latched stop uncleared, and one ROM trip at
         #     x=1.0 m/s zeroed the rest of that sweep -- x=1.0 and the whole y and yaw axes.
         #
-        #     stdin is detached with it: CommandSafetyProcessor answers a latched stop by blocking
+        #     stdin is detached with it: the safety processor answers a latched stop by blocking
         #     on input() in a background thread, which on an inherited terminal swallows the
         #     keystrokes meant for the launcher. Reading /dev/null makes that thread give up at
         #     once, and this sweep needs no input of its own.
@@ -149,7 +149,7 @@ class MujocoEvaluator(Node):
     def _clear_safety_stop(self):
         """Stand in for the operator on the emergency stop.
 
-        CommandSafetyProcessor latches a stop on the first safety violation and clears it only when
+        the safety processor latches a stop on the first safety violation and clears it only when
         a human presses ENTER (its _reset_worker blocks on input()) or a console sends
         'safety = reset'. A sweep started from a launcher, a watcher or any pipe has no terminal,
         so input() raises EOFError, the latch never clears, and every commanded speed is measured on

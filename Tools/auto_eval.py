@@ -12,8 +12,8 @@ Two things make this a separate process rather than a hook inside training:
     which only exists under ROS 2 Humble (3.10). Neither can import the other's modules, so the
     evaluation is spawned through whichever interpreter can `import rclpy` -- see
     `resolve_eval_python`, which also knows how to source /opt/ros/<distro>/setup.bash.
-  * Different hardware. The sweep is MuJoCo on CPU with the policy on CPU (see
-    quadruped_core/controller/policy_runner.py), so it does not compete with Isaac Sim for the GPU.
+  * Different hardware. The sweep is MuJoCo on CPU with the policy on CPU (the C++ controller),
+    so it does not compete with Isaac Sim for the GPU.
 
 Typical use is through `launcher.py` (it answers --log-root/--after/--parent-pid for you), but it
 stands alone:
@@ -43,9 +43,9 @@ except ImportError:                     # only costs the obs_dim auto-detect
 REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 EVAL_MODULE = "quadruped_drivers.eval_mujoco"
 SUPERVISOR_MODULE = "quadruped_operator.supervisor"
-# Run straight from src/, so a sweep needs no colcon build.
+# Run straight from src/, except quadruped_control (C++), which comes from the colcon install.
 SRC_PACKAGES = [os.path.join(REPO_DIR, "src", p)
-                for p in ("quadruped_core", "quadruped_drivers", "quadruped_operator", "unitree_sdk2py")]
+                for p in ("quadruped_common", "quadruped_drivers", "quadruped_operator")]
 CKPT_RE = re.compile(r"^agent_(\d+)\.pt$")
 RSL_CKPT_RE = re.compile(r"^model_(\d+)\.pt$")
 
@@ -72,7 +72,8 @@ def eval_env():
     env = os.environ.copy()
     venv = env.pop("VIRTUAL_ENV", None)
     env.pop("PYTHONHOME", None)
-    env["PYTHONPATH"] = os.pathsep.join(SRC_PACKAGES)
+    installed = glob.glob(os.path.join(REPO_DIR, "install", "**", "quadruped_control", "__init__.py"), recursive=True)
+    env["PYTHONPATH"] = os.pathsep.join(SRC_PACKAGES + sorted({os.path.dirname(os.path.dirname(p)) for p in installed}))
     if venv:
         bin_dir = os.path.join(venv, "bin")
         env["PATH"] = os.pathsep.join(
@@ -259,7 +260,7 @@ def _looks_dead(report_path):
 
 def start_supervisor(prefix, robot):
     """quadruped_operator/supervisor.py broadcasts the safety heartbeat and the torque limit that
-    CommandSafetyProcessor waits for; until the first heartbeat arrives active_max_torque is 0 and
+    the safety processor waits for; until the first heartbeat arrives active_max_torque is 0 and
     the PD loop produces no torque at all, so the sweep measures a limp robot. During a deployment
     the Console plays this role -- with nobody at a console, the watcher has to."""
     argv = prefix + ["-m", SUPERVISOR_MODULE, f"--robot={robot}"]

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""C++ kinematics and state estimator against the Python ones in quadruped_core, step by step."""
+"""C++ kinematics and state estimator against the recorded Python ones (reference/estimator.npz), step by step."""
 import argparse
+import os
 import sys
 import time
 
 import numpy as np
 
 import quadruped_control as qc
-from quadruped_core import paths
-from quadruped_core.config_loader import load_config
-from quadruped_core.telemetry.estimator import StateEstimator as PyEstimator, projected_gravity_b
-from quadruped_core.telemetry.kinematics import Go2Kinematics
+from quadruped_common.kinematics import projected_gravity_b
+
+import reference
 
 
 def quat_mul(a, b):
@@ -68,69 +68,58 @@ def scenario(steps, rng):
         )
 
 
-def check_kinematics(py_kin, cpp_kin, rng, n):
-    worst = 0.0
-    for _ in range(n):
-        leg = int(rng.integers(4))
-        q = rng.uniform(-3.0, 3.0, size=3)
-        for name in ("foot_position_body", "foot_jacobian_body", "leg_chain_body"):
-            a = getattr(py_kin, name)(leg, q)
-            b = getattr(cpp_kin, name)(leg, q)
-            worst = max(worst, float(np.max(np.abs(a - b))))
-    return worst
+KINEMATICS = ("foot_position_body", "foot_jacobian_body", "leg_chain_body")
+
+
+def kinematics_inputs(rng, n):
+    return [(int(rng.integers(4)), rng.uniform(-3.0, 3.0, size=3)) for _ in range(n)]
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps", type=int, default=50000)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--reference", default=reference.path("estimator.npz"))
     parser.add_argument("--tol", type=float, default=1e-9)
     args = parser.parse_args()
-    rng = np.random.default_rng(args.seed)
+    meta, ref = reference.load(args.reference)
+    rng = np.random.default_rng(meta["seed"])
 
-    geometry = qc.LegGeometry.from_yaml(paths.description("config", "go2_kinematics.yaml"))
-    cpp_kin = qc.Kinematics(geometry)
-    kin_err = check_kinematics(Go2Kinematics(), cpp_kin, rng, 20000)
-    print(f"kinematics   max |py - cpp| = {kin_err:.2e}")
+    with reference.frozen(meta["files"]) as tmp:
+        geometry = qc.LegGeometry.from_yaml(os.path.join(tmp, "go2_kinematics.yaml"))
+    kin = qc.Kinematics(geometry)
+    kin_err = 0.0
+    for i, (leg, q) in enumerate(kinematics_inputs(rng, meta["kinematics_samples"])):
+        for name in KINEMATICS:
+            kin_err = max(kin_err, float(np.max(np.abs(ref[name][i] - getattr(kin, name)(leg, q)))))
+    print(f"kinematics   {meta['kinematics_samples']} samples, max |py - cpp| = {kin_err:.2e}")
 
-    est_cfg = load_config().get("state_estimator", {}) or {}
-    kal = est_cfg.get("kalman", {}) or {}
-    params = dict(
-        dt=float(est_cfg.get("dt", 0.02)),
-        q_vel=float(kal.get("process_noise_vel", 0.01)),
-        q_bias=float(kal.get("process_noise_bias", 1e-3)),
-        r_meas=float(kal.get("measurement_noise", 0.05)),
-    )
-    py_est = PyEstimator(**params)
-    cpp_est = qc.StateEstimator(cpp_kin, qc.EstimatorParams(**params))
-
-    inputs = list(scenario(args.steps, rng))
+    inputs = list(scenario(meta["steps"], rng))
+    if reference.Hash().add(inputs).hexdigest() != meta["inputs"]:
+        print("FAIL: the generated inputs differ from the recording's (scenario() or numpy's generator changed)")
+        return 1
+    est = qc.StateEstimator(kin, qc.EstimatorParams(**meta["params"]))
+    every = meta["covariance_every"]
     worst = dict(velocity=0.0, bias=0.0, covariance=0.0)
-    guard_trips = relax_steps = 0
     for t, kw in enumerate(inputs):
-        v_py = py_est.update(**kw)
-        v_cpp = cpp_est.update(**kw)
-        worst["velocity"] = max(worst["velocity"], float(np.max(np.abs(v_py - v_cpp))))
-        worst["bias"] = max(worst["bias"], float(np.max(np.abs(py_est.accel_bias - cpp_est.accel_bias))))
-        p_py = py_est.covariance
-        worst["covariance"] = max(
-            worst["covariance"],
-            float(np.max(np.abs(p_py - cpp_est.covariance) / np.maximum(1.0, np.abs(p_py)))))
-        guard_trips += int(np.all(v_py == 0.0) and np.all(p_py[:3, :3] == np.eye(3)))
-        relax_steps += int(py_est._no_contact_time > py_est.no_contact_relax_time)
+        v = est.update(**kw)
+        worst["velocity"] = max(worst["velocity"], float(np.max(np.abs(ref["velocity"][t] - v))))
+        worst["bias"] = max(worst["bias"], float(np.max(np.abs(ref["bias"][t] - est.accel_bias))))
+        if t % every == 0:
+            p = ref["covariance"][t // every]
+            worst["covariance"] = max(
+                worst["covariance"], float(np.max(np.abs(p - est.covariance) / np.maximum(1.0, np.abs(p)))))
         if max(worst.values()) > args.tol:
             print(f"MISMATCH at step {t}: {worst}")
             return 1
-    print(f"estimator    {args.steps} steps, {relax_steps} relaxing, {guard_trips} divergence resets")
+    print(f"estimator    {meta['steps']} steps, {meta['relaxing']} relaxing, {meta['resets']} divergence resets")
     for k, v in worst.items():
         print(f"             max |py - cpp| {k:<10} = {v:.2e}")
 
+    est = qc.StateEstimator(kin, qc.EstimatorParams(**meta["params"]))
     n = min(5000, len(inputs))
-    for name, est in (("python", PyEstimator(**params)), ("c++", qc.StateEstimator(cpp_kin, qc.EstimatorParams(**params)))):
-        start = time.perf_counter()
-        for kw in inputs[:n]:
-            est.update(**kw)
-        print(f"timing       {name:<6} {1e6 * (time.perf_counter() - start) / n:8.1f} us/update")
+    start = time.perf_counter()
+    for kw in inputs[:n]:
+        est.update(**kw)
+    print(f"timing       c++ {1e6 * (time.perf_counter() - start) / n:6.1f} us/update (python was {meta['python_us']:.0f})")
 
     ok = kin_err <= args.tol
     print("PASS" if ok else "FAIL")

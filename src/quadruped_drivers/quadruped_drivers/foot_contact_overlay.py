@@ -27,7 +27,7 @@ the threshold is counts above them.
 import numpy as np
 import mujoco
 
-from quadruped_core.config_loader import load_config
+from quadruped_common.config_loader import load_config
 
 FOOT_NAMES = ("FL", "FR", "RL", "RR")
 

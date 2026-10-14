@@ -3,7 +3,7 @@ Console — Operator Command Center.
 
 Reads safety parameters from config.yaml and broadcasts them on separate
 ROS 2 Float32 topics at a configurable frequency.  The robot's internal
-CommandSafetyProcessor subscribes to these topics and performs all actual
+The safety processor subscribes to these topics and performs all actual
 safety evaluation.
 
 Additionally handles pipeline mode switching and pose commands for the
@@ -38,7 +38,7 @@ from geometry_msgs.msg import Vector3
 from sensor_msgs.msg import Joy
 
 
-from quadruped_core.config_loader import load_config
+from quadruped_common.config_loader import load_config
 from rclpy.utilities import remove_ros_args
 
 # ---------------------------------------------------------------------------
@@ -375,7 +375,7 @@ class ConsoleNode(Node):
              global_max_torque feeds active_max_torque either way, and the
              driver goes kp=0 / kd=emergency_kd below 0.1 Nm.
           2. The heartbeat stops (see heartbeat_loop). ~watchdog_timeout later
-             the robot's own CommandSafetyProcessor latches the stop, so it
+             the robot's own safety processor latches the stop, so it
              stays down even if a stale torque message turns up afterwards, and
              it stays down if this console then dies for real.
 

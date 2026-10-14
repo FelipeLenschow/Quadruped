@@ -3,7 +3,7 @@ import os
 import tempfile
 
 from ._core import PolicyEntry, PolicySpec
-from .export import load_runner, runner_to_qpol, write_qpol
+from .export import read_checkpoint, run_params, write_qpol
 
 PROTECTIONS = ("heartbeat", "tilt", "pitch", "rom")
 
@@ -17,11 +17,11 @@ def read_catalog(policies, warn=print):
         protections = PROTECTIONS if protections is None else tuple(protections)
         unknown = [p for p in protections if p not in PROTECTIONS]
         if unknown:
-            warn(f"[PolicyManager] Policy '{name}': unknown protections {unknown}, known: {list(PROTECTIONS)}. Using all of them.")
+            warn(f"[Policies] Policy '{name}': unknown protections {unknown}, known: {list(PROTECTIONS)}. Using all of them.")
             protections = PROTECTIONS
         commands = spec.get("commands", True)
         if commands not in (True, False, "trick"):
-            warn(f"[PolicyManager] Policy '{name}': commands {commands!r} is not true, false or \"trick\". Using true.")
+            warn(f"[Policies] Policy '{name}': commands {commands!r} is not true, false or \"trick\". Using true.")
             commands = True
         out[name] = {"path": spec.get("path", ""), "protections": protections, "commands": commands}
     return out
@@ -31,9 +31,7 @@ def entry_for(spec, checkpoint=None):
     """The PolicyEntry of a catalog spec; a trick reads its clock and switches from the run's env.yaml."""
     clock_hz, switches = 0.0, 0
     if spec["commands"] == "trick" and checkpoint:
-        from quadruped_core.controller.policy_runner import PolicyRunner
-
-        env = PolicyRunner._run_params(checkpoint, "env.yaml") or {}
+        env = run_params(checkpoint, "env.yaml") or {}
         trick = (env.get("commands") or {}).get("trick") or {}
         clock_hz = float(trick.get("clock_hz") or 0.0)
         switches = int(trick.get("switches") or 1)
@@ -42,9 +40,8 @@ def entry_for(spec, checkpoint=None):
 
 
 def load_spec(checkpoint, name=""):
-    """PolicySpec for a checkpoint, read the way quadruped_core reads it."""
-    runner = load_runner(checkpoint)
+    """PolicySpec for a checkpoint."""
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "policy.qpol")
-        write_qpol(path, *runner_to_qpol(runner, name=name, source=checkpoint))
+        write_qpol(path, *read_checkpoint(checkpoint, name=name))
         return PolicySpec.from_file(path)

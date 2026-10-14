@@ -8,7 +8,7 @@ from launch import LaunchDescription
 from launch.actions import OpaqueFunction
 
 from quadruped_bringup.launch_common import arg, flag, get, node
-from quadruped_core import paths
+from quadruped_common import paths
 
 LIO_TOPICS = [("/aft_mapped_to_init", "/odom"), ("/cloud_registered", "/cloud"), ("/Laser_map", "/map"),
               ("/path", "/path"), ("/cloud_registered_body", "/cloud_body"), ("/cloud_effected", "/cloud_effected")]

@@ -88,7 +88,7 @@ PYBIND11_MODULE(_core, m) {
           },
           py::arg("gait") = py::none())
       .def_property_readonly("spec", &PolicyRunner::spec)
-      .def_property_readonly("last_actions", &PolicyRunner::last_actions)
+      .def_property("last_actions", &PolicyRunner::last_actions, &PolicyRunner::set_last_actions)
       .def_property_readonly("last_obs", &PolicyRunner::last_obs)
       .def_property_readonly("gait_command", &PolicyRunner::gait_command);
 

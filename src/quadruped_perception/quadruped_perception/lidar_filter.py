@@ -28,8 +28,8 @@ from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import JointState, PointCloud2, PointField
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from quadruped_core.config_loader import load_config
-from quadruped_core.telemetry.kinematics import leg_chain_body
+from quadruped_common.config_loader import load_config
+from quadruped_common.kinematics import leg_chain_body
 
 FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
           for i, n in enumerate(("x", "y", "z", "intensity"))]

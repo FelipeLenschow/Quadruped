@@ -39,7 +39,7 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Float32
 
-from quadruped_core.config_loader import load_config
+from quadruped_common.config_loader import load_config
 
 FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate("xyz")]
 BITS = 21

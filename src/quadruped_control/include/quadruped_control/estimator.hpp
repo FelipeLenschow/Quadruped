@@ -8,15 +8,9 @@
 
 namespace quadruped_control {
 
-using Vec4 = Eigen::Vector4d;
 using Vec6 = Eigen::Matrix<double, 6, 1>;
 using Vec12 = Eigen::Matrix<double, 12, 1>;
 using Mat6 = Eigen::Matrix<double, 6, 6>;
-
-// Body -> world rotation from a [w, x, y, z] quaternion.
-Mat3 rot_from_quat(const Vec4& quat_wxyz);
-// World gravity in the body frame, as Isaac Lab's projected_gravity_b (upright: [0, 0, -9.81]).
-Vec3 projected_gravity_b(const Vec4& quat_wxyz);
 
 struct EstimatorParams {
   double dt = 0.02;
@@ -28,7 +22,7 @@ struct EstimatorParams {
 };
 
 // 6-state LKF, x = [body velocity, accelerometer bias]: IMU prediction, leg-odometry correction.
-// Same model as quadruped_core/telemetry/estimator.py, which documents the reasoning.
+// The model and its reasoning: docs/estimator.md.
 class StateEstimator {
  public:
   StateEstimator(const Kinematics& kinematics, const EstimatorParams& params = {});

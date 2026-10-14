@@ -3,7 +3,7 @@ Safety Supervisor — Heartbeat Broadcaster.
 
 Reads safety parameters from config.yaml and broadcasts them on separate
 ROS 2 Float32 topics at a configurable frequency.  The robot's internal
-CommandSafetyProcessor subscribes to these topics and performs all actual
+The safety processor subscribes to these topics and performs all actual
 safety evaluation.
 
 This node acts as a dead-man's switch: if it stops publishing, the robot's
@@ -20,7 +20,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32
 
 
-from quadruped_core.config_loader import load_config
+from quadruped_common.config_loader import load_config
 from rclpy.utilities import remove_ros_args
 
 # ---------------------------------------------------------------------------

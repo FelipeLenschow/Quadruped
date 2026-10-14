@@ -9,7 +9,6 @@ control:
   action_scale: 0.25
   saturation_limit: 0.90  # 90% of physical capacity
   default_height: 0.33    # Target height for standing pose (m)
-  pipeline: cpp           # cpp: quadruped_control's C++ controller | python: quadruped_core's (env QUADRUPED_PIPELINE)
 
 # --- Velocity command slew limit ---
 # Per-axis limit on how fast the command reaching the policy may change, applied in the pipeline

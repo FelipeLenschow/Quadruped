@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""C++ Controller against quadruped_core's LocomotionPipeline, step by step, under random ROS inputs.
+"""C++ Controller against the recorded Python LocomotionPipeline (reference/pipeline*.npz), under random ROS inputs.
 
-Both get the same robot states and the same /pipeline, /pose, /safety, /cmd_vel, /gait_command and trick
-messages, on one fake clock. Targets, torque and the whole safety / mode / policy state are compared every step.
+The recording holds what the Python pipeline did with these robot states and /pipeline, /pose, /safety, /cmd_vel,
+/gait_command and trick messages on one fake clock: targets and estimator velocity on policy steps, and the whole
+safety / mode / policy state on every step.
 """
 import argparse
+import json
 import os
 import sys
 import time
@@ -29,11 +31,11 @@ from std_msgs.msg import Bool, Float32, Float32MultiArray, String  # noqa: E402
 
 import quadruped_control as qc  # noqa: E402
 from quadruped_control.policies import entry_for, load_spec, read_catalog  # noqa: E402
-from quadruped_core import paths  # noqa: E402
-from quadruped_core.config_loader import load_policies  # noqa: E402
-import quadruped_core.controller.policy_manager as policy_manager  # noqa: E402
-import quadruped_control.pipeline as cpp_pipeline  # noqa: E402
-from quadruped_core.pipeline import LocomotionPipeline  # noqa: E402
+from quadruped_common import paths  # noqa: E402
+from quadruped_common.config_loader import load_policies  # noqa: E402
+import quadruped_control.driver_node as cpp_pipeline  # noqa: E402
+
+import reference  # noqa: E402
 
 
 class FakeNode:
@@ -197,11 +199,11 @@ class CppSide:
 
 
 class WrapperSide:
-    """The C++ side behind CppPipeline, driven through its own ROS subscriptions."""
+    """The C++ side behind Pipeline, driven through its own ROS subscriptions."""
 
     def __init__(self, **kwargs):
         self.node = FakeNode()
-        self.pipe = cpp_pipeline.CppPipeline(self.node, **kwargs)
+        self.pipe = cpp_pipeline.Pipeline(self.node, **kwargs)
         self.core = self.pipe.core
 
     def send(self, topic, msg, now):
@@ -273,22 +275,6 @@ def random_event(rng, names):
     return kind, None
 
 
-def snapshot_py(pipe, node):
-    sp, pm = pipe.safety_processor, pipe.policy_manager
-    pose = pm.policies.get("pose")
-    wtw = pipe._wtw_runners()
-    return dict(
-        mode=pipe.mode, active=pipe.active_policy, pending=pipe._pending_policy, error=pipe.policy_error,
-        estop=sp.is_estopped, numb=sp.is_numb, blocked=sp.is_policy_blocked, trip=sp.trip_reason, numb_reason=sp.numb_reason,
-        torque=round(sp.active_max_torque, 9), transition=pipe.mode_transition_active,
-        safety_active=pipe._safety_elapsed is not None and not sp.is_numb,
-        pose=pose.current_pose_name, pose_done=pose.is_complete, available=pm.available,
-        loaded=sorted(n for n in pm.policies if n != "pose"),
-        gait=None if not wtw else [round(float(v), 6) for v in wtw[0].gait_command],
-        trick=[float(v) for v in pipe.trick_command], cmd=[float(v) for v in pipe.cmd_vel],
-    )
-
-
 def snapshot_cpp(c):
     sp = c.safety
     g = c.gait_command
@@ -302,59 +288,189 @@ def snapshot_cpp(c):
     )
 
 
-def run(args, sim_dt, decimation, safety_switch, use_estimator, main_name, seed, specs, safety_policy=None,
-        safety_timeout=None, forward_limit=30.0):
+
+
+def normalized(value):
+    return json.loads(json.dumps(value))
+
+
+def trace(c, res, cpp):
+    """Everything compared exactly on every step: the snapshot, the pose status and (via ROS) what was published."""
+    out = snapshot_cpp(c)
+    out["pose_status"] = res.pose_status
+    if isinstance(cpp, WrapperSide):
+        pub = published(cpp.node)
+        joint = pub.pop("/commands/joint_commands")
+        out.update(pub)
+        out["joint_efforts"] = None if joint is None else joint[1]
+    return normalized(out)
+
+
+def joint_positions(cpp):
+    joint = cpp.node.pubs["/commands/joint_commands"].last
+    return np.full(12, np.nan) if joint is None else np.asarray(joint.position, dtype=np.float64)
+
+
+# sim_dt, decimation, safety_switch, use_estimator, main policy, extra
+SETUPS = (
+    (0.001, 20, True, False, "Final7", {}),
+    (0.02, 1, True, True, "WTW", {}),
+    (0.005, 4, False, False, "ClockRough", {}),
+    (0.02, 1, True, True, None, {}),
+    (0.02, 1, True, False, "Reco2", {"safety_timeout": 2.0, "forward_limit": 20.0}),
+    (0.02, 1, True, False, "Final7", {"safety_policy": "Broken"}),
+)
+
+
+def setups(via_ros):
+    """Pipeline reads the safety policy timeout from config.yaml, so via ROS it keeps that one."""
+    out = []
+    for s in SETUPS:
+        extra = dict(s[5])
+        if via_ros:
+            extra.pop("safety_timeout", None)
+        out.append((*s[:5], extra))
+    return out
+
+
+class Observer:
+    """What run() does besides driving the C++ side: nothing here; the recorder drives the Python pipeline too."""
+
+    def prepare(self, **kwargs):
+        pass
+
+    def send(self, topic, msg):
+        pass
+
+    def loading(self):
+        return False
+
+    def enter(self):
+        pass
+
+    def enter_trip(self):
+        pass
+
+    def reset(self):
+        pass
+
+    def step(self, s, t):
+        pass
+
+    def check(self, t, policy_step, res, c, cpp):
+        """None, or what differs."""
+        return None
+
+    def mark(self, t, digest):
+        return None
+
+
+class Replay(Observer):
+    def __init__(self, run_meta, ref, i, tol):
+        self.meta, self.tol = run_meta, tol
+        self.targets, self.velocity = ref[f"{i}/targets"], ref[f"{i}/velocity"]
+        self.joints = ref[f"{i}/joints"] if f"{i}/joints" in ref else None
+        self.forced = {}
+        for t, n, v in zip(ref[f"{i}/forced_t"], ref[f"{i}/forced_name"], ref[f"{i}/forced"]):
+            self.forced.setdefault(int(t), []).append((run_meta["names"][n], v))
+        self.trace = json.loads(str(ref[f"{i}/trace"]))
+        self.next_trace = 0
+        self.expected = None
+        self.matched_inputs = -1
+        self.worst = 0.0
+
+    def check(self, t, policy_step, res, c, cpp):
+        for name, actions in self.forced.get(t, ()):
+            runner = c.runner(name)
+            if runner is not None:
+                runner.last_actions = actions
+        diff = {}
+        if policy_step:
+            k = t // self.meta["decimation"]
+            ref = self.targets[k].astype(np.float64)
+            err = float(np.max(np.abs(ref - res.targets) / np.maximum(1.0, np.abs(ref))))
+            self.worst = max(self.worst, err)
+            if err > self.tol:
+                diff["targets"] = (ref.tolist(), list(res.targets))
+            est = float(np.max(np.abs(self.velocity[k] - c.estimator.velocity)))
+            if est > 1e-9:
+                diff["estimator velocity"] = (self.velocity[k].tolist(), list(c.estimator.velocity))
+            if self.joints is not None:
+                a, b = self.joints[k].astype(np.float64), joint_positions(cpp)
+                if not np.allclose(a, b, rtol=0, atol=self.tol * 4, equal_nan=True):
+                    diff["joint_commands"] = (a.tolist(), b.tolist())
+        while self.next_trace < len(self.trace) and self.trace[self.next_trace][0] <= t:
+            self.expected = self.trace[self.next_trace][1]
+            self.next_trace += 1
+        now = trace(c, res, cpp)
+        for k in now:
+            if now[k] != self.expected.get(k):
+                diff[k] = (self.expected.get(k), now[k])
+        if not diff:
+            return None
+        lines = [f"  {k}: python {a!r}  c++ {b!r}" for k, (a, b) in diff.items()]
+        lines.append(f"  (inputs match the recording up to step {self.matched_inputs})")
+        return "\n".join(lines)
+
+    def mark(self, t, digest):
+        if digest != self.meta["marks"][t // MARK_EVERY]:
+            return f"the generated inputs differ from the recording's by step {t} (World, random_event or numpy changed)"
+        self.matched_inputs = t
+        return None
+
+
+MARK_EVERY = 50
+
+
+def run(setup, seed, seconds, event_rate, via_ros, specs, observer):
+    sim_dt, decimation, safety_switch, use_estimator, main_name, extra = setup
     rng = np.random.default_rng(seed)
     CLOCK.t = 1000.0
     policies = load_policies()
-    if safety_policy is not None:
-        policies = {**policies, "safety_policy": safety_policy}
+    if "safety_policy" in extra:
+        policies = {**policies, "safety_policy": extra["safety_policy"]}
     raw_catalog = dict(policies.get("policies") or {})
     raw_catalog["Broken"] = {"path": "IsaacLab_Tasks/missing/model_0.pt"}
-    policy_manager.load_policies = lambda: {**policies, "policies": raw_catalog}
-    cpp_pipeline.load_policies = policy_manager.load_policies
+    policies = {**policies, "policies": raw_catalog}
+    cpp_pipeline.load_policies = lambda: policies
     catalog = read_catalog(raw_catalog)
     main_ckpt = paths.repo(catalog[main_name]["path"]) if main_name else None
+    safety_timeout = extra.get("safety_timeout")
+    observer.prepare(policies=policies, checkpoint=main_ckpt, use_estimator=use_estimator, sim_dt=sim_dt,
+                     safety_switch=safety_switch, decimation=decimation, safety_timeout=safety_timeout)
 
-    node = FakeNode()
-    pipe = LocomotionPipeline(node, checkpoint=main_ckpt, use_estimator=use_estimator, sim_dt=sim_dt,
-                              safety_switch=safety_switch)
-    pipe.decimation = decimation
-    if safety_timeout is not None:
-        pipe.safety_timeout = safety_timeout
-    pipe.policy_dt = decimation * sim_dt
     cfg = qc.ControllerConfig.from_yaml(paths.config("config.yaml"), paths.description("config", "go2_kinematics.yaml"),
                                         sim_dt, use_estimator, safety_switch)
     cfg.decimation, cfg.policy_dt = decimation, decimation * sim_dt
     if safety_timeout is not None:
         cfg.safety_policy_timeout = safety_timeout
-    if args.via_ros:
+    if via_ros:
         cpp = WrapperSide(checkpoint=main_ckpt, use_estimator=use_estimator, sim_dt=sim_dt, safety_switch=safety_switch)
         cpp.pipe.decimation, cpp.pipe.policy_dt = decimation, decimation * sim_dt
     else:
         cpp = CppSide(cfg, catalog, policies.get("safety_policy") or "", main_ckpt, specs)
     c = cpp.core
 
-    stance = qc.default_stance()
-    world = World(rng, stance, np.asarray(cfg.lie_pose))
+    world = World(rng, qc.default_stance(), np.asarray(cfg.lie_pose))
     names = list(catalog) + ["main", "nope", "Broken"]
+    inputs = reference.Hash()
 
     def both(topic, msg):
-        node.send(topic, msg)
+        inputs.add(topic, repr(msg))
+        observer.send(topic, msg)
         cpp.send(topic, msg, CLOCK.t)
-        while pipe.policy_manager._loading or (args.via_ros and cpp.pipe._loading):
+        while observer.loading() or (via_ros and cpp.pipe._loading):
             _real_sleep(0.005)
 
     for topic, value in (("/safety/max_torque_percent", 55.0), ("/safety/base_tilt_limit_deg", 30.0),
-                         ("/safety/base_forward_tilt_limit_deg", forward_limit), ("/safety/joint_rom_safety_margin", 0.15),
-                         ("/safety/watchdog_timeout", 0.35)):
+                         ("/safety/base_forward_tilt_limit_deg", extra.get("forward_limit", 30.0)),
+                         ("/safety/joint_rom_safety_margin", 0.15), ("/safety/watchdog_timeout", 0.35)):
         both(topic, Float32(data=value))
 
-    steps = int(args.seconds / sim_dt)
+    steps = int(seconds / sim_dt)
     gap_until = teleop_until = trick_until = -1.0
     teleop = trick = None
     next_heartbeat = CLOCK.t
-    worst = 0.0
     counts = {}
     coverage = {}
     for t in range(steps):
@@ -370,7 +486,7 @@ def run(args, sim_dt, decimation, safety_switch, use_estimator, main_name, seed,
             both("/cmd_vel", m)
         if policy_step and CLOCK.t < trick_until and t % (decimation * 3) == 0:
             both("/pipeline/trick", floats(trick))
-        if policy_step and rng.random() < args.event_rate * decimation * sim_dt:
+        if policy_step and rng.random() < event_rate * decimation * sim_dt:
             topic, msg = random_event(rng, names)
             counts[topic] = counts.get(topic, 0) + 1
             if topic == "gap":
@@ -380,61 +496,39 @@ def run(args, sim_dt, decimation, safety_switch, use_estimator, main_name, seed,
             elif topic == "trick":
                 trick_until, trick = CLOCK.t + msg[0], msg[1]
             elif topic == "enter":
-                if pipe.safety_processor._estop_latched:
-                    pipe.safety_processor._estop_latched = False
+                observer.enter()
                 c.safety.release_estop()
             elif topic == "enter_trip":
-                if pipe.safety_processor.is_policy_blocked:
-                    pipe.safety_processor.release()
+                observer.enter_trip()
                 if c.safety.is_policy_blocked:
                     c.safety.release()
             elif topic == "sim_reset":
-                pipe.reset()
+                observer.reset()
                 c.reset()
             else:
                 both(topic, msg)
+            inputs.add(topic, repr(msg))
 
         s = world.sample(sim_dt)
-        target_py = np.array(pipe.step(dict(s), None, CLOCK.t), dtype=np.float64)
-        if args.via_ros:
+        inputs.add(t, s)
+        observer.step(dict(s), t)
+        if via_ros:
             targets = np.asarray(cpp.pipe.step(dict(s), None, CLOCK.t))
             res = SimpleNamespace(targets=targets, policy_step=policy_step, pose_status=None)
         else:
             res = c.step(s["q"], s["dq"], s["quat"], s["gyro"], s["accel"], s["pos"], s["vel"], s["contact"],
                          sim_time=CLOCK.t, now=CLOCK.t)
             c.drain_events()
-        for name in c.loaded:
-            runner = pipe.policy_manager.policies.get(name)
-            if runner is not None and hasattr(runner, "last_actions"):
-                runner.last_actions[:] = c.runner(name).last_actions
 
-        err = float(np.max(np.abs(target_py - res.targets) / np.maximum(1.0, np.abs(target_py))))
-        worst = max(worst, err)
-        a, b = snapshot_py(pipe, node), snapshot_cpp(c)
-        est = float(np.max(np.abs(np.asarray(pipe.telemetry.estimator.velocity) - c.estimator.velocity)))
-        status = node.pubs["/pose/status"].last
-        if res.pose_status is not None and (status is None or status.data != res.pose_status):
-            a["pose_status"], b["pose_status"] = None if status is None else status.data, res.pose_status
-        if args.via_ros:
-            pa, pb = published(node), published(cpp.node)
-            ja, jb = pa.pop("/commands/joint_commands"), pb.pop("/commands/joint_commands")
-            if (ja is None) != (jb is None) or (ja and (not np.allclose(ja[0], jb[0], rtol=0, atol=args.tol * 4)
-                                                       or ja[1] != jb[1])):
-                a["joint_commands"], b["joint_commands"] = ja, jb
-            for topic in pa:
-                if pa[topic] != pb[topic]:
-                    a[topic], b[topic] = pa[topic], pb[topic]
-        if a != b or err > args.tol or est > 1e-9:
-            print(f"MISMATCH at t={t} ({t * sim_dt:.3f} s, world '{world.kind}'), target error {err:.2e}, estimator {est:.1e}")
-            for k in a:
-                if a[k] != b[k]:
-                    print(f"  {k}: python {a[k]!r}  c++ {b[k]!r}")
-            print("  last python logs:", node.logs[-5:])
+        problem = observer.check(t, policy_step, res, c, cpp)
+        if problem is None and t % MARK_EVERY == 0:
+            problem = observer.mark(t, inputs.hexdigest()[:12])
+        if problem is not None:
+            print(f"MISMATCH at t={t} ({t * sim_dt:.3f} s, world '{world.kind}')\n{problem}")
             return False
-        if res.policy_step:
-            node.pubs["/pose/status"].last = None
-            if args.via_ros:
-                cpp.node.pubs["/pose/status"].last = None
+        if res.policy_step and via_ros:
+            cpp.node.pubs["/pose/status"].last = None
+        b = snapshot_cpp(c)
         seen = (("safety policy running", b["safety_active"]), ("numb: " + b["numb_reason"].split(" (")[0], b["numb"]),
                 ("trip: " + b["trip"].split(" ")[0], b["blocked"]), ("estop", b["estop"]),
                 ("policy error", b["error"] is not None), ("policy " + str(b["active"]), b["mode"] == "policy"),
@@ -444,32 +538,48 @@ def run(args, sim_dt, decimation, safety_switch, use_estimator, main_name, seed,
                 coverage[key] = coverage.get(key, 0) + 1
     label = (f"dt {sim_dt} x{decimation}, safety_switch {safety_switch}, estimator {use_estimator}, main {main_name}, "
              f"safety policy {policies.get('safety_policy')}, timeout {safety_timeout or cfg.safety_policy_timeout:.0f} s, seed {seed}")
-    print(f"{label}: {steps} steps ({args.seconds:.0f} s) match, max target error {worst:.1e}")
+    print(f"{label}: {steps} steps ({seconds:.0f} s) match, max target error {getattr(observer, 'worst', 0.0):.1e}")
     print(f"  events: {dict(sorted((str(k), v) for k, v in counts.items()))}")
     print(f"  policy steps in: {dict(sorted(coverage.items()))}")
     return True
 
 
+def frozen_files(meta):
+    """The recorded config files, with policies.json pointing at where the recorded checkpoints are now."""
+    files = dict(meta["files"])
+    live = load_policies().get("policies") or {}
+    policies = json.loads(files["policies.json"])
+    missing = []
+    for spec in (policies.get("policies") or {}).values():
+        sha1 = meta["checkpoints"].get(spec.get("path") or "")
+        if sha1:
+            found = reference.find_checkpoint(spec["path"], sha1, live)
+            if found is None:
+                missing.append(spec["path"])
+            else:
+                spec["path"] = found
+    files["policies.json"] = json.dumps(policies)
+    return files, missing
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seconds", type=float, default=120.0)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--event-rate", type=float, default=1.5, help="random events per second")
     parser.add_argument("--tol", type=float, default=1e-4)
-    parser.add_argument("--via-ros", action="store_true", help="drive CppPipeline through its ROS callbacks")
+    parser.add_argument("--via-ros", action="store_true", help="drive Pipeline through its ROS callbacks")
+    parser.add_argument("--reference", default=None, help="default: reference/pipeline.npz (pipeline_ros.npz via ROS)")
     args = parser.parse_args()
+    meta, ref = reference.load(args.reference or reference.path("pipeline_ros.npz" if args.via_ros else "pipeline.npz"))
+    files, missing = frozen_files(meta)
+    if missing:
+        print(f"skipped, the recorded checkpoints are gone: {missing}")
+        return 0
     specs = {}
     ok = True
-    configs = (
-        (0.001, 20, True, False, "Final7", {}),
-        (0.02, 1, True, True, "WTW", {}),
-        (0.005, 4, False, False, "ClockRough", {}),
-        (0.02, 1, True, True, None, {}),
-        (0.02, 1, True, False, "Reco2", {"forward_limit": 20.0} if args.via_ros else {"safety_timeout": 2.0, "forward_limit": 20.0}),
-        (0.02, 1, True, False, "Final7", {"safety_policy": "Broken"}),
-    )
-    for i, (sim_dt, decimation, safety_switch, use_estimator, main_name, extra) in enumerate(configs):
-        ok = run(args, sim_dt, decimation, safety_switch, use_estimator, main_name, args.seed * 100 + i, specs, **extra) and ok
+    with reference.frozen(files):
+        for i, r in enumerate(meta["runs"]):
+            setup = (r["sim_dt"], r["decimation"], r["safety_switch"], r["use_estimator"], r["main"], r["extra"])
+            ok = run(setup, r["seed"], meta["seconds"], meta["event_rate"], args.via_ros, specs,
+                     Replay(r, ref, i, args.tol)) and ok
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 

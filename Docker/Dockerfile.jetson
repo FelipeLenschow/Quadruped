@@ -67,15 +67,7 @@ RUN printf 'source /opt/ros/humble/install/setup.bash\nsource /opt/ros/extras/in
     printf '#!/bin/bash\nsource /opt/ros/humble/setup.bash\nexec "$@"\n' > /ros_entrypoint.sh && \
     chmod +x /ros_entrypoint.sh
 
-# 6. CycloneDDS 0.10.x for the Unitree SDK (as in the laptop image)
-RUN git clone -q https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x /tmp/cyclonedds && \
-    cmake -S /tmp/cyclonedds -B /tmp/cyclonedds/build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_EXAMPLES=OFF && \
-    cmake --build /tmp/cyclonedds/build --target install -j${BUILD_JOBS} && \
-    rm -rf /tmp/cyclonedds
-ENV CYCLONEDDS_HOME=/usr/local
-ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
-
-# 7. torchvision with CUDA ops (YOLO's NMS runs on the GPU), built against the base's torch: no wheel exists
+# 6. torchvision with CUDA ops (YOLO's NMS runs on the GPU), built against the base's torch: no wheel exists
 RUN git clone -q --depth 1 -b v0.15.1 https://github.com/pytorch/vision /tmp/torchvision && \
     cd /tmp/torchvision && \
     BUILD_VERSION=0.15.1 FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.7" MAX_JOBS=${BUILD_JOBS} python3 setup.py bdist_wheel && \
@@ -83,14 +75,14 @@ RUN git clone -q --depth 1 -b v0.15.1 https://github.com/pytorch/vision /tmp/tor
     python3 -c "import torchvision; print('torchvision==' + torchvision.__version__)" >> /opt/pip-constraints.txt && \
     cd / && rm -rf /tmp/torchvision
 
-# 8. TensorRT's Python bindings (for exporting YOLO engines), when the base did not bring them. Checked without
+# 7. TensorRT's Python bindings (for exporting YOLO engines), when the base did not bring them. Checked without
 #    importing: the GPU driver libraries are empty placeholders until `--runtime nvidia` mounts the robot's.
 RUN FIND='import importlib.util as u, sys; sys.exit(u.find_spec("tensorrt") is None)'; \
     python3 -c "$FIND" || \
     (apt-get update && apt-get install -y --no-install-recommends python3-libnvinfer python3-libnvinfer-dev && \
      rm -rf /var/lib/apt/lists/* && python3 -c "$FIND")
 
-# 9. Python packages, the same list as the laptop image, into the system Python 3.8 (no venv: the base's torch
+# 8. Python packages, the same list as the laptop image, into the system Python 3.8 (no venv: the base's torch
 #    and ROS live there). NVIDIA's OpenCV Python binding goes, so cv2 is pip's as on the laptop; its C++
 #    libraries stay for cv_bridge. JetPack 5's TensorRT uses np.bool, gone in numpy 1.24.
 RUN echo "numpy==1.23.5" >> /opt/pip-constraints.txt && \
@@ -99,7 +91,6 @@ RUN echo "numpy==1.23.5" >> /opt/pip-constraints.txt && \
     pip3 install --no-cache-dir \
     "setuptools<80" \
     protobuf==3.20.3 \
-    cyclonedds==0.10.2 \
     numpy \
     pyyaml \
     scipy \
@@ -116,7 +107,7 @@ RUN echo "numpy==1.23.5" >> /opt/pip-constraints.txt && \
     pip3 install --no-cache-dir opencv-python-headless && \
     python3 -c "import cv2, torch, torchvision, ultralytics; print(cv2.__version__, torch.__version__, ultralytics.__version__)"
 
-# 10. Environment: Fast DDS like the laptop image (Tools/ros_env.sh's discovery server), not dusty-nv's Cyclone
+# 9. Environment: Fast DDS like the laptop image (Tools/ros_env.sh's discovery server), not dusty-nv's Cyclone
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 ENV ROS_DOMAIN_ID=1
 ENV ROS_LOCALHOST_ONLY=0

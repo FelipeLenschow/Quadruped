@@ -8,7 +8,13 @@
 namespace quadruped_control {
 
 using Vec3 = Eigen::Vector3d;
+using Vec4 = Eigen::Vector4d;
 using Mat3 = Eigen::Matrix3d;
+
+// Body -> world rotation from a [w, x, y, z] quaternion.
+Mat3 rot_from_quat(const Vec4& quat_wxyz);
+// World gravity in the body frame, as Isaac Lab's projected_gravity_b (upright: [0, 0, -9.81]).
+Vec3 projected_gravity_b(const Vec4& quat_wxyz);
 
 // Legs FL=0, FR=1, RL=2, RR=3; joints per leg [hip abduction (X), thigh (Y), calf (Y)].
 struct LegGeometry {

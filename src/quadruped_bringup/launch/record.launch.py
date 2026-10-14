@@ -5,7 +5,7 @@ from launch import LaunchDescription
 from launch.actions import ExecuteProcess, OpaqueFunction
 
 from quadruped_bringup.launch_common import arg, get
-from quadruped_core import paths
+from quadruped_common import paths
 
 LIDAR_TOPICS = r"^/(lidar/points.*|lio/(cloud.*|map)|camera/.*image_raw.*|gazebo/.*image)$"
 

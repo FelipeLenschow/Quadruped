@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""C++ PolicyRunner against quadruped_core's, step by step, for every policy in policies.json."""
+"""C++ PolicyRunner against the recorded Python one (reference/policy.npz), step by step, for every recorded policy."""
 import argparse
 import os
 import sys
 import tempfile
 import time
-from types import SimpleNamespace
 
 import numpy as np
 
 import quadruped_control as qc
-from quadruped_control.export import load_runner, runner_to_qpol, write_qpol
-from quadruped_core import paths
-from quadruped_core.config_loader import load_policies
-from quadruped_core.controller.policy_runner import WTW_GAITS
+from quadruped_control.export import WTW_GAITS, export_checkpoint
+from quadruped_common.config_loader import load_policies
+
+import reference
 
 
 def quat_mul(a, b):
@@ -77,88 +76,90 @@ def rel_error(a, b):
     return float(np.nan_to_num(err, nan=np.inf).max())
 
 
-def py_state(s):
-    return SimpleNamespace(
-        imu=SimpleNamespace(quaternion=s["quat"].tolist(), gyroscope=s["gyro"].tolist()),
-        base_lin_vel=s["lin_vel"].tolist(),
-        motorState=[SimpleNamespace(q=float(s["q"][i]), dq=float(s["dq"][i])) for i in range(12)],
-    )
+def obs_index(obs_dim, single):
+    """The observation entries recorded: all of them, or the newest and oldest frame of a long history."""
+    if obs_dim <= 2 * single:
+        return np.arange(obs_dim)
+    return np.concatenate([np.arange(single), np.arange(obs_dim - single, obs_dim)])
 
 
-def run(name, path, steps, seed, obs_tol, act_tol):
-    py = load_runner(path)
+def apply(runner, action):
+    if action and action[0] == "reset":
+        runner.reset_history()
+    elif action and action[0] == "gait":
+        runner.set_gait(action[1], **action[2])
+    elif action and action[0] == "vector":
+        runner.set_gait_vector(action[1])
+
+
+def run(name, meta, ref, live_catalog, obs_tol, act_tol):
+    path = reference.find_checkpoint(meta["path"], meta["sha1"], live_catalog)
+    if path is None:
+        print(f"{name:<8} skipped, the recorded checkpoint ({meta['path']}) is gone")
+        return True
     with tempfile.TemporaryDirectory() as tmp:
         qpol = os.path.join(tmp, f"{name}.qpol")
-        write_qpol(qpol, *runner_to_qpol(py, name=name, source=path))
+        export_checkpoint(path, qpol, name=name)
         cpp = qc.PolicyRunner.from_file(qpol)
 
-    seen = {}
-    get_action = py.get_action
-    py.get_action = lambda obs: (seen.__setitem__("obs", obs), get_action(obs))[1]
+    obs, actions, forced = ref[f"{name}/obs"], ref[f"{name}/actions"], ref[f"{name}/forced"]
+    idx = obs_index(cpp.spec.obs_dim, cpp.spec.obs_dim_single)
+    wtw = meta["layout"] == "wtw"
+    rng = np.random.default_rng(meta["seed"])
+    inputs = list(events(meta["steps"], rng, np.asarray(meta["qpos"]), wtw))
+    if reference.Hash().add(inputs).hexdigest() != meta["inputs"]:
+        print(f"{name:<8} FAIL: the generated inputs differ from the recording's (events() or numpy's generator changed)")
+        return False
 
-    rng = np.random.default_rng(seed)
     worst_obs = worst_act = 0.0
     runaway = 0
-    t_py = t_cpp = 0.0
-    wtw = py._obs_layout == "wtw"
-    for t, (action, s, cmd) in enumerate(events(steps, rng, py.desired_qpos.astype(np.float64), wtw)):
-        if action and action[0] == "reset":
-            py.reset_history()
-            cpp.reset_history()
-        elif action and action[0] == "gait":
-            py.set_gait(gait=action[1], **action[2])
-            cpp.set_gait(action[1], **action[2])
-        elif action and action[0] == "vector":
-            py.set_gait_vector(action[1])
-            cpp.set_gait_vector(action[1])
-        if wtw:
-            assert np.array_equal(py.gait_command, cpp.gait_command), (t, py.gait_command, cpp.gait_command)
-
-        state = py_state(s)
-        start = time.perf_counter()
-        a_py, _ = py.infer(state, cmd, py.desired_qpos, list(range(12)), dt=0.02)
-        t_py += time.perf_counter() - start
+    t_cpp = 0.0
+    for t, (action, s, cmd) in enumerate(inputs):
+        apply(cpp, action)
+        if wtw and not np.array_equal(ref[f"{name}/gait"][t], cpp.gait_command):
+            print(f"{name:<8} MISMATCH at step {t}: gait command py {ref[f'{name}/gait'][t]} cpp {cpp.gait_command}")
+            return False
         start = time.perf_counter()
         a_cpp = cpp.infer(s["quat"], s["lin_vel"], s["gyro"], s["q"], s["dq"], cmd, 0.02)
         t_cpp += time.perf_counter() - start
 
-        worst_obs = max(worst_obs, rel_error(seen["obs"], cpp.last_obs))
-        worst_act = max(worst_act, rel_error(a_py, a_cpp))
-        # Both continue from the same actions, so float32 rounding cannot compound through last_actions.
-        py.last_actions[:] = a_cpp
+        worst_obs = max(worst_obs, rel_error(obs[t], cpp.last_obs[idx]))
+        worst_act = max(worst_act, rel_error(actions[t], a_cpp))
+        # Continue from the actions the recording continued from, so float32 rounding cannot compound.
+        cpp.last_actions = forced[t]
         # Random states drive the action feedback far past any real target (to inf); restart from there.
-        if not np.all(np.abs(a_py) < 100.0):
-            py.reset_history()
+        if not np.all(np.abs(actions[t]) < 100.0):
             cpp.reset_history()
             runaway += 1
         if worst_obs > obs_tol or worst_act > act_tol:
-            i = int(np.nanargmax(np.abs(seen["obs"] - cpp.last_obs) / np.maximum(1.0, np.abs(seen["obs"]))))
-            print(f"{name:<8} MISMATCH at step {t}: obs {worst_obs:.2e} (index {i}: py {seen['obs'][i]} cpp {cpp.last_obs[i]}), "
-                  f"actions {worst_act:.2e}")
+            err = np.abs(obs[t] - cpp.last_obs[idx]) / np.maximum(1.0, np.abs(obs[t]))
+            i = int(np.nanargmax(err))
+            print(f"{name:<8} MISMATCH at step {t}: obs {worst_obs:.2e} (index {idx[i]}: py {obs[t][i]} cpp "
+                  f"{cpp.last_obs[idx[i]]}), actions {worst_act:.2e}")
             return False
-    print(f"{name:<8} {py._obs_layout:<14} {steps} steps  max |py - cpp| obs {worst_obs:.1e}  actions {worst_act:.1e}  "
-          f"python {1e6 * t_py / steps:6.0f} us  c++ {1e6 * t_cpp / steps:5.0f} us  ({runaway} runaway resets)")
+    steps = meta["steps"]
+    print(f"{name:<8} {meta['layout']:<14} {steps} steps  max |py - cpp| obs {worst_obs:.1e}  actions {worst_act:.1e}  "
+          f"c++ {1e6 * t_cpp / steps:5.0f} us (python was {meta['python_us']:.0f})  ({runaway} runaway resets)")
     return True
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("policies", nargs="*", help="policies.json names (default: all)")
-    parser.add_argument("--steps", type=int, default=3000)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("policies", nargs="*", help="recorded policy names (default: all)")
+    parser.add_argument("--reference", default=reference.path("policy.npz"))
     parser.add_argument("--obs-tol", type=float, default=1e-4)
     parser.add_argument("--act-tol", type=float, default=2e-4)
     args = parser.parse_args()
 
-    catalog = load_policies().get("policies") or {}
-    ok = bool(catalog)
-    for name in args.policies or list(catalog):
-        path = catalog[name]["path"]
-        path = path if os.path.isabs(path) else paths.repo(path)
-        if not os.path.exists(path):
-            print(f"{name:<8} skipped, no checkpoint at {path}")
+    meta, ref = reference.load(args.reference)
+    live = load_policies().get("policies") or {}
+    ok = True
+    for name in args.policies or list(meta["policies"]):
+        if name not in meta["policies"]:
+            print(f"{name:<8} FAIL: not in the recording ({', '.join(meta['policies'])})")
+            ok = False
             continue
-        ok = run(name, path, args.steps, args.seed, args.obs_tol, args.act_tol) and ok
+        ok = run(name, meta["policies"][name], ref, live, args.obs_tol, args.act_tol) and ok
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 

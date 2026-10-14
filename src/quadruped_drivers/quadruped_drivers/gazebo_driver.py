@@ -18,12 +18,12 @@ import subprocess
 
 import numpy as np
 
-from quadruped_core.pipeline import make_pipeline
-from quadruped_core.telemetry.estimator import rot_from_quat
-from quadruped_core.telemetry.kinematics import Go2Kinematics
-from quadruped_core.config_loader import load_config
-from quadruped_core.controller.robot_defaults import DEFAULT_STANCE_QPOS
-from quadruped_core import paths
+from quadruped_control.driver_node import Pipeline
+from quadruped_common.kinematics import rot_from_quat
+from quadruped_common.kinematics import Go2Kinematics
+from quadruped_common.config_loader import load_config
+from quadruped_common.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_common import paths
 
 import rclpy
 from rclpy.node import Node
@@ -113,7 +113,7 @@ class Ros2GazeboDriver(Node):
         self.kd = float(self.ctrl_cfg.get("kd", 0.0))
         self.cmd_vel = [0.0, 0.0, 0.0, 0.0]
 
-        self.pipeline = make_pipeline(
+        self.pipeline = Pipeline(
             node=self,
             robot_type=robot_type,
             checkpoint=checkpoint,

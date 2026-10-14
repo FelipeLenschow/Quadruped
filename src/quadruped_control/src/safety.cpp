@@ -116,7 +116,7 @@ void SafetyProcessor::release() {
 
 bool SafetyProcessor::safety_reset() {
   if (!(policy_blocked_ || numb_)) return false;
-  events_.log(LogLevel::Warn, "[CommandSafetyProcessor] Safety reset received from console.");
+  events_.log(LogLevel::Warn, "[Safety] Safety reset received from console.");
   release();
   return true;
 }

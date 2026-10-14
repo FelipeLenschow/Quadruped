@@ -14,7 +14,7 @@ import yaml
 from rclpy.utilities import remove_ros_args
 
 def load_config():
-    from quadruped_core import paths
+    from quadruped_common import paths
     config_path = paths.config("config.yaml")
     try:
         with open(config_path, "r") as f:

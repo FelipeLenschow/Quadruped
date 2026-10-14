@@ -49,6 +49,8 @@ install(TARGETS _core DESTINATION ${PYTHON_INSTALL_DIR}/${PROJECT_NAME})
 install(TARGETS ${PROJECT_NAME} EXPORT export_${PROJECT_NAME} ARCHIVE DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
 install(PROGRAMS test/estimator_parity.py test/policy_parity.py test/pipeline_parity.py scripts/export_policy.py DESTINATION lib/${PROJECT_NAME})
+install(FILES test/reference.py DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY test/reference DESTINATION lib/${PROJECT_NAME})
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(Eigen3 yaml-cpp)
