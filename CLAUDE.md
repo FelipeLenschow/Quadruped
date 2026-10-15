@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+Write all text (replies, docs, comments, commit messages) in ASD-STE100 Simplified Technical English.
+
 This file orients an agent working in this repo. For the deployment/runtime architecture (drivers, telemetry, controller), see `README.md` and `PROJECT_OVERVIEW.md` — this file covers environment setup and the Isaac Lab training side, which those docs don't get into.
 
 ## Environment setup

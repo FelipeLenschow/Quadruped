@@ -25,11 +25,11 @@
       "commands": "trick"
     },
     "Sniff": {
-      "path": "IsaacLab_Tasks/Tricks/logs/rsl_rl/go2_sniff/Sniff1/model_599.pt",
+      "path": "IsaacLab_Tasks/Tricks/logs/rsl_rl/go2_sniff/Sniff2/model_599.pt",
       "commands": "trick"
     },
     "Wiggle": {
-      "path": "IsaacLab_Tasks/Tricks/logs/rsl_rl/go2_wiggle/Wiggle1/model_599.pt",
+      "path": "IsaacLab_Tasks/Tricks/logs/rsl_rl/go2_wiggle/Wiggle2/model_599.pt",
       "commands": "trick"
     }
   }

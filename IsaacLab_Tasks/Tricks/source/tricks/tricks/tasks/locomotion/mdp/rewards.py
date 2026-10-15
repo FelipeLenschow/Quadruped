@@ -338,6 +338,12 @@ def roll_on(env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg
     return _on(env, command_name) * roll.square()
 
 
+def joint_vel_on(env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Penalty: squared velocity of asset_cfg's joints while on."""
+    qd = env.scene[asset_cfg.name].data.joint_vel.torch[:, asset_cfg.joint_ids]
+    return _on(env, command_name) * qd.square().sum(dim=1)
+
+
 # ── Swinging: Wiggle's yaw, Sniff's pitch ────────────────────────────────────────────────────
 # No clock: turning fast pays, reaching the ends of the swing pays, going past them costs, so the best
 # is to swing between them at the rate. Period about 4 x amplitude / rate.

@@ -86,13 +86,13 @@ PEE_FRONT_CLEAR = _env("PEE_FRONT_CLEAR", 0.08)
 # the other held still at one end and shook.
 SNIFF_PITCH = _env("SNIFF_PITCH", 0.3)
 SNIFF_HEIGHT = _env("SNIFF_HEIGHT", 0.26)
-SNIFF_AMPLITUDE = _env("SNIFF_AMPLITUDE", 0.06)
-SNIFF_HZ = _env("SNIFF_HZ", 1.0)
+SNIFF_AMPLITUDE = _env("SNIFF_AMPLITUDE", 0.03)
+SNIFF_HZ = _env("SNIFF_HZ", 2.5)
 
 # ── Wiggle: the back end swings side to side, feet planted ─────────────────────────────────
 # Base yaw +-WIGGLE_AMPLITUDE at up to WIGGLE_RATE rad/s, turning about a point WIGGLE_PIVOT m ahead of the
 # base centre (between the front hips), which stays put.
-WIGGLE_AMPLITUDE = _env("WIGGLE_AMPLITUDE", 0.08)
+WIGGLE_AMPLITUDE = _env("WIGGLE_AMPLITUDE", 0.04)
 WIGGLE_RATE = _env("WIGGLE_RATE", 0.55)
 WIGGLE_PIVOT = _env("WIGGLE_PIVOT", 0.2)
 
@@ -472,12 +472,18 @@ class SniffEnvCfg(TricksEnvCfg):
         r.bob = RewTerm(
             func=mdp.pitch_track,
             weight=2.0,
-            params={"center": SNIFF_PITCH, "amplitude": SNIFF_AMPLITUDE, "std": 0.02, "command_name": _CMD},
+            params={"center": SNIFF_PITCH, "amplitude": SNIFF_AMPLITUDE, "std": SNIFF_AMPLITUDE / 3, "command_name": _CMD},
         )
         r.height = RewTerm(
             func=mdp.base_height_on,
             weight=1.0,
             params={"target": SNIFF_HEIGHT, "std": 0.03, "command_name": _CMD, "sensor_cfg": _SCAN},
+        )
+        r.anchor = RewTerm(func=mdp.pivot_still, weight=1.5, params={"forward": 0.0, "std": 0.02, "command_name": _CMD})
+        r.rear_still = RewTerm(
+            func=mdp.joint_vel_on,
+            weight=-0.1,
+            params={"command_name": _CMD, "asset_cfg": SceneEntityCfg("robot", joint_names=["R[LR]_.*"])},
         )
         r.roll = RewTerm(func=mdp.roll_on, weight=-5.0, params={"command_name": _CMD})
         print(f"[Sniff] pitch {SNIFF_PITCH} +-{SNIFF_AMPLITUDE} rad at {SNIFF_HZ} Hz, base {SNIFF_HEIGHT} m")
@@ -493,8 +499,13 @@ class WiggleEnvCfg(TricksEnvCfg):
         swing = {"axis": "yaw", "command_name": _CMD}
         r.yaw_rate = RewTerm(func=mdp.swing_rate, weight=1.5, params={"rate": WIGGLE_RATE, **swing})
         r.yaw_reach = RewTerm(func=mdp.swing_reach, weight=1.0, params={"center": 0.0, "amplitude": WIGGLE_AMPLITUDE, **swing})
-        r.yaw_over = RewTerm(func=mdp.swing_over, weight=-200.0, params={"center": 0.0, "amplitude": WIGGLE_AMPLITUDE, **swing})
+        r.yaw_over = RewTerm(func=mdp.swing_over, weight=-800.0, params={"center": 0.0, "amplitude": WIGGLE_AMPLITUDE, **swing})
         r.pivot = RewTerm(func=mdp.pivot_still, weight=1.5, params={"forward": WIGGLE_PIVOT, "std": 0.03, "command_name": _CMD})
+        r.front_still = RewTerm(
+            func=mdp.joint_vel_on,
+            weight=-0.1,
+            params={"command_name": _CMD, "asset_cfg": SceneEntityCfg("robot", joint_names=["F[LR]_.*"])},
+        )
         r.roll = RewTerm(func=mdp.roll_on, weight=-5.0, params={"command_name": _CMD})
         print(f"[Wiggle] +-{WIGGLE_AMPLITUDE} rad at {WIGGLE_RATE} rad/s about a point {WIGGLE_PIVOT} m ahead")
 
