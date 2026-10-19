@@ -5,8 +5,10 @@ import time
 import glob
 import subprocess
 import json
+import fcntl
 import platform
 import socket
+import struct
 import tempfile
 import yaml
 from datetime import datetime
@@ -20,6 +22,16 @@ START_REWARD_ESTIMATOR = False
 RECORDING_LAUNCH_FILES = {"mujoco.launch.py", "gazebo.launch.py", "isaac_sim.launch.py",
                           "eval.launch.py", "sweep.launch.py"}
 CONFIG_PATH = os.path.join(REPO_DIR, "src", "quadruped_bringup", "config", "config.yaml")
+# Menu [DLS2]: the commands of option [6] other than real_driver, for when DLS2 (go2_hal + ros2_translator)
+# has the robot. Each key is a dls2.launch.py argument.
+DLS2_COMMANDS = [
+    ("mock", "mock_go2 (MuJoCo Go2 on the Unitree SDK topics; PC only)"),
+    ("mux", "twist_mux (/cmd_vel/{joy,keyboard,phone,skill,nav,llm} -> /cmd_vel)"),
+    ("skills", "skill_server (the /skill service)"),
+    ("monitor", "system_monitor (/system_stats)"),
+    ("sensors", "real_sensors (L1 lidar cloud, IMU and sensor TF; real Go2 only)"),
+    ("mcp", "mcp_server (MCP server for an LLM)"),
+]
 
 # Global Environment Detection
 IS_DOCKER = os.path.exists("/.dockerenv")
@@ -40,6 +52,29 @@ def discovery_server_address():
     except Exception:
         pass
     return server
+
+
+def network_interfaces():
+    """(name, state, IPv4) of each network interface of this machine, lo first. Read from /sys and an ioctl,
+    because the Docker image has no `ip` command. The containers use the host network: these are the PC's."""
+    result = []
+    for name in sorted(os.listdir("/sys/class/net"), key=lambda n: (n != "lo", n)):
+        if name.startswith("veth"):  # one per running container, never a robot link
+            continue
+        try:
+            with open(f"/sys/class/net/{name}/operstate") as f:
+                state = f.read().strip()
+        except OSError:
+            state = "?"
+        ipv4 = ""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                packed = fcntl.ioctl(sock.fileno(), 0x8915, struct.pack("256s", name[:15].encode()))  # SIOCGIFADDR
+                ipv4 = socket.inet_ntoa(packed[20:24])
+        except OSError:
+            pass
+        result.append((name, state, ipv4))
+    return result
 
 
 def sdk_network_interface():
@@ -612,6 +647,8 @@ def run_cli_menu():
         print("  [R] RQT Graph")
         print("  [F] TF2 Tree")
         print("  [D] Discovery Server (needed for ROS 2 over WiFi)")
+        print("  " + "-" * 45)
+        print("  [DLS2] DLS2 Low Level (mock_go2, twist_mux, ...)")
     else:
         print("  [X] Play MuJoCo (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Play Gazebo (REQUIRES DOCKER OR PY3.10)")
@@ -632,6 +669,8 @@ def run_cli_menu():
         print("  [X] RQT Graph (REQUIRES DOCKER OR PY3.10)")
         print("  [X] TF2 Tree (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Discovery Server (REQUIRES DOCKER OR PY3.10)")
+        print("  " + "-" * 45)
+        print("  [X] DLS2 Low Level (REQUIRES DOCKER OR PY3.10)")
 
     action_map = {
         "0": "repeat",
@@ -666,13 +705,14 @@ def run_cli_menu():
         "F": "tf2_tree",
         "d": "discovery_server",
         "D": "discovery_server",
+        "dls2": "dls2",
     }
     
     default_action = "0" if last_cmd else "4"
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-7, N, L, K, V, C, T, P, M, R, F, D] (default {default_action}): ").strip() or default_action
+    choice = input(f"Enter choice [0-7, N, L, K, V, C, T, P, M, R, F, D, DLS2] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice.lower(), "None")
     
     if action == "hardware_tools":
@@ -685,6 +725,31 @@ def run_cli_menu():
         else:
             action = "real_telemetry"
             
+    dls2_items = []
+    if action == "dls2":
+        # DLS2 (go2_hal + ros2_translator, in the DLS2 docker) has the robot instead of real_driver.
+        commands = [c for c in DLS2_COMMANDS if not (IS_ROBOT and c[0] == "mock")]
+        default_keys = ("mux", "skills", "monitor", "sensors" if IS_ROBOT else "mock")  # what [6] runs
+        default = ",".join(str(i + 1) for i, (key, _) in enumerate(commands) if key in default_keys)
+        print("\n--- DLS2 Low Level ---")
+        print("  Start DLS2 in its docker: dls --startup=/usr/include/dls2/startup/go2_startup_nav.yaml")
+        print("  (with mock_go2, go2_hal needs the same network_interface: \"lo\" when DLS2 runs on this PC)")
+        for i, (_, label) in enumerate(commands):
+            print(f"  [{i + 1}] {label}")
+        picks = input(f"Enter choice(s), e.g. 1 or 1,3 [1-{len(commands)}] (default {default}): ").strip() or default
+        for p in picks.replace(" ", ",").split(","):
+            if not p:
+                continue
+            try:
+                key = commands[int(p) - 1][0]
+            except (ValueError, IndexError):
+                print(f"[Launcher] Ignoring '{p}'.")
+                continue
+            if key not in dls2_items:
+                dls2_items.append(key)
+        if not dls2_items:
+            sys.exit(0)
+
     if action == "teleop":
         tel_choice = input("Select Teleop [1: Keyboard, 2: Gamepad (Joy), 3: Eval Sweep (Gamepad), "
                            "4: Eval Sweep Report (from MCAP)] (default 1): ").strip() or "1"
@@ -718,10 +783,17 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "dls2"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
+
+        last_opts = last_cmd.get("sweep_opts") or {}
+        mock_iface = last_opts.get("mock_interface", "lo")
+        if action == "dls2" and "mock" in last_opts.get("items", []) and mock_iface != "lo":
+            print(f"\n[WARNING] mock_go2 on '{mock_iface}': a Go2 on this network gets DLS2's motor commands.")
+            if input("Is the Go2 disconnected from this network? [y/N]: ").lower().strip() != "y":
+                sys.exit(0)
 
         return (
             last_cmd.get("module_name", "None"),
@@ -750,7 +822,7 @@ def run_cli_menu():
         print("\n[ERROR] Training/IsaacSim actions are not available in Docker. Aborting.")
         sys.exit(1)
         
-    if requires_docker and choice.lower() in ["4", "5", "6", "7", "k", "v", "c", "t", "p", "m", "r", "f"]:
+    if requires_docker and choice.lower() in ["4", "5", "6", "7", "k", "v", "c", "t", "p", "m", "r", "f", "dls2"]:
         print(f"\n[ERROR] Action '{action}' requires ROS 2 Humble (Python 3.10).")
         print("        Please run this task inside DOCKER or switch to a 3.10 environment.")
         sys.exit(1)
@@ -779,7 +851,7 @@ def run_cli_menu():
     
     # teleop_sweep is not in this list on purpose: it asks for the checkpoint the robot is running,
     # only to file the report under it later. sweep_report reads that back from the recording.
-    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "dls2"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         # Simple and WalkTheseWays (cut from unitree_rl_lab) live here so their logs sit alongside
         # the others (the eval viewer and the checkpoint list both read them in place), but they
@@ -843,7 +915,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"]:
+    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "dls2"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -909,7 +981,8 @@ def run_cli_menu():
         pass
 
     domain_id = default_domain
-    if action not in ["train", "isaac_lab", "eval_policy", "discovery_server", "sweep_report"]:
+    # mock_go2 alone has no ROS: it is on the Unitree SDK's DDS only.
+    if action not in ["train", "isaac_lab", "eval_policy", "discovery_server", "sweep_report"] and dls2_items != ["mock"]:
         domain_id = input(f"Enter ROS_DOMAIN_ID (default {default_domain}): ").strip() or default_domain
     robot_cfg = "UNITREE_GO2_CFG" # Default for now
     terrain_cfg = "flat"
@@ -1220,6 +1293,30 @@ def run_cli_menu():
         sweep_opts = {"only": only, "sim": sim, "check": check, "check_camera": check_camera, "detect": detect,
                       "map_objects": map_objects}
 
+    if action == "dls2":
+        sweep_opts = {"items": dls2_items}
+        if "mock" in dls2_items:
+            headless = input("Show the MuJoCo window? [Y/n] (default Y): ").lower().strip() == "n"
+            # lo keeps the mock inside this PC. Another interface puts rt/lowcmd on a real network, where a Go2
+            # would take it (same DDS domain and topics): only a cable from this PC straight to the Jetson.
+            ifaces = network_interfaces()
+            print("\nmock_go2 network interface:")
+            for i, (name, state, ipv4) in enumerate(ifaces):
+                note = "  (this machine only)" if name == "lo" else ""
+                print(f"  [{i + 1}] {name}  {state}{'  ' + ipv4 if ipv4 else ''}{note}")
+            pick = input(f"Enter choice [1-{len(ifaces)}] (default 1): ").strip() or "1"
+            try:
+                mock_iface = ifaces[int(pick) - 1][0]
+            except (ValueError, IndexError):
+                print(f"[Launcher] '{pick}' is not in the list.")
+                sys.exit(1)
+            if mock_iface != "lo":
+                print(f"\n[WARNING] mock_go2 on '{mock_iface}': a Go2 on this network gets DLS2's motor commands.")
+                print("          Only with a cable from this PC straight to the Jetson, with the Go2 cable removed.")
+                if input("Is the Go2 disconnected from this network? [y/N]: ").lower().strip() != "y":
+                    sys.exit(0)
+            sweep_opts["mock_interface"] = mock_iface
+
     if action == "lio":
         save = input("Save the 3D map to third_party/point_lio_ros2/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
         voxel_cm = input("Voxel size for the app's 3D map, cm [5]: ").strip()
@@ -1504,7 +1601,7 @@ def main():
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"):
+    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "dls2"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable
@@ -1544,6 +1641,13 @@ def main():
             cmd = ros2_launch("real.launch.py", robot=robot_key, obs_dim=obs_dim,
                               interface=sdk_iface or "",
                               checkpoint=abs_ckpt if action == "real_deploy" else "")
+
+        elif action == "dls2":
+            items = sweep_opts.get("items", [])
+            print(f"[Launcher] DLS2 low level: {', '.join(items)}")
+            cmd = ros2_launch("dls2.launch.py", **{key: True for key in items}, mock_window=not headless,
+                              mock_interface=sweep_opts.get("mock_interface", "lo"),
+                              interface=sdk_network_interface() if "sensors" in items else "")
 
         elif action == "teleop_keyboard":
             # teleop_twist_keyboard's velocity keys plus the Walk These Ways gait commands.
