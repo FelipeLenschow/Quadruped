@@ -639,7 +639,7 @@ def run_cli_menu():
         print("  " + "-" * 45)
         print("  --- ROS 2 Tools ---")
         print("  [N] Navigation (SLAM + Nav2 + rviz)")
-        print("  [L] 3D Mapping (Point-LIO + the app's voxel map)")
+        print("  [L] 3D Mapping (Point-LIO on the L1 or FAST-LIO on the Helios 16P, + the app's voxel map)")
         print("  [I] Cameras (camera_bridge + the app's preview)")
         print("  [K] Remote Teleop / Eval Sweep")
         print("  [V] Visualizers")
@@ -1319,7 +1319,11 @@ def run_cli_menu():
             sweep_opts["mock_interface"] = mock_iface
 
     if action == "lio":
-        save = input("Save the 3D map to third_party/point_lio_ros2/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
+        print("  [1] Point-LIO on the Go2's L1 (/lio/*)")
+        print("  [2] FAST-LIO on the Helios 16P (helios_driver, /helios_lio/*)")
+        helios = input("LIO [1]: ").strip() == "2"
+        package_dir = "FAST_LIO" if helios else "point_lio_ros2"
+        save = input(f"Save the 3D map to third_party/{package_dir}/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
         voxel_cm = input("Voxel size for the app's 3D map, cm [5]: ").strip()
         try:
             voxel = float(voxel_cm) / 100 if voxel_cm else None
@@ -1328,7 +1332,7 @@ def run_cli_menu():
         except ValueError:
             print(f"'{voxel_cm}' is not a positive number: using 5 cm.")
             voxel = None
-        sweep_opts = {"save": save, "voxel": voxel}
+        sweep_opts = {"save": save, "voxel": voxel, "helios": helios}
 
     return selected_module_name, selected_module_path, action, robot_cfg, terrain_cfg, num_envs, selected_ckpt, teleop, headless, video, run_name, domain_id, use_estimator, no_ground_truth, show_ghost, record_session, training_phase, auto_eval, sweep_opts
 
@@ -1708,8 +1712,9 @@ def main():
                               detect=sweep_opts.get("detect", False), map_objects=sweep_opts.get("map_objects", False))
 
         elif action == "lio":
-            # Needs the real driver running (its real_sensors publishes the lidar and its IMU).
-            cmd = ros2_launch("lio.launch.py", save=sweep_opts.get("save", False), voxel=sweep_opts.get("voxel"))
+            # Needs the real driver running (its real_sensors publishes the L1 cloud and /lidar/imu, which both use).
+            launch_file = "fast_lio.launch.py" if sweep_opts.get("helios") else "lio.launch.py"
+            cmd = ros2_launch(launch_file, save=sweep_opts.get("save", False), voxel=sweep_opts.get("voxel"))
 
         elif action == "mcap_record":
             cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name), lidar=sweep_opts.get("lidar", False))

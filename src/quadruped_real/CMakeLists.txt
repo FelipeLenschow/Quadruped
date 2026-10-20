@@ -58,6 +58,22 @@ ament_target_dependencies(go2_camera sensor_msgs)
 
 sdk_executable(test_joints src/test_joints.cpp src/paths.cpp src/robot_io.cpp)
 
+# RoboSense Helios 16P: rs_driver is header only (third_party/rs_driver). No pcap replay, so no libpcap.
+set(RS_DRIVER ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/rs_driver/src)
+get_filename_component(RS_DRIVER ${RS_DRIVER} REALPATH)
+if(EXISTS ${RS_DRIVER}/rs_driver/api/lidar_driver.hpp)
+  add_executable(helios_driver src/helios_driver.cpp src/paths.cpp)
+  target_include_directories(helios_driver PRIVATE src)
+  target_include_directories(helios_driver SYSTEM PRIVATE ${RS_DRIVER})
+  target_compile_definitions(helios_driver PRIVATE DISABLE_PCAP_PARSE ENABLE_MODIFY_RECVBUF)
+  target_link_libraries(helios_driver quadruped_control::quadruped_control Threads::Threads)
+  ament_target_dependencies(helios_driver rclcpp ament_index_cpp sensor_msgs geometry_msgs tf2_ros)
+  install(TARGETS helios_driver DESTINATION lib/${PROJECT_NAME})
+else()
+  message(WARNING "rs_driver not found at ${RS_DRIVER}: git submodule update --init third_party/rs_driver. "
+                  "helios_driver is not built")
+endif()
+
 # mock_go2 (a MuJoCo Go2 on the SDK's topics, for running real_driver on a PC) needs MuJoCo's C library, which
 # the mujoco Python wheel carries. Skipped where it is not installed.
 find_package(Python3 COMPONENTS Interpreter)

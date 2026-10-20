@@ -1,0 +1,50 @@
+# FAST-LIO (third_party/FAST_LIO) on the Helios 16P: fast_lio.launch.py.
+# The IMU is /lidar/imu (real_sensors: the body's axes, the base as origin), so FAST-LIO's body frame is the base.
+# fast_lio.launch.py sets the extrinsic (the lidar in that frame) from config.yaml's helios: xyz, rpy, and the
+# IMU topic and the PCD save from its arguments: the values here for those are only defaults.
+/**:
+  ros__parameters:
+    feature_extract_enable: false
+    point_filter_num: 3           # every 3rd point: ~10k points a scan from the 16 lines
+    max_iteration: 3
+    filter_size_surf: 0.15        # m, the scan's voxel filter (indoor rooms and hallways)
+    filter_size_map: 0.15
+    cube_side_length: 1000.0
+    runtime_pos_log_enable: false
+
+    common:
+      lid_topic: "/helios/points"   # helios_driver
+      imu_topic: "/lidar/imu"
+      time_sync_en: false           # Livox only; the cloud and the IMU are on this machine's clock
+      time_offset_lidar_to_imu: 0.0
+
+    preprocess:
+      lidar_type: 2                 # Velodyne layout: helios_driver writes ring and time
+      scan_line: 16
+      scan_rate: 10
+      timestamp_unit: 0             # time in s
+      blind: 0.4                    # m; helios_driver also removes the robot (body_box)
+
+    mapping:
+      acc_cov: 0.1                  # walking shakes the accelerometer
+      gyr_cov: 0.01
+      b_acc_cov: 0.0001
+      b_gyr_cov: 0.0001
+      fov_degree: 360.0
+      det_range: 100.0
+      extrinsic_est_en: true        # FAST-LIO refines the measured mount (half the drift on the Hallway bag)
+      extrinsic_T: [0.0, 0.0, 0.0]  # from config.yaml helios: xyz (the launch file)
+      extrinsic_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]  # from config.yaml helios: rpy (the launch file)
+
+    publish:
+      path_en: true
+      map_en: false                 # the whole map every scan is heavy; lio_map_stream makes the app's map
+      scan_publish_en: true
+      dense_publish_en: false
+      scan_bodyframe_pub_en: false
+
+    pcd_save:
+      pcd_save_en: false            # the launch argument save
+      interval: -1

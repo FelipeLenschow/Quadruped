@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>livox_ros_driver2</name>
+  <version>1.0.0</version>
+  <description>The Livox messages only (CustomMsg, CustomPoint), the same as Livox's livox_ros_driver2, without the
+    driver: FAST-LIO (third_party/FAST_LIO) needs them to build. The robot has no Livox lidar.</description>
+  <maintainer email="felipe10lenschow@gmail.com">Felipe Lenschow</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+  <depend>std_msgs</depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
