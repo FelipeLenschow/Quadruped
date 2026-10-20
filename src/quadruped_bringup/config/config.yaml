@@ -70,6 +70,15 @@ real_lidar:
   # the L1's gyro turned into the body's axes, with the body IMU's accelerometer (rt/lowstate).
   # point_lio_go2.yaml's extrinsic repeats xyz and rpy: change both together.
 
+# u-blox RTK GPS rover on USB (gps_driver, launch flag gps): sensor_msgs/NavSatFix on /gps/fix, with the
+# receiver's own accuracy. The base station's corrections reach it over XBee. On DLS2, ros2_translator passes
+# /gps/fix to sensor_fusion's exteroceptive filter (the antenna's place on the base is in its config.yaml).
+gps:
+  port: /dev/ttyACM0
+  baud: 115200            # a USB port ignores it
+  topic: /gps/fix
+  frame_id: gps           # the antenna
+
 # Cameras (camera_bridge), one entry each. Every camera <name> publishes
 #   /camera/<name>/image_raw/compressed, /camera/<name>/camera_info (once calibrated),
 #   /camera/<name>/preview/compressed (small and slow, for the app; only while someone watches),

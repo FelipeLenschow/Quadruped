@@ -31,6 +31,7 @@ DLS2_COMMANDS = [
     ("monitor", "system_monitor (/system_stats)"),
     ("sensors", "real_sensors (L1 lidar cloud, IMU and sensor TF; real Go2 only)"),
     ("mcp", "mcp_server (MCP server for an LLM)"),
+    ("gps", "gps_driver (u-blox RTK GPS to /gps/fix; into sensor_fusion through ros2_translator)"),
 ]
 
 # Global Environment Detection

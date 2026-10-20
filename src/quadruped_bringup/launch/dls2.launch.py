@@ -18,6 +18,8 @@ def setup(context):
         actions.append(node("quadruped_real", "real_sensors", f"--interface={net_interface}" if net_interface else ""))
     if flag(context, "monitor"):
         actions.append(node("quadruped_drivers", "system_monitor"))
+    if flag(context, "gps"):
+        actions.append(node("quadruped_drivers", "gps_driver"))
     return actions + interface(context)
 
 
@@ -32,5 +34,6 @@ def generate_launch_description():
         arg("sensors", "false", "real_sensors: lidar cloud to /lidar/points and the sensor TF (real Go2)"),
         arg("interface", "", "network interface for the Unitree SDK (real_sensors)"),
         arg("mcp", "false", "mcp_server: the MCP server for an LLM (config.yaml mcp:)"),
+        arg("gps", "false", "gps_driver: the u-blox RTK GPS to /gps/fix (config.yaml gps:)"),
         OpaqueFunction(function=setup),
     ])

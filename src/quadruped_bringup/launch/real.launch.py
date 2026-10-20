@@ -19,6 +19,8 @@ def setup(context):
         actions.append(node("quadruped_real", "real_sensors", f"--interface={net_interface}" if net_interface else ""))
     if flag(context, "monitor"):
         actions.append(node("quadruped_drivers", "system_monitor"))
+    if flag(context, "gps"):
+        actions.append(node("quadruped_drivers", "gps_driver"))
     actions += interface(context)
     if flag(context, "joy"):
         actions.append(include("joy.launch.py"))
@@ -35,6 +37,7 @@ def generate_launch_description():
         arg("joy", "false", "also start the gamepad teleop"),
         arg("sensors", "true", "lidar cloud to /lidar/points and the sensor TF"),
         arg("monitor", "true", "CPU/GPU/RAM/temperatures to /system_stats"),
+        arg("gps", "false", "u-blox RTK GPS to /gps/fix (config.yaml gps:)"),
         *reward_args(),
         OpaqueFunction(function=setup),
     ])

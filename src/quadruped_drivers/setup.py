@@ -38,5 +38,6 @@ setup(
         "gazebo_driver = quadruped_drivers.gazebo_driver:main",
         "gazebo_sensors = quadruped_drivers.gazebo_sensors:main",
         "camera_bridge = quadruped_drivers.camera_bridge:main",
+        "gps_driver = quadruped_drivers.gps_driver:main",
     ]},
 )
