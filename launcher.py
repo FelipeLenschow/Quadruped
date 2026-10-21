@@ -1219,7 +1219,8 @@ def run_cli_menu():
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"run_{timestamp}"
             run_name = os.path.join(record_dir, filename)
-            sweep_opts["lidar"] = input("Include the large lidar topics (/lidar/points*, /lio/cloud*, /lio/map, camera)? [y/N]: ").lower().strip() == "y"
+            sweep_opts["lidar"] = input("Include the large lidar topics (/lidar/points, /helios/points, the LIO clouds and maps, camera)? [y/N]: ").lower().strip() == "y"
+            sweep_opts["merged"] = input("Include the merged lidar cloud (/lidars/points, rebuilt from the two lidars on replay)? [y/N]: ").lower().strip() == "y"
         else:
             if mcap_choice == "2":
                 action = "mcap_replay_rosbag"
@@ -1744,7 +1745,8 @@ def main():
                 cmd = ros2_launch("lio.launch.py", save=sweep_opts.get("save", False), voxel=sweep_opts.get("voxel"))
 
         elif action == "mcap_record":
-            cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name), lidar=sweep_opts.get("lidar", False))
+            cmd = ros2_launch("record.launch.py", path=os.path.abspath(run_name), lidar=sweep_opts.get("lidar", False),
+                              merged=sweep_opts.get("merged", False))
         elif action == "mcap_replay_rosbag":
             cmd = [
                 "ros2", "bag", "play",

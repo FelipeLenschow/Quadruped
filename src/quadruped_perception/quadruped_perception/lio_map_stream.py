@@ -415,8 +415,10 @@ class LioMapStream(Node):
         else:
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
-                write_pcd(path, centres_of(np.fromiter(self.map.all_keys(), np.int64, n), self.args.voxel))
-                reply = f"saved maps/{name}.pcd ({n:,} voxels @ {self.args.voxel:.2f} m)"
+                # A floor voxel can also be occupied: size() counts it twice, the union once
+                keys = self.map.all_keys()
+                write_pcd(path, centres_of(np.fromiter(keys, np.int64, len(keys)), self.args.voxel))
+                reply = f"saved maps/{name}.pcd ({len(keys):,} voxels @ {self.args.voxel:.2f} m)"
             except OSError as e:
                 reply = f"error: {e}"
         if reply.startswith("saved"):
