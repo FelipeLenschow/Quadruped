@@ -1,7 +1,7 @@
 """Publishes fake Nav2/robot viz topics for viz_check and prints the goal it receives.
 
 Also plays Point-LIO's 3D map: a 5 x 4 m box room on /lio/map_voxels (latched snapshot),
-a box growing on /lio/map_voxels/delta at 1 Hz, and /lio/odom driving a 1 m circle.
+a box growing on /lio/map_voxels/delta at 1 Hz, and /lio/map_voxels/pose driving a 1 m circle.
 `--big N` pads the snapshot to N points, to test a large transfer. `--seconds S` runs longer
 (for a phone on the same network, set ROS_DOMAIN_ID to the app's domain).
 """
@@ -120,7 +120,7 @@ reliable = QoSReliabilityPolicy.RELIABLE
 snap_pub = node.create_publisher(PointCloud2, "/lio/map_voxels",
                                  QoSProfile(depth=1, reliability=reliable, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL))
 delta_pub = node.create_publisher(PointCloud2, "/lio/map_voxels/delta", QoSProfile(depth=10, reliability=reliable))
-odom_pub = node.create_publisher(Odometry, "/lio/odom", qos_profile_sensor_data)
+odom_pub = node.create_publisher(Odometry, "/lio/map_voxels/pose", qos_profile_sensor_data)
 mapped = room()
 snap_pub.publish(cloud(mapped))
 start = time.monotonic()

@@ -29,7 +29,7 @@ Android, no bridge on the robot.
   Point-LIO's voxel map: `/lio/map_voxels` (latched snapshot) replaces the map, `/lio/map_voxels/delta`
   adds and removes voxels (what lidar beams now pass through: an opened door, someone who walked by), one box per voxel (instanced, up to 300k), coloured by height with turbo. The box size comes from
   `/lio/map_voxels/size` (latched; [L] asks for it, 5 cm default), and a new size clears the map. The base
-  sits at `/lio/odom`; without it, at `/tf` odom -> base over a grid (`/tf` is only taken then).
+  sits at `/lio/map_voxels/pose` (lio_map_stream: the LIO's odometry, in the map's frame); without it, at `/tf` odom -> base over a grid (`/tf` is only taken then).
   Streams are best-effort and only while shown. One finger orbits, two pan and pinch, "Follow"
   re-centres, "Voxels" hides the map. "Save map" sends a name on `/lio/map_save`;
   lio_map_stream writes every voxel to `maps/<name>.pcd` and answers on `/lio/map_save/result`. The URDF and its meshes (decimated, ~1 MB) live in `app/src/main/assets/go2/`;

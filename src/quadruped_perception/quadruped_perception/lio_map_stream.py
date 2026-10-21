@@ -5,6 +5,8 @@ new receiver subscribes, and every --snapshot_period s if set.
 /lio/map_voxels/delta: changes, every --delta_period s. Each message is a MARK_REMOVE point, the voxels to
 remove, a MARK_ADD point, the voxels to add. Both marks have x = NaN; y is 0 (remove) or 1 (add).
 /lio/map_voxels/size: the voxel edge in m (Float32, transient_local), for drawing and keying them.
+/lio/map_voxels/pose: the LIO's odometry this map is built with (best effort, at most POSE_HZ), in the map's
+frame: the app draws the robot there. /tf odom -> base is DLS2's frame, not the map's.
 /lio/map_save: a name; writes every voxel centre to maps/<name>.pcd (binary, x y z float32, in lio_odom) and
 answers on /lio/map_save/result: "saved <path>" or "error: <why>". An existing file is never overwritten.
 
@@ -37,7 +39,7 @@ import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.utilities import remove_ros_args
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2, PointField
@@ -55,6 +57,7 @@ FLOOR_BELOW = (0.15, 1.0)
 FLOOR_MIN_POINTS = 20
 ODOM_MATCH_S = 0.2
 SUBSCRIBER_POLL_S = 0.2
+POSE_HZ = 30.0
 FLOOR_KEEP = 0.8  # a floor column moves to another voxel once its mean is this many voxels from the centre
 MARK_REMOVE = (math.nan, 0.0, 0.0)
 MARK_ADD = (math.nan, 1.0, 0.0)
@@ -301,6 +304,8 @@ class LioMapStream(Node):
         self.delta_pub = self.create_publisher(PointCloud2, "/lio/map_voxels/delta", 10)
         self.size_pub = self.create_publisher(Float32, "/lio/map_voxels/size", latched)
         self.size_pub.publish(Float32(data=float(args.voxel)))
+        self.pose_pub = self.create_publisher(Odometry, "/lio/map_voxels/pose", qos_profile_sensor_data)
+        self.pose_sent = None
         self.create_subscription(PointCloud2, "/lio/cloud", self._cloud_cb, 20)
         self.create_subscription(Odometry, "/lio/odom", self._odom_cb, 50)
         self.create_subscription(String, "/lio/map_save", self._save_cb, 10)
@@ -318,6 +323,10 @@ class LioMapStream(Node):
     def _odom_cb(self, msg):
         p, q = msg.pose.pose.position, msg.pose.pose.orientation
         self.poses.append((stamp_s(msg.header.stamp), (p.x, p.y, p.z, q.x, q.y, q.z, q.w)))
+        now = self.get_clock().now()
+        if self.pose_sent is None or (now - self.pose_sent).nanoseconds * 1e-9 >= 1.0 / POSE_HZ:
+            self.pose_sent = now
+            self.pose_pub.publish(msg)
 
     def _pose_at(self, t):
         if not self.poses:

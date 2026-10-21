@@ -54,7 +54,7 @@ private const val JOINTS = "/sensors/joint_states"
 const val LIO_SNAPSHOT = "/lio/map_voxels"
 const val LIO_DELTA = "/lio/map_voxels/delta"
 const val LIO_VOXEL_SIZE = "/lio/map_voxels/size"
-const val LIO_ODOM = "/lio/odom"
+const val LIO_ODOM = "/lio/map_voxels/pose"
 private const val LIO_SAVE = "/lio/map_save"
 private const val LIO_SAVE_RESULT = "/lio/map_save/result"
 private const val SAVE_RESULT_SHOWN_MS = 10_000L
@@ -64,7 +64,8 @@ private const val NOT_RUNNING_MS = 15_000L
 
 /**
  * The Go2 URDF, legs from /sensors/joint_states, standing in Point-LIO's voxel map.
- * With /lio/odom arriving the base sits at that pose in lio_odom, on the map; without it,
+ * With /lio/map_voxels/pose arriving (lio_map_stream: the LIO's odometry, in the map's frame) the base
+ * sits at that pose, on the map; without it,
  * /tf (odom -> base) places it over a grid. /tf is only taken in that case, and the raw
  * clouds never: the weak Wi-Fi stays free for the heartbeat.
  * One finger orbits, two pan and pinch; panning stops following the robot.
