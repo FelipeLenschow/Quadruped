@@ -153,8 +153,8 @@ def resolve_discovery_server():
     return (server, local_ip) if same_subnet else (None, None)
 
 
-def write_fastdds_profile(local_ip):
-    """Pin FastDDS to one interface; returns the profile path, or None.
+def write_fastdds_profile(local_ip, server):
+    """Pin FastDDS to one interface, as a super client of the discovery server; returns the profile path, or None.
 
     Both machines are multi-homed (several wired subnets plus the robot's WiFi
     AP). A participant otherwise advertises every address it owns, the peer picks
@@ -162,9 +162,14 @@ def write_fastdds_profile(local_ip):
     discovery succeeded and `ros2 topic info` shows the endpoints. Generated at
     runtime from the address that actually reaches the robot, so there is nothing
     machine-specific stored in the repo.
+
+    SUPER_CLIENT: a plain client only learns about the topics it matches itself, so
+    `ros2 topic list` and `ros2 bag record -a` find nothing. Humble's FastDDS (2.6)
+    ignores ROS_SUPER_CLIENT, so it is set here. The prefix is the server's for -i 0.
     """
     if not local_ip:
         return None
+    host, _, port = server.partition(":")
     path = os.path.join(tempfile.gettempdir(),
                         "quadruped_fastdds_%s.xml" % local_ip.replace(".", "_"))
     xml = """<?xml version="1.0" encoding="UTF-8" ?>
@@ -175,6 +180,10 @@ def write_fastdds_profile(local_ip):
       <transport_descriptor>
         <transport_id>iface_udp</transport_id>
         <type>UDPv4</type>
+        <!-- A Helios scan is ~600 KB: with the kernel's 212 KB default, best-effort clouds lose
+             fragments and whole scans. Capped by net.core.rmem_max / wmem_max (robot: 32 MB). -->
+        <sendBufferSize>33554432</sendBufferSize>
+        <receiveBufferSize>33554432</receiveBufferSize>
         <interfaceWhiteList>
           <address>%s</address>
           <!-- Loopback is required or two participants on THIS machine cannot
@@ -188,11 +197,23 @@ def write_fastdds_profile(local_ip):
       <rtps>
         <userTransports><transport_id>iface_udp</transport_id></userTransports>
         <useBuiltinTransports>false</useBuiltinTransports>
+        <builtin>
+          <discovery_config>
+            <discoveryProtocol>SUPER_CLIENT</discoveryProtocol>
+            <discoveryServersList>
+              <RemoteServer prefix="44.53.00.5f.45.50.52.4f.53.49.4d.41">
+                <metatrafficUnicastLocatorList>
+                  <locator><udpv4><address>%s</address><port>%s</port></udpv4></locator>
+                </metatrafficUnicastLocatorList>
+              </RemoteServer>
+            </discoveryServersList>
+          </discovery_config>
+        </builtin>
       </rtps>
     </participant>
   </profiles>
 </dds>
-""" % (local_ip, local_ip)
+""" % (local_ip, local_ip, host, port or "11811")
     try:
         with open(path, "w") as f:
             f.write(xml)
@@ -1407,10 +1428,11 @@ def main():
     if discovery_server:
         env["ROS_DISCOVERY_SERVER"] = discovery_server
         # Without this the CLI only sees topics it matched itself, so `ros2 topic
-        # list` looks broken even when discovery is working.
+        # list` looks broken even when discovery is working. Humble ignores it:
+        # the profile below makes the super client.
         env["ROS_SUPER_CLIENT"] = "TRUE"
         print(f"[Launcher] Wireless path detected -> ROS_DISCOVERY_SERVER={discovery_server}")
-        profile = write_fastdds_profile(discovery_local_ip)
+        profile = write_fastdds_profile(discovery_local_ip, discovery_server)
         if profile:
             env["FASTRTPS_DEFAULT_PROFILES_FILE"] = profile
             print(f"[Launcher] FastDDS pinned to {discovery_local_ip} ({profile})")
