@@ -58,6 +58,13 @@ ament_target_dependencies(go2_camera sensor_msgs)
 
 sdk_executable(test_joints src/test_joints.cpp src/paths.cpp src/robot_io.cpp)
 
+# The Helios and the L1 as one cloud for FAST-LIO (no SDK, no rs_driver)
+add_executable(lidar_merge src/lidar_merge.cpp src/paths.cpp)
+target_include_directories(lidar_merge PRIVATE src)
+target_link_libraries(lidar_merge quadruped_control::quadruped_control)
+ament_target_dependencies(lidar_merge rclcpp ament_index_cpp sensor_msgs geometry_msgs)
+install(TARGETS lidar_merge DESTINATION lib/${PROJECT_NAME})
+
 # RoboSense Helios 16P: rs_driver is header only (third_party/rs_driver). No pcap replay, so no libpcap.
 set(RS_DRIVER ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/rs_driver/src)
 get_filename_component(RS_DRIVER ${RS_DRIVER} REALPATH)

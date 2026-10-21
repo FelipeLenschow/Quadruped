@@ -5,6 +5,10 @@ Needs /lidar/imu (real_sensors: real.launch.py, or dls2.launch.py with sensors).
 /helios_lio/cloud, /helios_lio/path, in camera_init -> body (body: the base). The extrinsic is config.yaml's
 helios: xyz, rpy, as for helios_driver's TF.
 
+lidars:=both adds the Go2's L1 (/lidar/points, real_sensors): lidar_merge puts both clouds in the base frame as
+one, /lidars/points, and FAST-LIO maps that with an identity extrinsic. The mounts are config.yaml's helios and
+real_lidar (they agree to ~2 cm on the 2026-10-21 bag).
+
 Replay an old bag (rslidar_sdk's /rslidar_points, the IMU on /imu/reliable):
     ros2 launch quadruped_bringup fast_lio.launch.py from_topic:=/rslidar_points imu_topic:=/imu/reliable
 """
@@ -36,28 +40,48 @@ def setup(context):
     xyz = [float(v) for v in helios.get("xyz", [0.0, 0.0, 0.0])]
     rpy = [float(v) for v in helios.get("rpy", [0.0, 0.0, 0.0])]
 
+    lidars = get(context, "lidars").strip().lower()
+    if lidars not in ("helios", "both"):
+        raise ValueError(f"lidars: helios or both, not {lidars}")
+
+    params = {
+        "common.imu_topic": get(context, "imu_topic"),
+        "mapping.extrinsic_T": xyz,
+        "mapping.extrinsic_R": rotation(rpy),
+        "pcd_save.pcd_save_en": flag(context, "save"),
+    }
     actions = []
     if flag(context, "driver"):
         from_topic = get(context, "from_topic")
         actions.append(node("quadruped_real", "helios_driver", f"--from_topic={from_topic}" if from_topic else ""))
+    if lidars == "both":
+        # lidar_merge thins each lidar itself (every 3rd Helios point, every L1 point) and writes the base frame
+        point_filter = int(get(context, "point_filter") or 3)
+        actions.append(node("quadruped_real", "lidar_merge", f"--helios_every={point_filter}", "--l1_every=1"))
+        params.update({
+            "common.lid_topic": "/lidars/points",
+            "preprocess.point_filter_num": 1,
+            "preprocess.scan_line": 64,   # the Helios' 16 rings and the L1's after them (unused: the points carry times)
+            "mapping.extrinsic_T": [0.0, 0.0, 0.0],
+            "mapping.extrinsic_R": rotation([0.0, 0.0, 0.0]),
+            "mapping.extrinsic_est_en": False,   # one extrinsic cannot fit two lidars
+        })
     actions.append(node(
         "fast_lio", "fastlio_mapping", main=True,
-        parameters=[paths.config("fast_lio_helios.yaml"), {
-            "common.imu_topic": get(context, "imu_topic"),
-            "mapping.extrinsic_T": xyz,
-            "mapping.extrinsic_R": rotation(rpy),
-            "pcd_save.pcd_save_en": flag(context, "save"),
-        }],
+        parameters=[paths.config("fast_lio_helios.yaml"), params],
         remappings=[(t, "/helios_lio" + n) for t, n in LIO_TOPICS]))
     if flag(context, "map_stream"):
         # The app's voxel map, from this LIO instead of Point-LIO (run one of the two)
         actions.append(node("quadruped_perception", "lio_map_stream", f"--voxel={get(context, 'voxel')}",
+                            "--sensor=helios",
                             remappings=[("/lio/cloud", "/helios_lio/cloud"), ("/lio/odom", "/helios_lio/odom")]))
     return actions
 
 
 def generate_launch_description():
     return LaunchDescription([
+        arg("lidars", "helios", "helios, or both: the Helios and the L1 merged (lidar_merge) into one map"),
+        arg("point_filter", "3", "lidars:=both: lidar_merge keeps every n-th Helios point"),
         arg("driver", "true", "start helios_driver (false: /helios/points comes from elsewhere)"),
         arg("from_topic", "", "helios_driver reads this recorded rslidar_sdk cloud instead of the lidar"),
         arg("imu_topic", "/lidar/imu", "FAST-LIO's IMU (base axes and origin)"),

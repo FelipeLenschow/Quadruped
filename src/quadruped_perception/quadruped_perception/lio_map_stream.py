@@ -443,9 +443,12 @@ def main():
     ap.add_argument("--reset_gap", type=float, default=5.0)
     ap.add_argument("--max_voxels", type=int, default=300_000)
     ap.add_argument("--ground_band", type=float, default=0.10, help="m around the floor kept as a height map; 0: off")
+    ap.add_argument("--sensor", default="real_lidar",
+                    help="where the beams start, on the odometry's body: a config.yaml mount (real_lidar, helios)")
     args = ap.parse_args(remove_ros_args()[1:])
-    # Beams start at the lidar: lio_imu is the base, and the lidar sits at real_lidar.xyz on it.
-    sensor = (load_config().get("real_lidar") or {}).get("xyz", (0.0, 0.0, 0.0))
+    # Beams start at the lidar: the odometry's body is the base (Point-LIO's lio_imu, FAST-LIO's body), and the
+    # lidar sits at its mount's xyz on it. FAST-LIO on both lidars: the Helios, which has most of the points.
+    sensor = (load_config().get(args.sensor) or {}).get("xyz", (0.0, 0.0, 0.0))
 
     rclpy.init()
     node = LioMapStream(args, sensor)
