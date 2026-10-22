@@ -333,7 +333,7 @@ class GpsDriver(Node):
     def describe(fix, window, seconds):
         """One log line: the solution, and the corrections over `seconds` if a window is given."""
         text = fix["label"]
-        if "h_std" in fix:
+        if "h_std" in fix and fix["status"] != NavSatStatus.STATUS_NO_FIX:
             text += f", {fix['satellites']} satellites, {fix['h_std']:.3f} m horizontal"
             if "pdop" in fix:
                 text += f", pDOP {fix['pdop']:.1f}, correction age {fix['correction_age']} s"
@@ -356,7 +356,8 @@ class GpsDriver(Node):
                 summary, seconds = self.summary, now - self.summary_start
                 self.summary, self.summary_start = self.new_window(), now
         status = {"fix": fix["label"] if fix else "no data", "satellites": fix["satellites"] if fix else 0}
-        if fix and "h_std" in fix:
+        # Without a fix the receiver's accuracies are meaningless (2^32 mm)
+        if fix and "h_std" in fix and fix["status"] != NavSatStatus.STATUS_NO_FIX:
             status.update({"h_acc": round(fix["h_std"], 3), "v_acc": round(fix["v_std"], 3)})
         if fix and "pdop" in fix:
             status.update({"pdop": round(fix["pdop"], 2), "correction_age": fix["correction_age"]})
