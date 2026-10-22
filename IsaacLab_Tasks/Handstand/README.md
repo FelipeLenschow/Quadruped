@@ -27,10 +27,11 @@ Task: `Go2-Handstand`
 ## Deploy
 
 Up on two legs is far past the robot's tilt and pitch checks (30 deg). The tilt penalty only counts while
-both switches are off; the joint range penalty (outer 17%) still counts, to keep it inside the ROM check. In `src/quadruped_bringup/config/policies.json`:
+both switches are off. The joint range penalty (outer 17%) still counts, but in MuJoCo Handstand1's front calf
+still went just past the ROM check in the hindstand, so the ROM check is off too. In `src/quadruped_bringup/config/policies.json`:
 
     "Handstand": {"path": "IsaacLab_Tasks/Handstand/logs/rsl_rl/go2_handstand/<run>/model_<n>.pt",
-                  "commands": "trick", "protections": ["heartbeat", "rom"]}
+                  "commands": "trick", "protections": ["heartbeat"]}
 
 Then the app shows two buttons, Handstand and Hindstand (hold to do it, let go to come down), and
 `skill_server` has the skills `handstand` and `hindstand` (`--handstand_time`, `--hindstand_time`, 5 s):

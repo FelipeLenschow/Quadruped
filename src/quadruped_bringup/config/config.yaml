@@ -140,6 +140,22 @@ object_mapper:
   max_depth_shift: 0.3
   ignore: [person, floor, ground, wall, ceiling, sky]
 
+# mcp_server: the robot's tools for an LLM over HTTP, http://<robot>:<port>/mcp (launch arg mcp:=true).
+#   Set QUADRUPED_MCP_TOKEN to require a bearer token. approach: metres go_to_object stops from an object;
+#   visit_radius: a trick done this close to an object is marked done there; move is capped at max_speed
+#   (m/s), max_turn (rad/s) and max_move_s; look's photo is shrunk to image_width px.
+mcp:
+  host: 0.0.0.0
+  port: 8765
+  camera: front
+  image_width: 640
+  goal_timeout: 120
+  approach: 0.6
+  visit_radius: 1.0
+  max_speed: 0.4
+  max_turn: 0.8
+  max_move_s: 3.0
+
 # --- Motor Physical Parameters ---
 motor:
   max_torque: 45.0        # Nm (Saturation torque for Go2)

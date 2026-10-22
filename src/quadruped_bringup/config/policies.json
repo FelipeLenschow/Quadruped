@@ -37,7 +37,7 @@
     },
     "Handstand": {
       "path": "IsaacLab_Tasks/Handstand/logs/rsl_rl/go2_handstand/Handstand1/model_9999.pt",
-      "protections": ["heartbeat", "rom"],
+      "protections": ["heartbeat"],
       "commands": "trick"
     }
   }

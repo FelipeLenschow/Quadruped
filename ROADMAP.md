@@ -148,13 +148,23 @@ All skills go through `/skill`. Two kinds:
 ## Phase 5: LLM brain over MCP
 
 **To build:**
-- [ ] **MCP server** with these tools:
-  - `get_state`, `list_cones`, `go_to(x, y)`, `skill(name)`, `explore`, `stop`;
+- [x] **MCP server:** `mcp_server` in `quadruped_operator` (`mcp:=true` on any driver launch, config.yaml's `mcp:`),
+      MCP's HTTP transport on `http://<robot>:8765/mcp`, Python standard library only (the Jetson's Python 3.8 can't
+      run the `mcp` package). `QUADRUPED_MCP_TOKEN` requires a bearer token; browser requests are refused. Tools:
+      `get_state`, `list_objects` (distance, bearing, and the tricks already done at each), `go_to(x, y)`,
+      `go_to_object(id)` (stops 0.6 m away, facing it), `skill(name)`, `move` (≤ 3 s on `/cmd_vel/llm`), `stop`,
+      `look` (a camera frame, for a VLM). Every motion ends inside its call, so a lost link leaves the robot still.
+      Checked with the official `mcp` client (2.3) against a fake robot (TF, `/skill`, Nav2 action, camera);
+      not yet on the real robot or in Gazebo.
+- [ ] **More tools:**
+  - `explore` (after Phase 4's frontier exploration);
   - `describe_surroundings()`: the map condensed to a few lines of text, see [3D mapping](#3d-mapping-lidar-inertial-odometry);
   - `look_for(words)`: object_detector looks only for those names until cleared. YOLOE can change its words
     while running, but only with the PyTorch model (a TensorRT engine has them built in), so it is slower on the
     Jetson; the prompt-free engine stays the default.
-- [ ] **LLM on the laptop.** Calls cross Wi-Fi over TCP or HTTP, not DDS.
+- [ ] **LLM host:** a loop on the laptop or the VDI (Ollama, `qwen3.8:27b`, served at `localhost:11434/v1`) that
+      lists the server's tools, hands them to the model and runs its calls. Calls cross Wi-Fi (or a VPN such as
+      Tailscale) over HTTP, not DDS.
 - [ ] **Safety:**
   - the LLM only reaches skills and `/cmd_vel/llm`, the lowest priority;
   - the app's e-stop and the joystick always win.

@@ -42,5 +42,6 @@ setup(
         "skill_server = quadruped_operator.skill_server:main",
         "auto_localize = quadruped_operator.auto_localize:main",
         "map_save = quadruped_operator.map_save:main",
+        "mcp_server = quadruped_operator.mcp_server:main",
     ]},
 )
