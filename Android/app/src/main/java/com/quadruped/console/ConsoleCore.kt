@@ -43,6 +43,9 @@ data class Status(
     val robotState: JSONObject?,
     val systemStats: JSONObject?,
     val systemStatsAgeMs: Long,
+    /** /gps/status from gps_driver (JSON, 1 Hz), or null if it never came; its age in ms (-1: none). */
+    val gpsStatus: JSONObject?,
+    val gpsStatusAgeMs: Long,
     val events: List<String>,
     val driveEnabled: Boolean,
     val turbo: Boolean,
@@ -84,6 +87,7 @@ class ConsoleCore(
         const val POSE_STATUS = "/pose/status"
         const val ROBOT_STATE = "/robot_state"
         const val SYSTEM_STATS = "/system_stats"
+        const val GPS_STATUS = "/gps/status"
         const val EST_VEL = "/estimator/base_lin_vel"
         const val EST_CONTACT = "/estimator/feet_contact"
         // Its own twist_mux input: priority 80, above Nav2 and skills, below the F710 and keyboard.
@@ -99,6 +103,7 @@ class ConsoleCore(
             ESTOP_STATE to MsgType.BOOL,
             ROBOT_STATE to MsgType.STRING,
             SYSTEM_STATS to MsgType.STRING,
+            GPS_STATUS to MsgType.STRING,
             POSE_STATUS to MsgType.STRING,
             EST_VEL to MsgType.VECTOR3,
             EST_CONTACT to MsgType.FLOAT32_MULTI_ARRAY,
@@ -130,6 +135,7 @@ class ConsoleCore(
     private var poseLabel = ""
     private var robotState: JSONObject? = null
     private var systemStats: JSONObject? = null
+    private var gpsStatus: JSONObject? = null
     private var heartbeatCount = 0L
     private val heartbeatLoss = HeartbeatLoss()
     private val seen = HashMap<String, Long>()
@@ -184,6 +190,12 @@ class ConsoleCore(
         if (fresh(SYSTEM_STATS)) {
             try {
                 systemStats = JSONObject(link.latestText(SYSTEM_STATS) ?: "")
+            } catch (_: Exception) {
+            }
+        }
+        if (fresh(GPS_STATUS)) {
+            try {
+                gpsStatus = JSONObject(link.latestText(GPS_STATUS) ?: "")
             } catch (_: Exception) {
             }
         }
@@ -458,6 +470,8 @@ class ConsoleCore(
             robotState = robotState,
             systemStats = systemStats,
             systemStatsAgeMs = link.latestAgeMs(SYSTEM_STATS),
+            gpsStatus = gpsStatus,
+            gpsStatusAgeMs = link.latestAgeMs(GPS_STATUS),
             events = events.toList(),
             driveEnabled = driveEnabled,
             turbo = turbo,

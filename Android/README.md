@@ -9,7 +9,9 @@ Android, no bridge on the robot.
 - `ConsoleCore.kt`: the console logic (heartbeat, safety params, e-stop latch, policy pre-flight).
 - `ConsoleService.kt`: foreground service with wake + low-latency Wi-Fi locks, runs the heartbeat.
   Disconnect or swiping the app away sends the e-stop, like Ctrl-C on the console.
-- Top bar: link state and heartbeat loss, then the robot's posture, tilt and the worst flag
+- Top bar: link state and heartbeat loss, a GPS chip once `/gps/status` arrives (gps_driver: a pin green for RTK
+  fixed, amber float, orange DGNSS or GNSS, red no fix, grey stale; the accuracy; a dot green while RTK
+  corrections arrive, red after 5 s without), then the robot's posture, tilt and the worst flag
   (blocked, numb, no torque). The STOP button is the same size on every tab. Offline, every tab keeps its
   layout, disabled.
 - Drive tab: Pose/Policy switch and the Numb / Release button (`/safety/numb`), then only what the mode
@@ -51,7 +53,8 @@ Android, no bridge on the robot.
   (started with SLAM) writes `maps/<name>.pgm/.yaml` and answers on `/map/save/result`. These streams are subscribed only while shown,
   best-effort, so they never compete with the heartbeat for retransmits.
 - System tab: "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
-  published once a second by `quadruped_drivers/system_monitor`, which the real launch starts;
+  published once a second by `quadruped_drivers/system_monitor`, which the real launch starts; a "GPS" card
+  from `/gps/status` (accuracy, satellites, pDOP, corrections per second, the last one's age, CRC failures, types);
   the DDS link, events, safety & gains, and connection settings.
 
 Network settings follow `config.yaml`: domain 42, discovery server `10.42.0.1:11811`

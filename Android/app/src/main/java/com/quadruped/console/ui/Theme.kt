@@ -20,6 +20,7 @@ object Palette {
     val Accent = Color(0xFF3DD6C6)
     val Ok = Color(0xFF3DDC84)
     val Warn = Color(0xFFF5B544)
+    val Caution = Color(0xFFFF8A3D)
     val Danger = Color(0xFFFF4D5E)
     val DangerDeep = Color(0xFFB3182B)
 }

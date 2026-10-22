@@ -52,6 +52,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -214,6 +215,10 @@ private fun TopBar(s: Status?, connected: Boolean, info: String) {
     val ctx = LocalContext.current
     Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         LinkPill(s, connected)
+        if (connected && s?.gpsStatus != null) {
+            Spacer(Modifier.width(6.dp))
+            GpsChip(s)
+        }
         Spacer(Modifier.width(8.dp))
         Box(Modifier.weight(1f)) {
             val rs = s?.robotState
@@ -293,6 +298,96 @@ private fun LinkPill(s: Status?, connected: Boolean) {
                 color = lossColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = Mono,
             )
         }
+    }
+}
+
+/** No /gps/status for this long: gps_driver stopped or the link dropped. */
+private const val GPS_STALE_MS = 3000L
+/** Corrections older than this: RTK cannot hold. */
+private const val GPS_RTCM_STALE_S = 5.0
+
+private class GpsView(val color: Color, val label: String, val accuracy: String?, val rtcmOk: Boolean?)
+
+/** /gps/status as the chip and the card show it: RTK fixed green, float amber, DGNSS or plain GNSS orange, none red. */
+private fun gpsView(s: Status): GpsView {
+    val g = s.gpsStatus ?: return GpsView(Palette.Muted, "GPS", null, null)
+    if (s.gpsStatusAgeMs !in 0..GPS_STALE_MS) return GpsView(Palette.Muted, "GPS —", null, null)
+    val fix = g.optString("fix")
+    val (color, label) = when (fix) {
+        "RTK fixed" -> Palette.Ok to "RTK"
+        "RTK float" -> Palette.Warn to "Float"
+        "DGNSS" -> Palette.Caution to "DGNSS"
+        "GNSS fix" -> Palette.Caution to "GNSS"
+        "no data" -> Palette.Muted to "GPS ?"
+        else -> Palette.Danger to "No fix"
+    }
+    val acc = if (g.has("h_acc")) g.optDouble("h_acc").let { if (it < 0.1) "${(it * 100).f(1)} cm" else "${it.f(2)} m" } else null
+    val last = g.optJSONObject("rtcm")?.let { if (it.isNull("last_s")) null else it.optDouble("last_s") }
+    return GpsView(color, label, acc, last?.let { it <= GPS_RTCM_STALE_S } ?: false)
+}
+
+/** The fix at a glance: a pin in the fix's colour, the kind and accuracy, and a corrections dot (green: arriving). */
+@Composable
+private fun GpsChip(s: Status) {
+    val v = gpsView(s)
+    Row(
+        Modifier.clip(CircleShape).background(v.color.copy(alpha = 0.12f)).padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Place, "GPS", Modifier.size(16.dp), tint = v.color)
+        Spacer(Modifier.width(4.dp))
+        Column {
+            Text(v.label, color = v.color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            v.accuracy?.let { Text(it, color = Palette.Muted, fontSize = 10.sp, fontFamily = Mono, maxLines = 1) }
+        }
+        v.rtcmOk?.let {
+            Spacer(Modifier.width(5.dp))
+            Box(Modifier.size(6.dp).clip(CircleShape).background(if (it) Palette.Ok else Palette.Danger))
+        }
+    }
+}
+
+/** gps_driver's /gps/status: the solution, and the RTK corrections the receiver got over the last second. */
+@Composable
+private fun GpsCard(s: Status) {
+    val g = s.gpsStatus
+    val v = gpsView(s)
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionLabel("GPS")
+            Spacer(Modifier.weight(1f))
+            Text(
+                when {
+                    g == null -> "no /gps/status"
+                    s.gpsStatusAgeMs !in 0..GPS_STALE_MS -> "stale ${s.gpsStatusAgeMs / 1000}s"
+                    else -> g.optString("fix")
+                },
+                color = if (g == null) Palette.Muted else v.color, fontSize = 12.sp, fontFamily = Mono,
+            )
+        }
+        if (g == null) {
+            Text("Start gps_driver: launcher [DLS2], gps.", color = Palette.Muted, fontSize = 13.sp)
+            return@Card
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Metric("Horizontal", v.accuracy ?: "—", v.color)
+            Metric("Satellites", g.optInt("satellites").toString())
+            Metric("pDOP", if (g.has("pdop")) g.optDouble("pdop").f(1) else "—")
+        }
+        val r = g.optJSONObject("rtcm")
+        val last = r?.let { if (it.isNull("last_s")) null else it.optDouble("last_s") }
+        val crc = r?.optInt("crc_failed") ?: 0
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Metric("Corrections", "${r?.optInt("received") ?: 0}/s", if (v.rtcmOk == true) Palette.Text else Palette.Danger)
+            Metric("Last", last?.let { "${it.f(1)} s" } ?: "never", if (v.rtcmOk == true) Palette.Text else Palette.Danger)
+            Metric("CRC failed", crc.toString(), if (crc > 0) Palette.Warn else Palette.Text)
+        }
+        val types = r?.optJSONArray("types")
+        Text(
+            "types " + (if (types != null && types.length() > 0) (0 until types.length()).joinToString(" ") { types.optInt(it).toString() } else "—") +
+                "   receiver age ${g.optString("correction_age", "—")} s",
+            color = Palette.Muted, fontSize = 11.sp, fontFamily = Mono,
+        )
     }
 }
 
@@ -687,6 +782,7 @@ private fun MapTab(threeD: Boolean, onToggle: (Boolean) -> Unit, modifier: Modif
 @Composable
 private fun SystemTab(s: Status?, core: ConsoleCore?, info: String) {
     if (s != null) SystemCard(s)
+    if (s != null) GpsCard(s)
     LinkCard(s, info)
     if (s != null && s.events.isNotEmpty()) {
         Card {
