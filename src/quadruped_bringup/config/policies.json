@@ -10,6 +10,9 @@
     "ClockRough": {
       "path": "IsaacLab_Tasks/Simple/logs/rsl_rl/clock_rough/ClockRough/model_19999.pt"
     },
+    "ClockRoughHelios": {
+      "path": "IsaacLab_Tasks/Simple/logs/rsl_rl/clock_rough/ClockRoughHelios/model_29998.pt"
+    },
     "Reco2": {
       "path": "IsaacLab_Tasks/Recovery/logs/rsl_rl/go2_recovery/Reco2/model_12998.pt",
       "protections": ["heartbeat"],

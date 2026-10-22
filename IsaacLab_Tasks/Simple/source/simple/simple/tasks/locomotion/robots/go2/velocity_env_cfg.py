@@ -746,6 +746,8 @@ DEPLOY_KD_RANGE = (-float(os.environ.get("PAPER_DEPLOY_KD", 0.2)), float(os.envi
 # Base centre of mass, m from nominal: fore/aft may legitimately skew, lateral stays centred.
 DEPLOY_COM_X = float(os.environ.get("PAPER_DEPLOY_COM_X", 0.05))
 DEPLOY_COM_Y = float(os.environ.get("PAPER_DEPLOY_COM_Y", 0.03))
+# The Helios 16P on top (about 1 kg, 0.175 m up) raises the base CoM by about 2 cm.
+DEPLOY_COM_Z = (float(os.environ.get("PAPER_DEPLOY_COM_Z_LO", -0.01)), float(os.environ.get("PAPER_DEPLOY_COM_Z_HI", 0.08)))
 # The Go2 USD has zero armature and zero viscous damping on every joint. The menagerie MuJoCo
 # model carries armature 0.01 and damping 2.0, but eval_mujoco.py zeroes the damping (and sets
 # frictionloss to 0.01) before it runs, so the eval sweep does not see it. Neither number has
@@ -1007,7 +1009,7 @@ def _apply_inertia_randomization(cfg) -> None:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            "com_range": {"x": (-DEPLOY_COM_X, DEPLOY_COM_X), "y": (-DEPLOY_COM_Y, DEPLOY_COM_Y)},
+            "com_range": {"x": (-DEPLOY_COM_X, DEPLOY_COM_X), "y": (-DEPLOY_COM_Y, DEPLOY_COM_Y), "z": DEPLOY_COM_Z},
         },
     )
     cfg.events.randomize_joint_friction = EventTerm(
@@ -1029,7 +1031,7 @@ def _apply_inertia_randomization(cfg) -> None:
         },
     )
     print(
-        f"[PaperArm] base CoM +-{DEPLOY_COM_X} m fore/aft, +-{DEPLOY_COM_Y} m lateral;"
+        f"[PaperArm] base CoM +-{DEPLOY_COM_X} m fore/aft, +-{DEPLOY_COM_Y} m lateral, z {DEPLOY_COM_Z} m;"
         f" joint friction +{DEPLOY_JOINT_FRICTION}, armature {DEPLOY_ARMATURE},"
         f" viscous damping {DEPLOY_VISCOUS}"
     )
@@ -1110,13 +1112,13 @@ def _apply_clock(cfg) -> None:
         integrate_phase=CLOCK_INTEGRATE,
     )
     cfg.commands.base_velocity.max_foot_speed = CLOCK_MAX_SPEED
-    cfg.events.randomize_com.params["com_range"] = {"x": CLOCK_COM_X, "y": (-CLOCK_COM_Y, CLOCK_COM_Y)}
+    cfg.events.randomize_com.params["com_range"] = {"x": CLOCK_COM_X, "y": (-CLOCK_COM_Y, CLOCK_COM_Y), "z": DEPLOY_COM_Z}
     cfg.commands.base_velocity.resampling_time_range = CLOCK_RESAMPLE
     cfg.commands.base_velocity.pause_fraction = CLOCK_PAUSE_FRACTION
     print(f"[Clock] commands every {CLOCK_RESAMPLE} s, {CLOCK_PAUSE_FRACTION} of them a 0.5-2 s pause; landing speed weight {CLOCK_W_LANDING}")
     for name in ("track_lin_vel_xy", "track_ang_vel_z"):
         getattr(cfg.rewards, name).params.update(grace_s=CLOCK_GRACE_S, grace_floor=CLOCK_GRACE_FLOOR)
-    print(f"[Clock] CoM x {CLOCK_COM_X} y +-{CLOCK_COM_Y}, tracking grace {CLOCK_GRACE_S} s (floor {CLOCK_GRACE_FLOOR})")
+    print(f"[Clock] CoM x {CLOCK_COM_X} y +-{CLOCK_COM_Y} z {DEPLOY_COM_Z}, tracking grace {CLOCK_GRACE_S} s (floor {CLOCK_GRACE_FLOOR})")
     limits = cfg.commands.base_velocity.limit_ranges
     limits.lin_vel_x = (-CLOCK_MAX_SPEED, CLOCK_MAX_SPEED)
     limits.lin_vel_y = (max(limits.lin_vel_y[0], -CLOCK_MAX_SPEED), min(limits.lin_vel_y[1], CLOCK_MAX_SPEED))
