@@ -27,13 +27,15 @@ GAITS = {
     "walk": (0.0, 0.75, 0.5),
 }
 GAIT_FIELDS = ["height", "frequency", "phase", "offset", "bound", "swing", "pitch", "width", "duty"]
-# Skill -> its policy in policies.json (IsaacLab_Tasks/Tricks, Go2-<policy>) and the switches it turns on.
+# Skill -> its policy in policies.json (IsaacLab_Tasks/Tricks or Handstand, Go2-<policy>) and the switches it turns on.
 TRICKS = {
     "pee": ("Pee", [1.0, 0.0, 0.0]),
     "pee_left": ("Pee", [1.0, 0.0, 0.0]),
     "pee_right": ("Pee", [0.0, 1.0, 0.0]),
     "sniff": ("Sniff", [1.0, 0.0, 0.0]),
     "wiggle": ("Wiggle", [1.0, 0.0, 0.0]),
+    "handstand": ("Handstand", [1.0, 0.0, 0.0]),
+    "hindstand": ("Handstand", [0.0, 1.0, 0.0]),
 }
 
 
@@ -222,7 +224,7 @@ class SkillServer(Node):
         if s["mode"] != "policy":
             return False, f"{skill} needs policy mode; call walk first"
         if policy not in s["policies"]:
-            return False, f"no '{policy}' policy in policies.json: train Go2-{policy} (IsaacLab_Tasks/Tricks)"
+            return False, f"no '{policy}' policy in policies.json: train Go2-{policy} (IsaacLab_Tasks/Tricks or Handstand)"
         walker = s["policy"]
         self._hold_still(self.args.settle_time)
         ok, msg = self._switch_policy(policy)
@@ -266,6 +268,8 @@ def main():
     ap.add_argument("--pee_time", type=float, default=4.0)
     ap.add_argument("--sniff_time", type=float, default=3.0)
     ap.add_argument("--wiggle_time", type=float, default=3.0)
+    ap.add_argument("--handstand_time", type=float, default=5.0)
+    ap.add_argument("--hindstand_time", type=float, default=5.0)
     ap.add_argument("--trick_settle", type=float, default=2.0, help="s for a trick policy to stand back up")
     ap.add_argument("--policy_timeout", type=float, default=15.0, help="s to load and blend into a policy")
     ap.add_argument("--localize_time", type=float, default=30.0, help="s of turning before giving up")

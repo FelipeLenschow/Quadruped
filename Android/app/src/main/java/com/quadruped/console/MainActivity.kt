@@ -494,8 +494,8 @@ private fun PolicyCard(rs: JSONObject?, core: ConsoleCore) = Card {
 }
 
 /**
- * For a trick policy (Pee, Sniff, Wiggle): hold a button to do the trick, let go and it stands back up. Pee has
- * two switches, one per leg.
+ * For a trick policy (Pee, Sniff, Wiggle, Handstand): hold a button to do the trick, let go and it stands back up.
+ * Pee has two switches, one per leg; Handstand one for the front legs and one for the rear legs.
  */
 @Composable
 private fun TrickCard(s: Status, core: ConsoleCore) {
@@ -503,7 +503,11 @@ private fun TrickCard(s: Status, core: ConsoleCore) {
     val switches = rs.optInt("trick_switches", 0)
     if (switches <= 0) return
     val name = rs.optString("policy")
-    val labels = if (switches == 2) listOf("Left", "Right") else listOf("Hold: $name")
+    val labels = when {
+        name == "Handstand" -> listOf("Handstand", "Hindstand")
+        switches == 2 -> listOf("Left", "Right")
+        else -> listOf("Hold: $name")
+    }
     Card {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionLabel("Trick")
