@@ -19,6 +19,9 @@ import cli_args  # isort: skip
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+parser.add_argument("--video_dir", type=str, default=None, help="Where to write clips (default <run>/videos/play).")
+parser.add_argument("--video_overview", action="store_true", default=False, help="Fixed camera on the whole scene, not following env 0.")
+parser.add_argument("--video_eye", type=str, default=None, help="x,y,z of the camera following env 0, from the robot.")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
@@ -106,7 +109,9 @@ def main():
 
     # create isaac environment
     if args_cli.video:
-        cli_args.add_video_recorder(env_cfg, os.path.join(log_dir, "videos", "play"), args_cli.video_length)
+        video_dir = args_cli.video_dir or os.path.join(log_dir, "videos", "play")
+        eye = tuple(float(v) for v in args_cli.video_eye.split(",")) if args_cli.video_eye else None
+        cli_args.add_video_recorder(env_cfg, video_dir, args_cli.video_length, follow=not args_cli.video_overview, eye=eye)
     env = gym.make(args_cli.task, cfg=env_cfg)
 
     # convert to single-agent instance if required by the RL algorithm

@@ -189,15 +189,18 @@ def update_rsl_rl_cfg(agent_cfg: RslRlOnPolicyRunnerCfg, args_cli: argparse.Name
     return agent_cfg
 
 
-def add_video_recorder(env_cfg, output_dir: str, video_length: int, video_interval: int = 0):
+def add_video_recorder(env_cfg, output_dir: str, video_length: int, video_interval: int = 0, follow: bool = True, eye=None):
     """Record mp4 clips from a Kit viewport that follows env 0's robot (Isaac Lab 3.0 dropped
-    render_mode="rgb_array", so gymnasium's RecordVideo only gets empty frames)."""
+    render_mode="rgb_array", so gymnasium's RecordVideo only gets empty frames). With follow=False the
+    camera stays at env_cfg.viewer's eye and lookat."""
     from isaaclab.envs.utils.video_recorder_cfg import VideoRecorderCfg
     from isaaclab_visualizers.kit import KitVisualizerCfg
 
-    env_cfg.sim.visualizer_cfgs = [
-        KitVisualizerCfg(eye=(2.0, 2.0, 1.0), lookat=(0.0, 0.0, 0.0), origin_type="asset", origin_track_path="robot")
-    ]
+    if follow:
+        camera = KitVisualizerCfg(eye=eye or (2.0, 2.0, 1.0), lookat=(0.0, 0.0, 0.0), origin_type="asset", origin_track_path="robot")
+    else:
+        camera = KitVisualizerCfg(eye=env_cfg.viewer.eye, lookat=env_cfg.viewer.lookat, origin_type="world")
+    env_cfg.sim.visualizer_cfgs = [camera]
     env_cfg.video_recorders = [
         VideoRecorderCfg(
             source="visualizer:kit",

@@ -508,6 +508,7 @@ const CATS=[
  ['Stability',         t=>/flat_orientation|lin_vel_z_l2|ang_vel_xy_l2|base_acc_l2|base_height_l2/.test(t)],
  ['Effort & smoothness', t=>/dof_acc|dof_torques|action_rate|dof_pos_l2|joint_vel_l2|_over(_calm)?$|^energy$/.test(t)],
  ['Contact forces',    t=>/grf_|max_contact_force|undesired_contacts|_hits$|^impacts$|belly_impact|head_contact/.test(t)],
+ ['Curriculum',        t=>/^Curriculum\/|max_distance/.test(t)],
  ['Training',          t=>/^(Reward|Loss|Policy|Learning|Episode) \//.test(t)||/joint_acc_sum|base_acc_sum/.test(t)],
 ];
 const CAT_ORDER=CATS.map(c=>c[0]).concat('Other');

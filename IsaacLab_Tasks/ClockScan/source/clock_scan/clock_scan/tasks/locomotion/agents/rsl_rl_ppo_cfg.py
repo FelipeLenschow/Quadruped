@@ -3,8 +3,15 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
+
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg, RslRlSymmetryCfg
+
+from ..mdp.symmetry import mirror_left_right
+
+# Every mini-batch also trained on its left-right mirror (CLOCK_SCAN_SYMMETRY=0: off).
+SYMMETRY = os.environ.get("CLOCK_SCAN_SYMMETRY", "1") != "0"
 
 
 @configclass
@@ -35,4 +42,7 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
+        symmetry_cfg=RslRlSymmetryCfg(use_data_augmentation=True, data_augmentation_func=mirror_left_right)
+        if SYMMETRY
+        else None,
     )

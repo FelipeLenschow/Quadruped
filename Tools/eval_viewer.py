@@ -329,7 +329,7 @@ CACHE_DIR = os.path.join(BASE_DIR, "Tools", ".viewer_cache")
 # the old single-module behaviour.
 VIEWER_MODULES = [
     m.strip()
-    for m in os.environ.get("VIEWER_MODULES", os.environ.get("VIEWER_MODULE", "Walk,Simple,WalkTheseWays,Recovery")).split(",")
+    for m in os.environ.get("VIEWER_MODULES", os.environ.get("VIEWER_MODULE", "Walk,Simple,WalkTheseWays,Recovery,ClockScan")).split(",")
     if m.strip()
 ]
 MODULE_DIRS = [os.path.join(BASE_DIR, "IsaacLab_Tasks", m) for m in VIEWER_MODULES]

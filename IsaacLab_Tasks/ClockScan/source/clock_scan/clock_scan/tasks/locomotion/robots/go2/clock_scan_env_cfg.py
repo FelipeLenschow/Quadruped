@@ -1,6 +1,8 @@
 import math
 import os
 
+import numpy as np
+
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
@@ -23,6 +25,7 @@ from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 from clock_scan.assets.robots.unitree import UNITREE_GO2_CFG
 from clock_scan.assets.robots.unitree_actuators import GO2_KNEE_RATIO
 from clock_scan.tasks.locomotion import mdp
+from clock_scan.tasks.locomotion.agents.rsl_rl_ppo_cfg import BasePPORunnerCfg
 
 
 def _env(name: str, default: float) -> float:
@@ -37,22 +40,84 @@ def _gauss(std: float):
     return Gnoise(std=std) if std else None
 
 
-# ── Height scan ────────────────────────────────────────────────────────────────────────────
-# A 1.6 x 1.0 m grid at 0.1 m (17 x 11 = 187 rays) under the base, turned with its yaw. The actor gets
-# it with uniform noise per ray, the critic without.
+# ── Scans ──────────────────────────────────────────────────────────────────────────────────
+# Height map, actor and critic: vertical rays turned with the base yaw, as a height map built from the lidars
+# and sampled about the base would be. From just behind the rear feet (x -0.2 m) to 1 m ahead, +-0.5 m to the
+# sides; 5 cm apart near the feet (x up to 0.4 m, |y| up to 0.3 m), 10 cm beyond: 19 x 17 = 323 rays. The
+# actor's copy has uniform noise per ray and one offset per episode for the whole map.
+MAP_BACK = _env("MAP_BACK", -0.2)
+MAP_FRONT = _env("MAP_FRONT", 1.0)
+MAP_SIDE = _env("MAP_SIDE", 0.5)
+MAP_FINE_FRONT = _env("MAP_FINE_FRONT", 0.4)
+MAP_FINE_SIDE = _env("MAP_FINE_SIDE", 0.3)
+MAP_FINE = _env("MAP_FINE", 0.05)
+MAP_COARSE = _env("MAP_COARSE", 0.1)
+SCAN_NOISE = _env("SCAN_NOISE", 0.05)
+MAP_BIAS = _env("MAP_BIAS", 0.03)
+
+
+def _axis(lo: float, hi: float, fine_lo: float, fine_hi: float) -> tuple[float, ...]:
+    """Points from lo to hi, MAP_FINE apart within [fine_lo, fine_hi] and MAP_COARSE apart outside it."""
+    fine = np.arange(fine_lo, fine_hi + 1e-6, MAP_FINE)
+    below = np.arange(fine_lo - MAP_COARSE, lo - 1e-6, -MAP_COARSE)[::-1]
+    above = np.arange(fine_hi + MAP_COARSE, hi + 1e-6, MAP_COARSE)
+    return tuple(round(float(v), 4) for v in np.concatenate([below, fine, above]))
+
+
+MAP_X = _axis(MAP_BACK, MAP_FRONT, MAP_BACK, MAP_FINE_FRONT)
+MAP_Y = _axis(-MAP_SIDE, MAP_SIDE, -MAP_FINE_SIDE, MAP_FINE_SIDE)
+# Height grid, critic only: 1.6 x 1.0 m at 0.1 m (187 rays) under the base, turned with its yaw. Base height
+# for the reward and the critic is taken from it.
 SCAN_SIZE = (_env("SCAN_LENGTH", 1.6), _env("SCAN_WIDTH", 1.0))
 SCAN_RESOLUTION = _env("SCAN_RESOLUTION", 0.1)
-SCAN_NOISE = _env("SCAN_NOISE", 0.05)
 
 # ── Terrain ────────────────────────────────────────────────────────────────────────────────
+SMOOTH_NOISE = _env("SMOOTH_NOISE", 0.02)
 ROUGH_NOISE = _env("ROUGH_NOISE", 0.04)
 BOX_HEIGHT = _range("BOX", 0.02, 0.10)
 STEP_HEIGHT = _range("STEP", 0.05, 0.20)
-SHARE_FLAT = _env("SHARE_FLAT", 0.1)
-SHARE_ROUGH = _env("SHARE_ROUGH", 0.15)
-SHARE_BOXES = _env("SHARE_BOXES", 0.15)
-SHARE_STAIRS_DOWN = _env("SHARE_STAIRS_DOWN", 0.3)
-SHARE_STAIRS_UP = _env("SHARE_STAIRS_UP", 0.3)
+# Stair levels: STEP_HEIGHTS_PER_COUNT levels per step count, the step height rising over STEP_HEIGHT inside
+# each count and starting low again at the next. A fall lowers the height but never the step count.
+STEP_COUNTS = tuple(int(c) for c in os.environ.get("CLOCK_SCAN_STEP_COUNTS", "1,2,3,6").split(","))
+STEP_HEIGHTS_PER_COUNT = int(_env("STEP_HEIGHTS_PER_COUNT", 4))
+NUM_ROWS = len(STEP_COUNTS) * STEP_HEIGHTS_PER_COUNT
+# Stages of mdp.terrain_stages, as the share of envs on each terrain type. 1: Simple's ground. 2: rough and
+# boxes added. 3: stairs, STAIRS_SHARE of the envs, the rest kept in stage 2's mix.
+STAIRS_SHARE = _env("STAIRS_SHARE", 0.5)
+_STAGE2 = {"flat": 0.15, "smooth": 0.15, "random_rough": 0.35, "boxes": 0.35}
+TERRAIN_STAGES = [
+    {"flat": 0.3, "smooth": 0.7},
+    _STAGE2,
+    {**{k: v * (1.0 - STAIRS_SHARE) for k, v in _STAGE2.items()},
+     "pyramid_stairs": STAIRS_SHARE / 2, "pyramid_stairs_inv": STAIRS_SHARE / 2},
+]
+STAIR_TYPES = ("pyramid_stairs", "pyramid_stairs_inv")
+# Next stage after STAGE_HOLD checks in a row (one per episode length) with the full speed range, tracking
+# above STAGE_TRACK x its weight, and (stage 2 to 3) a mean boxes difficulty of at least STAGE_BOXES_DIFFICULTY.
+STAGE_TRACK = _env("STAGE_TRACK", 0.65)
+STAGE_HOLD = int(_env("STAGE_HOLD", 3))
+STAGE_BOXES_DIFFICULTY = _env("STAGE_BOXES_DIFFICULTY", 0.4)
+# Once stairs are in: every env on stairs walks forward only for FORWARD_HOLD_ITERS iterations, then the share
+# falls linearly to FORWARD_END over FORWARD_RAMP_ITERS. Forward only: 0 <= x <= FORWARD_X_MAX, y x FORWARD_Y_SCALE,
+# turning x FORWARD_YAW_SCALE.
+FORWARD_HOLD_ITERS = _env("FORWARD_HOLD_ITERS", 1000)
+FORWARD_RAMP_ITERS = _env("FORWARD_RAMP_ITERS", 3000)
+FORWARD_END = _env("FORWARD_END", 1.0)
+FORWARD_X_MAX = _env("FORWARD_X_MAX", 0.6)
+FORWARD_Y_SCALE = _env("FORWARD_Y_SCALE", 1.0)
+FORWARD_YAW_SCALE = _env("FORWARD_YAW_SCALE", 0.3)
+_STEPS_PER_ITER = BasePPORunnerCfg().num_steps_per_env
+# Base this far from the tile centre to go up a level (0: off), on all tiles (LEAVE_DISTANCE) or on stair tiles
+# (STAIRS_LEAVE_DISTANCE; past the first edge at 1.5 m). An episode commanded twice as far that never got there
+# goes down a level, on stairs also from the first row of a step count. terrain_stages logs the share of stair
+# episodes that get 2 m out as stairs_left.
+LEAVE_DISTANCE = _env("LEAVE_DISTANCE", 0.0)
+STAIRS_LEAVE_DISTANCE = _env("STAIRS_LEAVE_DISTANCE", 2.0)
+# Fall penalty on stair tiles, as a share of W_TERMINATION.
+STAIRS_FALL_SCALE = _env("STAIRS_FALL_SCALE", 0.25)
+# Feet hitting a vertical face (feet_stumble) and body contacts on stair tiles, as a share of their weights.
+STAIRS_STUMBLE_SCALE = _env("STAIRS_STUMBLE_SCALE", 1.0)
+STAIRS_CONTACT_SCALE = _env("STAIRS_CONTACT_SCALE", 1.0)
 
 # ── Commands ───────────────────────────────────────────────────────────────────────────────
 MAX_SPEED = _env("MAX_SPEED", 1.0)
@@ -85,10 +150,24 @@ W_SWING = _env("W_SWING", -150.0)
 SWING_ABOVE_SCALE = _env("SWING_ABOVE_SCALE", 0.1)
 W_LANDING = _env("W_LANDING", -2.0)
 W_HEIGHT = _env("W_HEIGHT", -40.0)
+# Body tilt penalty, against the ground plane fitted to the height grid (GROUND_ORIENTATION=1), so the body may pitch
+# with the stairs, or against gravity (0, Simple's flat_orientation_l2).
+W_ORIENT = _env("W_ORIENT", -2.5)
+GROUND_ORIENTATION = _env("GROUND_ORIENTATION", 1.0) > 0.5
+# Per m that the lower head (where the lidar sits) is closer than HEAD_CLEARANCE to the ground under it.
+HEAD_CLEARANCE = _env("HEAD_CLEARANCE", 0.15)
+W_HEAD = _env("W_HEAD", -20.0)
 W_TERMINATION = _env("W_TERMINATION", -1000.0)
-W_STUMBLE = _env("W_STUMBLE", -2.0)
+W_STUMBLE = _env("W_STUMBLE", -5.0)
+# A foot counts as hitting a vertical face when its sideways force is more than STUMBLE_RATIO x its vertical force.
+STUMBLE_RATIO = _env("STUMBLE_RATIO", 2.0)
 W_CONTACTS = _env("W_CONTACTS", -2.0)
 W_HIP_DEV = _env("W_HIP_DEV", -0.2)
+# Walk's leash without its cap: per m from, and per rad of heading to, a reference moved by the command.
+W_LEASH_POS = _env("W_LEASH_POS", -2.0)
+W_LEASH_YAW = _env("W_LEASH_YAW", -0.5)
+# Leash position penalty on stair tiles, as a share of W_LEASH_POS, so a robot can slow down to climb.
+STAIRS_LEASH_SCALE = _env("STAIRS_LEASH_SCALE", 1.0)
 
 # ── Sensor model (actor) ───────────────────────────────────────────────────────────────────
 LIN_VEL_NOISE = _env("LIN_VEL_NOISE", 0.125)
@@ -127,6 +206,9 @@ LYING_JOINT_POS = {
 _FEET_BODIES = SceneEntityCfg("robot", body_names=FEET, preserve_order=True)
 _FEET_CONTACT = SceneEntityCfg("contact_forces", body_names=FEET, preserve_order=True)
 _SCAN = SceneEntityCfg("height_scanner")
+_MAP = SceneEntityCfg("map_scanner")
+_HEAD_RAY = SceneEntityCfg("head_ground")
+_HEAD = SceneEntityCfg("robot", body_names="Head_lower")
 
 
 def _robot_cfg() -> ArticulationCfg:
@@ -164,7 +246,7 @@ def _robot_cfg() -> ArticulationCfg:
 ROUGH_TERRAINS_CFG = terrain_gen.TerrainGeneratorCfg(
     size=(8.0, 8.0),
     border_width=20.0,
-    num_rows=10,
+    num_rows=NUM_ROWS,
     num_cols=20,
     horizontal_scale=0.1,
     vertical_scale=0.005,
@@ -173,20 +255,22 @@ ROUGH_TERRAINS_CFG = terrain_gen.TerrainGeneratorCfg(
     use_cache=False,
     curriculum=True,
     sub_terrains={
-        "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=SHARE_FLAT),
+        "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
+        "smooth": terrain_gen.HfRandomUniformTerrainCfg(
+            proportion=0.1, noise_range=(0.0, SMOOTH_NOISE), noise_step=0.005, border_width=0.25
+        ),
         "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=SHARE_ROUGH, noise_range=(0.0, ROUGH_NOISE), noise_step=0.005, border_width=0.25
+            proportion=0.15, noise_range=(0.0, ROUGH_NOISE), noise_step=0.005, border_width=0.25
         ),
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
-            proportion=SHARE_BOXES, grid_width=0.45, grid_height_range=BOX_HEIGHT, platform_width=2.0
+            proportion=0.15, grid_width=0.45, grid_height_range=BOX_HEIGHT, platform_width=2.0
         ),
-        "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
-            proportion=SHARE_STAIRS_DOWN, step_height_range=STEP_HEIGHT, step_width=0.3,
-            platform_width=3.0, border_width=1.0, holes=False,
+        "pyramid_stairs": mdp.CountedStairsTerrainCfg(
+            proportion=0.25, step_counts=STEP_COUNTS, step_height_range=STEP_HEIGHT, step_width=0.3, platform_width=3.0
         ),
-        "pyramid_stairs_inv": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
-            proportion=SHARE_STAIRS_UP, step_height_range=STEP_HEIGHT, step_width=0.3,
-            platform_width=3.0, border_width=1.0, holes=False,
+        "pyramid_stairs_inv": mdp.CountedStairsTerrainCfg(
+            proportion=0.25, step_counts=STEP_COUNTS, step_height_range=STEP_HEIGHT, step_width=0.3, platform_width=3.0,
+            inverted=True,
         ),
     },
 )
@@ -222,6 +306,24 @@ class RobotSceneCfg(InteractiveSceneCfg):
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
     )
+    map_scanner = RayCasterCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/base",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+        ray_alignment="yaw",
+        pattern_cfg=mdp.FootprintPatternCfg(x_points=MAP_X, y_points=MAP_Y),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+    # One ray straight down from each foot, for the swing height above the ground under it.
+    foot_ground_FL = RayCasterCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/FL_foot", offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)), ray_alignment="world",
+        pattern_cfg=patterns.GridPatternCfg(resolution=1.0, size=[0.0, 0.0]), mesh_prim_paths=["/World/ground"],
+    )
+    foot_ground_FR = foot_ground_FL.replace(prim_path="{ENV_REGEX_NS}/Robot/FR_foot")
+    foot_ground_RL = foot_ground_FL.replace(prim_path="{ENV_REGEX_NS}/Robot/RL_foot")
+    foot_ground_RR = foot_ground_FL.replace(prim_path="{ENV_REGEX_NS}/Robot/RR_foot")
+    # One ray straight down from the lower head, for the critic's head clearance and its penalty.
+    head_ground = foot_ground_FL.replace(prim_path="{ENV_REGEX_NS}/Robot/Head_lower")
     contact_forces = ContactSensorCfg(prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True)
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
@@ -356,6 +458,9 @@ class CommandsCfg:
         standby_duration_range=STANDBY,
         pause_fraction=PAUSE_FRACTION,
         max_foot_speed=MAX_SPEED,
+        forward_only_x_max=FORWARD_X_MAX,
+        forward_only_y_scale=FORWARD_Y_SCALE,
+        forward_only_yaw_scale=FORWARD_YAW_SCALE,
     )
     # After base_velocity: the clock reads its command.
     clock = mdp.SpeedClockCommandCfg(
@@ -380,7 +485,7 @@ class ActionsCfg:
 class ObservationsCfg:
     @configclass
     class PolicyCfg(ObsGroup):
-        """Deployment's 48-wide layout, then the clock (8) and the height scan, in this order."""
+        """Deployment's 48-wide layout, then the clock (8) and the height map, in this order."""
 
         base_lin_vel = ObsTerm(
             func=mdp.biased_obs,
@@ -411,9 +516,9 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, clip=(-100, 100), noise=Unoise(n_min=-1.5, n_max=1.5))
         last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
         clock = ObsTerm(func=mdp.speed_clock, params={"command_name": "clock"})
-        height_scan = ObsTerm(
-            func=mdp.height_scan,
-            params={"sensor_cfg": _SCAN},
+        height_map = ObsTerm(
+            func=mdp.biased_height_scan,
+            params={"sensor_cfg": _MAP, "bias": MAP_BIAS},
             noise=Unoise(n_min=-SCAN_NOISE, n_max=SCAN_NOISE) if SCAN_NOISE else None,
             clip=(-1.0, 1.0),
         )
@@ -437,6 +542,9 @@ class ObservationsCfg:
         clock_rate = ObsTerm(func=mdp.generated_commands, params={"command_name": "clock"})
         base_height = ObsTerm(func=mdp.base_height_ground, params={"sensor_cfg": _SCAN})
         height_scan = ObsTerm(func=mdp.height_scan, params={"sensor_cfg": _SCAN}, clip=(-1.0, 1.0))
+        height_map = ObsTerm(func=mdp.height_scan, params={"sensor_cfg": _MAP}, clip=(-1.0, 1.0))
+        leash_error = ObsTerm(func=mdp.leash_error)
+        head_clearance = ObsTerm(func=mdp.head_clearance, params={"sensor_cfg": _HEAD_RAY, "asset_cfg": _HEAD})
 
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
@@ -477,11 +585,30 @@ class RewardsCfg:
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.1)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-10.0)
     energy = RewTerm(func=mdp.energy, weight=-2e-5)
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.5)
+    orientation = (
+        RewTerm(func=mdp.ground_orientation_l2, weight=W_ORIENT, params={"sensor_cfg": _SCAN})
+        if GROUND_ORIENTATION
+        else RewTerm(func=mdp.flat_orientation_l2, weight=W_ORIENT)
+    )
+    head_clearance = RewTerm(
+        func=mdp.head_clearance_l1,
+        weight=W_HEAD,
+        params={"sensor_cfg": _HEAD_RAY, "asset_cfg": _HEAD, "min_clearance": HEAD_CLEARANCE},
+    )
     base_height = RewTerm(
         func=mdp.base_height_moving, weight=W_HEIGHT, params={"target_height": BASE_HEIGHT, "sensor_cfg": _SCAN}
     )
-    termination = RewTerm(func=mdp.is_terminated, weight=W_TERMINATION)
+    leash_pos = RewTerm(
+        func=mdp.terrain_scaled,
+        weight=W_LEASH_POS,
+        params={"term": mdp.leash_position_l1, "term_params": {}, "scales": {name: STAIRS_LEASH_SCALE for name in STAIR_TYPES}},
+    )
+    leash_yaw = RewTerm(func=mdp.leash_yaw_l1, weight=W_LEASH_YAW)
+    termination = RewTerm(
+        func=mdp.terminated_by_terrain,
+        weight=W_TERMINATION,
+        params={"scales": {name: STAIRS_FALL_SCALE for name in STAIR_TYPES}},
+    )
 
     # -- posture
     joint_pos = RewTerm(
@@ -517,24 +644,34 @@ class RewardsCfg:
         params={
             "asset_cfg": _FEET_BODIES,
             "swing_height": SWING_HEIGHT,
-            "sensor_cfg": _FEET_CONTACT,
             "above_scale": SWING_ABOVE_SCALE,
+            "ground_sensors": [f"foot_ground_{foot[:2]}" for foot in FEET],
         },
     )
     foot_landing = RewTerm(
         func=mdp.foot_landing_velocity, weight=W_LANDING, params={"asset_cfg": _FEET_BODIES, "sensor_cfg": _FEET_CONTACT}
     )
     feet_stumble = RewTerm(
-        func=mdp.feet_stumble, weight=W_STUMBLE, params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=FEET)}
+        func=mdp.terrain_scaled,
+        weight=W_STUMBLE,
+        params={
+            "term": mdp.feet_stumble,
+            "term_params": {"sensor_cfg": SceneEntityCfg("contact_forces", body_names=FEET), "ratio": STUMBLE_RATIO},
+            "scales": {name: STAIRS_STUMBLE_SCALE for name in STAIR_TYPES},
+        },
     )
 
     # -- other
     undesired_contacts = RewTerm(
-        func=mdp.undesired_contacts,
+        func=mdp.terrain_scaled,
         weight=W_CONTACTS,
         params={
-            "threshold": 1,
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Head_.*", ".*_hip", ".*_thigh", ".*_calf"]),
+            "term": mdp.undesired_contacts,
+            "term_params": {
+                "threshold": 1,
+                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["Head_.*", ".*_hip", ".*_thigh", ".*_calf"]),
+            },
+            "scales": {name: STAIRS_CONTACT_SCALE for name in STAIR_TYPES},
         },
     )
 
@@ -556,7 +693,25 @@ class TerminationsCfg:
 
 @configclass
 class CurriculumCfg:
-    terrain_levels = CurrTerm(func=mdp.terrain_levels_tracking)
+    terrain_levels = CurrTerm(
+        func=mdp.terrain_stages,
+        params={
+            "stages": TERRAIN_STAGES,
+            "level_types": ("boxes",),
+            "level_gates": (0.0, STAGE_BOXES_DIFFICULTY * NUM_ROWS),
+            "stair_types": STAIR_TYPES,
+            "stair_rows_per_count": STEP_HEIGHTS_PER_COUNT,
+            "stair_counts": STEP_COUNTS,
+            "stair_height_range": STEP_HEIGHT,
+            "track_ratio": STAGE_TRACK,
+            "hold": STAGE_HOLD,
+            "forward_hold_steps": int(FORWARD_HOLD_ITERS * _STEPS_PER_ITER),
+            "forward_ramp_steps": int(FORWARD_RAMP_ITERS * _STEPS_PER_ITER),
+            "forward_end_share": FORWARD_END,
+            "leave_distance": LEAVE_DISTANCE,
+            "stair_leave_distance": STAIRS_LEAVE_DISTANCE,
+        },
+    )
     lin_vel_cmd_levels = CurrTerm(func=mdp.lin_vel_cmd_levels)
 
 
@@ -583,12 +738,17 @@ class ClockScanEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.use_newton_actuators = False
         self.scene.contact_forces.update_period = self.sim.dt
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
+        self.scene.map_scanner.update_period = self.decimation * self.sim.dt
+        for foot in FEET:
+            getattr(self.scene, f"foot_ground_{foot[:2]}").update_period = self.decimation * self.sim.dt
 
 
 # Env 0, the one the video camera follows, always gets the first terrain type, so play keeps one type.
 # The slopes are not in training; they are there to see how the policy copes with them.
 PLAY_TERRAIN = os.environ.get("CLOCK_SCAN_PLAY_TERRAIN", "boxes")
 PLAY_DIFFICULTY = _range("PLAY_DIFFICULTY", 0.6, 1.0)
+# Tiles in x. Rows run along x, so a robot pinned to walk +x crosses from its tile into the next row's.
+PLAY_ROWS = int(_env("PLAY_ROWS", 2))
 
 
 @configclass
@@ -596,6 +756,7 @@ class ClockScanPlayEnvCfg(ClockScanEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 32
+        self.curriculum.terrain_levels = None
         vel = self.commands.base_velocity
         vel.ranges = vel.limit_ranges
         pinned = os.environ.get("CLOCK_SCAN_PLAY_CMD_X")
@@ -605,7 +766,15 @@ class ClockScanPlayEnvCfg(ClockScanEnvCfg):
             vel.ranges.lin_vel_y = (0.0, 0.0)
             vel.ranges.ang_vel_z = (0.0, 0.0)
             vel.rel_standing_envs = 0.0
-            print(f"[ClockScan] every env pinned to lin_vel_x = {v} m/s")
+            vel.slow_command_fraction = 0.0
+            vel.pause_fraction = 0.0
+            vel.yaw_only_command_fraction = 0.0
+            vel.debug_vis = False
+            self.events.reset_start_pose = None
+            self.events.push_robot = None
+            yaw = _env("PLAY_YAW", 0.0)
+            self.events.reset_base.params["pose_range"]["yaw"] = (yaw, yaw)
+            print(f"[ClockScan] every env pinned to lin_vel_x = {v} m/s, start yaw {yaw} rad, standing starts, no pushes")
 
         gen = self.scene.terrain.terrain_generator
         extra = {
@@ -618,6 +787,6 @@ class ClockScanPlayEnvCfg(ClockScanEnvCfg):
         }
         terrain = {**gen.sub_terrains, **extra}[PLAY_TERRAIN].replace(proportion=1.0)
         self.scene.terrain.terrain_generator = gen.replace(
-            num_rows=2, num_cols=1, sub_terrains={PLAY_TERRAIN: terrain}, difficulty_range=PLAY_DIFFICULTY
+            num_rows=PLAY_ROWS, num_cols=1, sub_terrains={PLAY_TERRAIN: terrain}, difficulty_range=PLAY_DIFFICULTY
         )
         print(f"[ClockScan] play on {PLAY_TERRAIN}, difficulty {PLAY_DIFFICULTY}")

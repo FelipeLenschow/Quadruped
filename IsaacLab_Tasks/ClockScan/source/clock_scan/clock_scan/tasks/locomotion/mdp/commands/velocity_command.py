@@ -53,6 +53,17 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         self._switch_time = torch.full((self.num_envs,), -1e9, device=self.device)
         self.commanded_path = torch.zeros(self.num_envs, device=self.device)
         self.tracked_path = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["max_distance"] = torch.zeros(self.num_envs, device=self.device)
+        # Set per env by mdp.terrain_stages at reset.
+        self.forward_only = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # Leash: a reference pose moved by the command, from the robot's pose one step after reset.
+        self.ref_pos_xy = torch.zeros(self.num_envs, 2, device=self.device)
+        self.ref_yaw = torch.zeros(self.num_envs, device=self.device)
+        self.leash_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.leash_pos_error_w = torch.zeros(self.num_envs, 2, device=self.device)
+        self.leash_yaw_error = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["leash_distance"] = torch.zeros(self.num_envs, device=self.device)
+        self._leash_steps = torch.zeros(self.num_envs, device=self.device)
 
     @property
     def command(self) -> torch.Tensor:
@@ -69,6 +80,11 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         return self.vel_command_b * active.unsqueeze(1).float()
 
     @property
+    def max_distance(self) -> torch.Tensor:
+        """Furthest the base has been from the env origin this episode, m."""
+        return self.metrics["max_distance"]
+
+    @property
     def transition_age(self) -> torch.Tensor:
         """Seconds since the command last switched between standing and moving (stand_threshold)."""
         return self._env.episode_length_buf * self._env.step_dt - self._switch_time
@@ -79,6 +95,10 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         self._switch_time[ids] = -1e9
         self.commanded_path[ids] = 0.0
         self.tracked_path[ids] = 0.0
+        self.leash_valid[ids] = False
+        self.leash_pos_error_w[ids] = 0.0
+        self.leash_yaw_error[ids] = 0.0
+        self._leash_steps[ids] = 0.0
         extras = super().reset(env_ids)
         low, high = self.cfg.standby_duration_range
         if high > 0.0:
@@ -105,6 +125,32 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         along = torch.sum(self.robot.data.root_lin_vel_b.torch[:, :2] * command[:, :2], dim=-1) / speed.clamp(min=1e-6)
         self.commanded_path += speed * self._env.step_dt
         self.tracked_path += torch.minimum(along.clamp(min=0.0), speed) * self._env.step_dt
+        offset = self.robot.data.root_pos_w.torch[:, :2] - self._env.scene.env_origins[:, :2]
+        self.metrics["max_distance"] = torch.maximum(self.metrics["max_distance"], torch.linalg.norm(offset, dim=1))
+        self._update_leash(command)
+
+    def _update_leash(self, command: torch.Tensor):
+        """Walk's leash without its cap: the reference turns at the commanded yaw rate and moves at the commanded
+        velocity in its own heading, and its error to the robot is never clipped."""
+        from isaaclab.utils.math import euler_xyz_from_quat, wrap_to_pi
+
+        dt = self._env.step_dt
+        pos = self.robot.data.root_pos_w.torch[:, :2]
+        yaw = euler_xyz_from_quat(self.robot.data.root_quat_w.torch)[2]
+        start = ~self.leash_valid & (self._env.episode_length_buf >= 1)
+        self.ref_pos_xy[start] = pos[start]
+        self.ref_yaw[start] = yaw[start]
+        self.leash_valid |= start
+        live = self.leash_valid.float()
+        self.ref_yaw += command[:, 2] * dt * live
+        c, s = torch.cos(self.ref_yaw), torch.sin(self.ref_yaw)
+        self.ref_pos_xy[:, 0] += (command[:, 0] * c - command[:, 1] * s) * dt * live
+        self.ref_pos_xy[:, 1] += (command[:, 0] * s + command[:, 1] * c) * dt * live
+        self.leash_pos_error_w = (self.ref_pos_xy - pos) * live.unsqueeze(1)
+        self.leash_yaw_error = wrap_to_pi(self.ref_yaw - yaw) * live
+        self._leash_steps += live
+        distance = torch.linalg.norm(self.leash_pos_error_w, dim=1)
+        self.metrics["leash_distance"] += (distance - self.metrics["leash_distance"]) * live / self._leash_steps.clamp(min=1.0)
 
     def _resample_command(self, env_ids: Sequence[int]):
         super()._resample_command(env_ids)
@@ -112,10 +158,21 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         ids = torch.as_tensor(env_ids, device=self.device).reshape(-1)
         if ids.numel() == 0:
             return
+        self._apply_forward_only(ids)
         self._apply_axis_only(ids)
         self._apply_slow(ids)
         self._apply_foot_speed_limit(ids)
         self._apply_pause(ids)
+
+    def _apply_forward_only(self, ids: torch.Tensor):
+        """For the envs flagged forward_only: forward speed only, up to forward_only_x_max, sideways and
+        turning scaled by forward_only_y_scale and forward_only_yaw_scale."""
+        ids = ids[self.forward_only[ids]]
+        if ids.numel() == 0:
+            return
+        self.vel_command_b[ids, 0] = self.vel_command_b[ids, 0].abs().clamp(max=self.cfg.forward_only_x_max)
+        self.vel_command_b[ids, 1] *= self.cfg.forward_only_y_scale
+        self.vel_command_b[ids, 2] *= self.cfg.forward_only_yaw_scale
 
     def _apply_pause(self, ids: torch.Tensor):
         """Turn a share of resamples into a short zero-command pause, so the next command is a start
@@ -163,7 +220,7 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
             if fraction <= 0.0:
                 continue
             upper = lower + fraction
-            selected = (draw >= lower) & (draw < upper) & ~self.is_standing_env[ids]
+            selected = (draw >= lower) & (draw < upper) & ~self.is_standing_env[ids] & ~self.forward_only[ids]
             lower = upper
             if not bool(selected.any()):
                 continue
@@ -231,5 +288,9 @@ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
 
     # Cap on the fastest stance foot's speed, turning included (see foot_sweep_speed). 0 disables.
     max_foot_speed: float = 0.0
+    # Forward speed cap, and sideways speed and turning kept as a share, on forward_only commands.
+    forward_only_x_max: float = float("inf")
+    forward_only_y_scale: float = 0.0
+    forward_only_yaw_scale: float = 0.3
     foot_x: float = 0.19
     foot_y: float = 0.14
