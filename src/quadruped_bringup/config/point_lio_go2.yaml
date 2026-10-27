@@ -56,11 +56,11 @@
             gravity: [0.0, 0.0, -9.81]
             gravity_init: [0.0, 0.0, -9.81]
             # Lidar -> IMU: the IMU is in the body's axes, so this is config.yaml's real_lidar mount
-            # (xyz, rpy [0.2171, 3.268, 2.0766]). Update both together; lidar_imu_calib prints it from the gyro too.
-            extrinsic_T: [0.28945, 0.0, -0.046825]
-            extrinsic_R: [ 0.4806, -0.8411,  0.2481,
-                          -0.8678, -0.4969, -0.0033,
-                           0.1261, -0.2137, -0.9687]
+            # (xyz, rpy [0.2269, 3.2697, 2.0762]). Update both together; lidar_imu_calib prints it from the gyro too.
+            extrinsic_T: [0.2935, 0.0, -0.0653]
+            extrinsic_R: [ 0.4802, -0.8386,  0.2571,
+                          -0.8678, -0.4969,  0.0,
+                           0.1278, -0.2231, -0.9664]
 
         odometry:
             publish_odometry_without_downsample: false   # true publishes pose and /tf for every point (~5 kHz): floods DDS and Wi-Fi

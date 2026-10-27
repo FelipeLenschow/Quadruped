@@ -49,12 +49,12 @@ lidar_filter:
   leg_radius: 0.045
   max_range: 20.0
 
-# Real Go2 L1 lidar mount on the base (real_sensors). Gazebo uses the URDF's. lidar_level finds roll and
-# pitch from the floor and keeps yaw. The yaw is ~120 deg about the lidar's own axis off the URDF's radar
-# frame, measured by aligning the clouds before and after a straight 1.3 m walk against odometry.
+# Real Go2 L1 lidar mount on the base (real_sensors). Gazebo uses the URDF's. xyz and the tilt (14.9 deg
+# forward from straight down) are the robot's CAD model. The yaw is ~120 deg about the lidar's own axis off the
+# URDF's radar frame, measured by aligning the clouds before and after a straight 1.3 m walk against odometry.
 real_lidar:
-  xyz: [0.28945, 0.0, -0.046825]
-  rpy: [0.2171, 3.2680, 2.0766]
+  xyz: [0.2935, 0.0, -0.0653]
+  rpy: [0.2269, 3.2697, 2.0762]
   # The L1 reports every range this much too long (m); real_sensors pulls each point back along its ray.
   # Fitted to a wall at a tape-measured 1.60 m and the floor under the standing robot's feet (leg FK).
   range_offset: 0.12
@@ -74,7 +74,7 @@ real_lidar:
 # The lidar is at 192.168.1.200 and sends to 192.168.1.102: put that address on the port it is plugged into.
 # xyz, rpy are the lidar on the base; fast_lio.launch.py also gives them to FAST-LIO as its extrinsic.
 helios:
-  xyz: [-0.003, 0.0, 0.175]  # m, the optical centre: z above the HAA axes (tape, ~5 mm)
+  xyz: [0.0, 0.0, 0.175]     # m, the optical centre: over the HAA axes' centre, z above their plane (tape, ~5 mm)
   rpy: [0.0, 0.0, 0.0]       # upright, x forward
   frame: helios
   msop_port: 6699
@@ -90,12 +90,15 @@ helios:
 
 # u-blox RTK GPS rover on USB (gps_driver, launch flag gps): sensor_msgs/NavSatFix on /gps/fix, with the
 # receiver's own accuracy. The base station's corrections reach it over XBee. On DLS2, ros2_translator passes
-# /gps/fix to sensor_fusion's exteroceptive filter (the antenna's place on the base is in its config.yaml).
+# /gps/fix to sensor_fusion's exteroceptive filter, which has the antenna's place on the base in its own
+# config.yaml (gps: xyz): keep the two the same.
 gps:
   port: /dev/ttyACM0
   baud: 115200            # a USB port ignores it
   topic: /gps/fix
   frame_id: gps           # the antenna
+  xyz: [0.221, 0.0, 0.0888]   # m, the antenna on the base (tape, from the HAA axes' plane): gps_driver's static TF
+  rpy: [0.0, 0.0, 0.0]
 
 # Cameras (camera_bridge), one entry each. Every camera <name> publishes
 #   /camera/<name>/image_raw/compressed, /camera/<name>/camera_info (once calibrated),

@@ -13,6 +13,8 @@ RTK solution is float or fixed. Without NAV-PVT (for 2 s), NMEA GGA: an accuracy
 The stamp is the time the message was read, system clock: the DLS2 exteroceptive filter compares it with its
 state at that time. On DLS2, ros2_translator (gps.sources) passes /gps/fix to sensor_fusion.
 
+A static TF places the antenna on the base: base -> frame_id (gps), config.yaml gps: xyz, rpy.
+
 /gps/status (std_msgs/String, JSON, 1 Hz; the app's GPS chip): what NavSatFix cannot say. The solution ("RTK
 fixed", "RTK float", "DGNSS", "GNSS fix", "no fix", or "no data" when the receiver is silent), accuracies,
 satellites, pDOP, the receiver's correction age, and the RTCM corrections it reported over the last second (UBX
@@ -39,6 +41,7 @@ from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import String
 
 from quadruped_common.config_loader import load_config
+from quadruped_drivers.sensor_mounts import publish_static_tf
 
 UBX_SYNC = b"\xb5\x62"
 UBX_NAV_PVT = (0x01, 0x07)
@@ -228,6 +231,7 @@ class GpsDriver(Node):
         self.args = args
         self.pub = self.create_publisher(NavSatFix, args.topic, 10)
         self.status_pub = self.create_publisher(String, args.status_topic, 10)
+        self.tf = publish_static_tf(self, args.base_frame, {args.frame_id: (args.xyz, args.rpy)})
         self.parser = StreamParser()
         self.last_pvt = -1e9
         self.label = None
@@ -385,7 +389,10 @@ def main():
     parser.add_argument("--topic", default=gps.get("topic", "/gps/fix"))
     parser.add_argument("--frame_id", default=gps.get("frame_id", "gps"))
     parser.add_argument("--status_topic", default=gps.get("status_topic", "/gps/status"))
+    parser.add_argument("--base_frame", default="base")
     args = parser.parse_args(remove_ros_args(sys.argv)[1:])
+    args.xyz = tuple(float(v) for v in gps.get("xyz", (0.0, 0.0, 0.0)))
+    args.rpy = tuple(float(v) for v in gps.get("rpy", (0.0, 0.0, 0.0)))
 
     rclpy.init()
     node = GpsDriver(args)

@@ -1346,8 +1346,9 @@ def run_cli_menu():
         print("  [3] FAST-LIO on the Helios 16P and the L1 together, one map (lidar_merge, /helios_lio/*)")
         choice = input("LIO [1]: ").strip()
         helios = choice in ("2", "3")
-        package_dir = "FAST_LIO" if helios else "point_lio_ros2"
-        save = input(f"Save the 3D map to third_party/{package_dir}/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
+        where = ("maps/fastlio_<date>_<time>.pcd, written while mapping" if helios
+                 else "third_party/point_lio_ros2/PCD/scans.pcd on exit")
+        save = input(f"Save the 3D map to {where}? [y/N]: ").lower().strip() == "y"
         voxel_cm = input("Voxel size for the app's 3D map, cm [5]: ").strip()
         try:
             voxel = float(voxel_cm) / 100 if voxel_cm else None

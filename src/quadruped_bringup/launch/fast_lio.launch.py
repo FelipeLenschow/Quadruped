@@ -48,7 +48,7 @@ def setup(context):
         "common.imu_topic": get(context, "imu_topic"),
         "mapping.extrinsic_T": xyz,
         "mapping.extrinsic_R": rotation(rpy),
-        "pcd_save.pcd_save_en": flag(context, "save"),
+        "pcd_save.pcd_save_en": False,   # does nothing in FAST-LIO's ROS 2 branch: lio_cloud_save saves instead
     }
     actions = []
     if flag(context, "driver"):
@@ -70,6 +70,10 @@ def setup(context):
         "fast_lio", "fastlio_mapping", main=True,
         parameters=[paths.config("fast_lio_helios.yaml"), params],
         remappings=[(t, "/helios_lio" + n) for t, n in LIO_TOPICS]))
+    if flag(context, "save"):
+        # The registered scans to maps/fastlio_<date>_<time>.pcd, written while mapping
+        actions.append(node("quadruped_perception", "lio_cloud_save", "--name=fastlio",
+                            remappings=[("/lio/cloud", "/helios_lio/cloud")]))
     if flag(context, "map_stream"):
         # The app's voxel map, from this LIO instead of Point-LIO (run one of the two)
         actions.append(node("quadruped_perception", "lio_map_stream", f"--voxel={get(context, 'voxel')}",
@@ -85,7 +89,8 @@ def generate_launch_description():
         arg("driver", "true", "start helios_driver (false: /helios/points comes from elsewhere)"),
         arg("from_topic", "", "helios_driver reads this recorded rslidar_sdk cloud instead of the lidar"),
         arg("imu_topic", "/lidar/imu", "FAST-LIO's IMU (base axes and origin)"),
-        arg("save", "false", "write the 3D map to PCD/scans.pcd in the fast_lio package on exit"),
+        arg("save", "false", "lio_cloud_save: FAST-LIO's registered scans to maps/fastlio_<date>_<time>.pcd, "
+                             "written while mapping"),
         arg("map_stream", "true", "lio_map_stream: the app's voxel map from this LIO"),
         arg("voxel", "0.05", "the app's voxel size in m"),
         OpaqueFunction(function=setup),

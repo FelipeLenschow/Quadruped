@@ -1,7 +1,7 @@
 {
   "names": {
     "fast_lio": {
-      "cmake-args": ["-DCMAKE_PROJECT_fast_lio_INCLUDE=../../third_party/fast_lio_cxx17.cmake"]
+      "cmake-args": ["-DCMAKE_PROJECT_fast_lio_INCLUDE=../../third_party/fast_lio.cmake"]
     }
   }
 }

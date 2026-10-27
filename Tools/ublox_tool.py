@@ -176,11 +176,12 @@ class Receiver:
         out = {}
         for j in range(p[1]):
             o = 8 + 40 * j
-            port = PORTS.get(struct.unpack_from("<H", p, o)[0], "?")
+            port_id = struct.unpack_from("<H", p, o)[0]
+            port = PORTS.get(port_id, f"port 0x{port_id:04x}")
             tx = struct.unpack_from("<I", p, o + 4)[0]
             rx = struct.unpack_from("<I", p, o + 12)[0]
             counts = struct.unpack_from("<4H", p, o + 20)
-            out[port] = (rx, tx, {PROTOCOLS.get(k, k): c for k, c in zip(protocols, counts) if k != 0xFF})
+            out[port] = (rx, tx, {PROTOCOLS.get(k, f"protocol {k}"): c for k, c in zip(protocols, counts) if k != 0xFF})
         return out
 
 
