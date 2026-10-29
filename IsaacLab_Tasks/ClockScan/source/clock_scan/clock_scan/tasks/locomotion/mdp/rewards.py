@@ -5,7 +5,7 @@ import torch
 from typing import TYPE_CHECKING
 
 from isaaclab.assets import Articulation, RigidObject
-from isaaclab.managers import ManagerTermBase, SceneEntityCfg
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils.math import quat_apply, quat_apply_inverse, yaw_quat
 
@@ -265,37 +265,32 @@ def terrain_scaled(env: ManagerBasedRLEnv, term, term_params: dict, scales: dict
     return value * table[kind]
 
 
-class ground_orientation_l2(ManagerTermBase):
-    """flat_orientation_l2 against the ground instead of gravity: the squared x and y of the ground normal in the
-    base frame. The normal is that of a plane fitted to the yaw-turned height grid of sensor_cfg, its slope clipped
-    to max_slope, so on stairs the body may pitch with the steps and on flat ground nothing changes."""
-
-    def __init__(self, cfg, env: ManagerBasedRLEnv):
-        super().__init__(cfg, env)
-        sensor = env.scene.sensors[cfg.params["sensor_cfg"].name]
+def ground_normal_b(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_slope: float = 0.8, asset_cfg=None) -> torch.Tensor:
+    """Unit normal, in the base frame, of a plane fitted to the yaw-turned vertical height grid of sensor_cfg, its
+    slope clipped to max_slope. Rays with no hit take the mean of the others."""
+    asset: RigidObject = env.scene["robot" if asset_cfg is None else asset_cfg.name]
+    sensor = env.scene.sensors[sensor_cfg.name]
+    cache = env.__dict__.setdefault("_ground_plane_fit", {})
+    if sensor_cfg.name not in cache:
         pattern = sensor.cfg.pattern_cfg
         xy = pattern.func(pattern, env.device)[0][:, :2] + torch.tensor(sensor.cfg.offset.pos[:2], device=env.device)
-        design = torch.cat([torch.ones(len(xy), 1, device=env.device), xy], dim=1)
-        self._fit = torch.linalg.pinv(design)
+        cache[sensor_cfg.name] = torch.linalg.pinv(torch.cat([torch.ones(len(xy), 1, device=env.device), xy], dim=1))
+    z = sensor.data.ray_hits_w.torch[..., 2]
+    finite = torch.isfinite(z)
+    fill = torch.where(finite, z, torch.zeros_like(z)).sum(dim=1, keepdim=True) / finite.sum(dim=1, keepdim=True).clamp(min=1)
+    z = torch.where(finite, z, fill)
+    slope = (z @ cache[sensor_cfg.name].T)[:, 1:].clamp(-max_slope, max_slope)
+    quat = asset.data.root_quat_w.torch
+    normal = torch.cat([-slope, torch.ones_like(slope[:, :1])], dim=1)
+    normal = quat_apply(yaw_quat(quat), normal / torch.linalg.norm(normal, dim=1, keepdim=True))
+    return quat_apply_inverse(quat, normal)
 
-    def __call__(
-        self,
-        env: ManagerBasedRLEnv,
-        sensor_cfg: SceneEntityCfg,
-        max_slope: float = 0.7,
-        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    ) -> torch.Tensor:
-        asset: RigidObject = env.scene[asset_cfg.name]
-        z = env.scene.sensors[sensor_cfg.name].data.ray_hits_w.torch[..., 2]
-        finite = torch.isfinite(z)
-        fill = torch.where(finite, z, torch.zeros_like(z)).sum(dim=1, keepdim=True) / finite.sum(dim=1, keepdim=True).clamp(min=1)
-        z = torch.where(finite, z, fill)
-        slope = (z @ self._fit.T)[:, 1:].clamp(-max_slope, max_slope)
-        quat = asset.data.root_quat_w.torch
-        normal = torch.cat([-slope, torch.ones_like(slope[:, :1])], dim=1)
-        normal = quat_apply(yaw_quat(quat), normal / torch.linalg.norm(normal, dim=1, keepdim=True))
-        normal_b = quat_apply_inverse(quat, normal)
-        return torch.sum(torch.square(normal_b[:, :2]), dim=1)
+
+def ground_orientation_l2(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_slope: float = 0.8) -> torch.Tensor:
+    """flat_orientation_l2 against the ground instead of gravity: the squared x and y of the ground normal
+    (ground_normal_b) in the base frame, so on stairs the body may pitch with the steps and on flat ground nothing
+    changes."""
+    return torch.sum(torch.square(ground_normal_b(env, sensor_cfg, max_slope)[:, :2]), dim=1)
 
 
 def head_clearance_l1(

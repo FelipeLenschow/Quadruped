@@ -152,7 +152,10 @@ All skills go through `/skill`. Two kinds:
       MCP's HTTP transport on `http://<robot>:8765/mcp`, Python standard library only (the Jetson's Python 3.8 can't
       run the `mcp` package). `QUADRUPED_MCP_TOKEN` requires a bearer token; browser requests are refused. Tools:
       `get_state`, `list_objects` (distance, bearing, and the tricks already done at each), `go_to(x, y)`,
-      `go_to_object(id)` (stops 0.6 m away, facing it), `skill(name)`, `move` (≤ 3 s on `/cmd_vel/llm`), `stop`,
+      `go_to_object(id)` (stops 0.6 m away, facing it), `frontiers` (edges of the SLAM map between free and
+      unknown space, nearest first), `visit(id, trick)` (Nav2, then a short slow step on `/cmd_vel/llm` to the
+      trick's pose: nose at it, or it beside the lifted hind leg), `skill(name)`, `move` (a Nav2 goal ≤ 2 m from
+      the robot), `stop`,
       `look` (a camera frame, for a VLM). Every motion ends inside its call, so a lost link leaves the robot still.
       Checked with the official `mcp` client (2.3) against a fake robot (TF, `/skill`, Nav2 action, camera);
       not yet on the real robot or in Gazebo.
@@ -166,7 +169,8 @@ All skills go through `/skill`. Two kinds:
       lists the server's tools, hands them to the model and runs its calls. Calls cross Wi-Fi (or a VPN such as
       Tailscale) over HTTP, not DDS.
 - [ ] **Safety:**
-  - the LLM only reaches skills and `/cmd_vel/llm`, the lowest priority;
+  - the LLM only reaches skills and Nav2 goals (no velocity commands), so the costmap keeps it off walls; the
+    server's own last step of `visit` is the one velocity command (≤ 0.6 m at 0.15 m/s toward the object);
   - the app's e-stop and the joystick always win.
 - [ ] **A "having fun" prompt:** explore, pick a cone, go sniff it, sometimes pee, then repeat.
 

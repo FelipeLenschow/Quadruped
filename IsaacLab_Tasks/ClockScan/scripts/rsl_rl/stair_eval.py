@@ -1,7 +1,7 @@
 """Stair test against step height, measured in Isaac Sim, as a chart.
 
-Every robot gets a tile of the top block of step counts (6 steps at 5 to 20 cm), down (platform on top) or
-up (pit), and walks at one pinned command from a standing start on the platform, heading +x, for --seconds.
+Every robot gets a tile of the top block of step counts (6 steps over the training height range), down
+(platform on top) or up (pit), or with --heights a tile of 6 steps at exactly one of those heights, and walks at one pinned command from a standing start on the platform, heading +x, for --seconds.
 Only its first episode counts. Per tile it records whether the base got --distance m from the tile centre
 (past the first edge at 1.5 m) and whether the episode ended by a fall. The step height of each tile is read
 from the terrain.
@@ -25,7 +25,8 @@ parser.add_argument("--task", type=str, default="Go2-Clock-Scan")
 parser.add_argument("--compare", type=str, nargs="*", default=[], help="More checkpoints drawn on the same chart.")
 parser.add_argument("--speed", type=float, default=0.5, help="Forward command, m/s.")
 parser.add_argument("--vy", type=str, default="0", help="Comma-separated sideways commands, m/s; one line each.")
-parser.add_argument("--rows", type=int, default=16, help="Step heights tested (terrain rows).")
+parser.add_argument("--rows", type=int, default=16, help="Step heights tested (terrain rows); tiles per height with --heights.")
+parser.add_argument("--heights", type=str, default=None, help="Comma-separated exact step heights, cm, instead of the sweep.")
 parser.add_argument("--per_tile", type=int, default=8, help="Robots per tile.")
 parser.add_argument("--seconds", type=float, default=12.0)
 parser.add_argument("--distance", type=float, default=2.0, help="Distance from the tile centre that counts as across.")
@@ -93,13 +94,26 @@ def rollout(env, policy, level, col):
 def main():
     checkpoints = [args_cli.checkpoint] + list(args_cli.compare)
     vys = [float(v) for v in args_cli.vy.split(",")]
-    rows, cols = args_cli.rows, len(TYPES)
+    steps = max(STEP_COUNTS)
+    parts = len(STEP_COUNTS)
+    if args_cli.heights:
+        heights = [float(h) for h in args_cli.heights.split(",")]
+        subs = {}
+        for tag, name in TYPES.items():
+            for h in heights:
+                subs[f"{tag}_{h:g}"] = ROUGH_TERRAINS_CFG.sub_terrains[name].replace(
+                    step_counts=(steps,), step_height_range=(h / 100.0, h / 100.0)
+                )
+        difficulty = (0.0, 1.0)
+    else:
+        subs = {name: ROUGH_TERRAINS_CFG.sub_terrains[name] for name in TYPES.values()}
+        difficulty = ((parts - 1) / parts, 1.0)
+    rows, cols = args_cli.rows, len(subs)
+    subs = {k: v.replace(proportion=1.0 / cols) for k, v in subs.items()}
     num_envs = rows * cols * args_cli.per_tile
     cfg = parse_env_cfg(args_cli.task, device="cuda:0", num_envs=num_envs, entry_point_key="play_env_cfg_entry_point")
-    parts = len(STEP_COUNTS)
-    subs = {name: ROUGH_TERRAINS_CFG.sub_terrains[name].replace(proportion=1.0 / cols) for name in TYPES.values()}
     cfg.scene.terrain.terrain_generator = cfg.scene.terrain.terrain_generator.replace(
-        num_rows=rows, num_cols=cols, sub_terrains=subs, difficulty_range=((parts - 1) / parts, 1.0), curriculum=True
+        num_rows=rows, num_cols=cols, sub_terrains=subs, difficulty_range=difficulty, curriculum=True
     )
     cfg.scene.terrain.max_init_terrain_level = None
     cfg.episode_length_s = max(cfg.episode_length_s, args_cli.seconds + 1.0)
@@ -115,8 +129,10 @@ def main():
     level = ids % rows
     col = (ids // rows) % cols
     names = list(subs.keys())
-    steps = max(STEP_COUNTS)
+    col_tag = ["up" if subs[n].inverted else "down" for n in names]
     height_cm = (100.0 * terrain.terrain_origins[:, :, 2].abs() / steps).cpu()
+    env_height = torch.round(height_cm[level.cpu(), col.cpu()] * 10.0) / 10.0
+    env_tag = [col_tag[c] for c in col.tolist()]
 
     results = []
     for ck in checkpoints:
@@ -129,20 +145,21 @@ def main():
             across = (far > args_cli.distance).cpu()
             fell = fell.cpu()
             line = {"checkpoint": ck, "vy": vy, "speed": args_cli.speed}
-            for tag, name in TYPES.items():
-                c = names.index(name)
+            for tag in TYPES:
+                is_tag = torch.tensor([t == tag for t in env_tag])
                 pts = []
-                for r in range(rows):
-                    sel = ((level == r) & (col == c)).cpu()
+                for h in sorted(set(env_height[is_tag].tolist())):
+                    sel = is_tag & (env_height == h)
                     pts.append({
-                        "height_cm": round(float(height_cm[r, c]), 2),
+                        "height_cm": h,
+                        "robots": int(sel.sum()),
                         "across": round(float(across[sel].float().mean()), 3),
                         "fell": round(float(fell[sel].float().mean()), 3),
                     })
                 line[tag] = pts
             results.append(line)
             print(f"[stair_eval] {os.path.basename(ck)} vy={vy:+.2f}: " + "  ".join(
-                f"{tag} across {sum(p['across'] for p in line[tag]) / rows:.2f} fell {sum(p['fell'] for p in line[tag]) / rows:.2f}"
+                f"{tag} across {sum(p['across'] for p in line[tag]) / len(line[tag]):.2f} fell {sum(p['fell'] for p in line[tag]) / len(line[tag]):.2f}"
                 for tag in TYPES))
 
     out = args_cli.out or os.path.join(
@@ -163,7 +180,7 @@ def main():
             ax.plot(h, [p["across"] for p in pts], "-o", ms=3, color=colors[k % len(colors)], label=label + " across")
             ax.plot(h, [p["fell"] for p in pts], "--x", ms=4, color=colors[k % len(colors)], alpha=0.7, label=label + " fell")
     for ax, tag in zip(axes, TYPES):
-        ax.set_title(f"{tag}: {steps} steps, {args_cli.speed:.2f} m/s forward, {args_cli.per_tile} robots per point")
+        ax.set_title(f"{tag}: {steps} steps, {args_cli.speed:.2f} m/s forward, {results[0][tag][0]['robots']} robots per point")
         ax.set_xlabel("step height (cm)")
         ax.set_ylim(-0.02, 1.02)
         ax.grid(alpha=0.3)

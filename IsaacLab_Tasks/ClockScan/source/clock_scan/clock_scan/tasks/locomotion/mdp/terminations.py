@@ -30,3 +30,13 @@ def physics_blowup(
     joint_vel = data.joint_vel.torch
     root = data.root_state_w.torch
     return ~(joint_vel.abs() <= max_joint_vel).all(dim=1) | ~torch.isfinite(root).all(dim=1)
+
+
+def bad_orientation_ground(
+    env: ManagerBasedRLEnv, limit_angle: float, sensor_cfg: SceneEntityCfg, max_slope: float = 0.8
+) -> torch.Tensor:
+    """bad_orientation against the ground plane under the robot (rewards.ground_normal_b) instead of gravity, so
+    pitching with steep stairs does not use up the limit."""
+    from .rewards import ground_normal_b
+
+    return torch.acos(ground_normal_b(env, sensor_cfg, max_slope)[:, 2].clamp(-1.0, 1.0)) > limit_angle

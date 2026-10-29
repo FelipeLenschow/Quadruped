@@ -31,8 +31,12 @@ def load_checkpoint(runner, path):
 
     data = torch.load(path, weights_only=False, map_location="cpu")
     if "actor_state_dict" in data and _widen_inputs(runner, data):
-        runner.alg.load(data, {"actor": True, "critic": True}, True)
-        print("[rsl_rl] Inputs appended since this checkpoint start at zero weight; optimizer state not restored.")
+        restored = _widen_optimizer(runner, data)
+        runner.alg.load(data, {"actor": True, "critic": True, "optimizer": restored}, True)
+        if restored:
+            runner.current_learning_iteration = data["iter"]
+        print("[rsl_rl] Inputs appended since this checkpoint start at zero weight; optimizer state "
+              + ("restored, new inputs' moments at zero." if restored else "not restored."))
         return
     if "actor_state_dict" in data or "model_state_dict" not in data:
         runner.load(path)
@@ -70,6 +74,30 @@ def _widen_inputs(runner, data) -> bool:
             widened = True
             print(f"[rsl_rl] {key}.{name}: {value.shape[1]} -> {want.shape[1]} inputs")
     return widened
+
+
+def _widen_optimizer(runner, data) -> bool:
+    """Zero-pad the Adam moments of the parameters _widen_inputs padded, so a widened checkpoint keeps its
+    optimizer state (and learning rate) instead of restarting from fresh moments. Returns whether it could."""
+    import torch
+
+    opt = data.get("optimizer_state_dict")
+    if not opt:
+        return False
+    params = [p for group in runner.alg.optimizer.param_groups for p in group["params"]]
+    if len(opt.get("state", {})) > len(params):
+        return False
+    for index, state in opt["state"].items():
+        want = params[int(index)].shape
+        for key, value in state.items():
+            if not torch.is_tensor(value) or value.dim() == 0 or value.shape == want:
+                continue
+            if value.dim() != 2 or value.shape[0] != want[0] or value.shape[1] > want[1]:
+                return False
+            padded = torch.zeros(want, dtype=value.dtype)
+            padded[:, : value.shape[1]] = value
+            state[key] = padded
+    return True
 
 
 def runner_cfg_for_installed_rsl_rl(agent_cfg) -> dict:

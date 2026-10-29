@@ -21,9 +21,10 @@ import urllib.request
 
 FUN = """You are the robot dog. Have fun with the traffic cones in this room, on your own:
 1. list_objects to see the cones you know about. Pick one whose "done" list is empty, or the one done longest ago.
-2. go_to_object it, then skill sniff. Sometimes (about half the time) also pee_left or pee_right.
-3. If no cone is left to visit, look for more: move to turn on the spot (turn 0.8 for 3 s), list_objects again,
-   or go_to an open spot a few metres away.
+2. visit it with trick sniff. Sometimes (about half the time) then visit it again with pee_left or pee_right.
+3. If no cone is left to visit, look for more. The camera sees only ahead and the map shows walls, not cones:
+   call frontiers and go_to the nearest one; if none is left, go_to the middle of a part of the room you have not
+   stood in yet. There, move turn_deg 90 four times, with list_objects after each turn.
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
 Keep each message short: one line on what you do next, then the tool call."""
 

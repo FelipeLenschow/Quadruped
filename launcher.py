@@ -632,6 +632,7 @@ def run_cli_menu():
         print("  [X] RQT Graph (REQUIRES DOCKER OR PY3.10)")
         print("  [X] TF2 Tree (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Discovery Server (REQUIRES DOCKER OR PY3.10)")
+    print("  [A] LLM Agent (Ollama model drives the robot through mcp_server)")
 
     action_map = {
         "0": "repeat",
@@ -666,13 +667,15 @@ def run_cli_menu():
         "F": "tf2_tree",
         "d": "discovery_server",
         "D": "discovery_server",
+        "a": "llm_agent",
+        "A": "llm_agent",
     }
     
     default_action = "0" if last_cmd else "4"
     if requires_docker and default_action == "4":
         default_action = "None" # No valid default if MuJoCo is blocked
 
-    choice = input(f"Enter choice [0-7, N, L, K, V, C, T, P, M, R, F, D] (default {default_action}): ").strip() or default_action
+    choice = input(f"Enter choice [0-7, N, L, K, V, C, T, P, M, R, F, D, A] (default {default_action}): ").strip() or default_action
     action = action_map.get(choice.lower(), "None")
     
     if action == "hardware_tools":
@@ -779,7 +782,7 @@ def run_cli_menu():
     
     # teleop_sweep is not in this list on purpose: it asks for the checkpoint the robot is running,
     # only to file the report under it later. sweep_report reads that back from the recording.
-    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"]:
+    if action not in ["mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "llm_agent"]:
         modules = sorted([d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d))])
         # Simple and WalkTheseWays (cut from unitree_rl_lab) live here so their logs sit alongside
         # the others (the eval viewer and the checkpoint list both read them in place), but they
@@ -843,7 +846,7 @@ def run_cli_menu():
     all_ckpts.sort(reverse=True)
     selected_ckpt = None
 
-    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"]:
+    if action not in ["teleop", "teleop_keyboard", "teleop_joy", "sweep_report", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "real_telemetry", "plotjuggler", "mcap", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "llm_agent"]:
         print("\nSelect Trained Checkpoint (Agent):")
         if action == "train":
             print("  [0] Train from Scratch (None)")
@@ -909,7 +912,7 @@ def run_cli_menu():
         pass
 
     domain_id = default_domain
-    if action not in ["train", "isaac_lab", "eval_policy", "discovery_server", "sweep_report"]:
+    if action not in ["train", "isaac_lab", "eval_policy", "discovery_server", "sweep_report", "llm_agent"]:
         domain_id = input(f"Enter ROS_DOMAIN_ID (default {default_domain}): ").strip() or default_domain
     robot_cfg = "UNITREE_GO2_CFG" # Default for now
     terrain_cfg = "flat"
@@ -1096,6 +1099,8 @@ def run_cli_menu():
         record_session = input("Record this sweep to MCAP? [Y/n] (default Y): ").lower().strip() != "n"
         if not record_session:
             print("[Launcher] Not recording - Tools/sweep_report.py will have nothing to read.")
+    if action in ("mujoco", "gazebo", "real_deploy"):
+        sweep_opts["mcp"] = input("Start the MCP server for an LLM (mcp_server, [A] connects to it)? [y/N]: ").lower().strip() == "y"
 
     if action == "mcap":
         # MCAP Log & Replay sub-menu
@@ -1216,9 +1221,22 @@ def run_cli_menu():
         if check:
             check_camera = input(f"Camera to check [{cams[0] if cams else 'front'}]: ").strip()
         detect = input("Also detect objects (object_detector, config.yaml's detector:)? [y/N]: ").lower().strip() == "y"
+        classes = ""
+        if detect:
+            look = input("Look for [1: everything (config.yaml's detector:), 2: traffic cones only] (default 2): ").strip() or "2"
+            classes = "traffic cone" if look == "2" else ""
         map_objects = detect and input("Also put them on the map (object_mapper; needs [N] running)? [y/N]: ").lower().strip() == "y"
         sweep_opts = {"only": only, "sim": sim, "check": check, "check_camera": check_camera, "detect": detect,
-                      "map_objects": map_objects}
+                      "classes": classes, "map_objects": map_objects}
+
+    if action == "llm_agent":
+        print("\nNeeds the robot running with the MCP server on ([4], [5] or [6]), plus [N] for go_to and")
+        print("[I] with detection and the map for the objects. Ollama must serve the model on this machine.")
+        url = input("MCP server [http://127.0.0.1:8765/mcp]: ").strip() or "http://127.0.0.1:8765/mcp"
+        model = input("Ollama model [qwen3.8:27b]: ").strip() or "qwen3.8:27b"
+        task = input("Task (Enter for the cone-visiting loop): ").strip()
+        minutes = input("Minutes to keep going, 0 = until it stops [10]: ").strip() or "10"
+        sweep_opts = {"url": url, "model": model, "task": task, "minutes": minutes}
 
     if action == "lio":
         save = input("Save the 3D map to third_party/point_lio_ros2/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
@@ -1504,11 +1522,11 @@ def main():
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"):
+    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "llm_agent"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable
-        if action not in ("sweep_report", "discovery_server"):
+        if action not in ("sweep_report", "discovery_server", "llm_agent"):
             env = workspace_env(env)
 
         if action == "eval_policy":
@@ -1600,7 +1618,15 @@ def main():
             cmd = ros2_launch("camera.launch.py", sim=sweep_opts.get("sim", False), only=sweep_opts.get("only"),
                               interface=None if sweep_opts.get("sim") else sdk_network_interface(),
                               check=sweep_opts.get("check", False), check_camera=sweep_opts.get("check_camera"),
-                              detect=sweep_opts.get("detect", False), map_objects=sweep_opts.get("map_objects", False))
+                              detect=sweep_opts.get("detect", False), classes=sweep_opts.get("classes"),
+                              map_objects=sweep_opts.get("map_objects", False))
+
+        elif action == "llm_agent":
+            cmd = [sys_python, os.path.abspath(os.path.join("Tools", "llm_host.py"))]
+            if sweep_opts.get("task"):
+                cmd.append(sweep_opts["task"])
+            cmd += [f"--mcp={sweep_opts.get('url', 'http://127.0.0.1:8765/mcp')}",
+                    f"--model={sweep_opts.get('model', 'qwen3.8:27b')}", f"--minutes={sweep_opts.get('minutes', '10')}"]
 
         elif action == "lio":
             # Needs the real driver running (its real_sensors publishes the lidar and its IMU).
@@ -1621,6 +1647,8 @@ def main():
 
         if action in ("isaac_sim", "mujoco", "gazebo", "mujoco_twin", "real_deploy", "eval_policy") and cmd[:2] == ["ros2", "launch"]:
             cmd.append(f"reward:={str(START_REWARD_ESTIMATOR).lower()}")
+            if sweep_opts.get("mcp"):
+                cmd.append("mcp:=true")
             if START_REWARD_ESTIMATOR and abs_ckpt:
                 ckpt_dir = os.path.dirname(abs_ckpt)
                 config_path = os.path.join(ckpt_dir, "training_phases.yaml")

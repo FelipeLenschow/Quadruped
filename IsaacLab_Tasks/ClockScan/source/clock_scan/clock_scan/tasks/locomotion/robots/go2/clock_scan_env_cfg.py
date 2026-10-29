@@ -75,12 +75,19 @@ SCAN_RESOLUTION = _env("SCAN_RESOLUTION", 0.1)
 SMOOTH_NOISE = _env("SMOOTH_NOISE", 0.02)
 ROUGH_NOISE = _env("ROUGH_NOISE", 0.04)
 BOX_HEIGHT = _range("BOX", 0.02, 0.10)
-STEP_HEIGHT = _range("STEP", 0.05, 0.20)
+STEP_HEIGHT = _range("STEP", 0.05, 0.22)
 # Stair levels: STEP_HEIGHTS_PER_COUNT levels per step count, the step height rising over STEP_HEIGHT inside
 # each count and starting low again at the next. A fall lowers the height but never the step count.
 STEP_COUNTS = tuple(int(c) for c in os.environ.get("CLOCK_SCAN_STEP_COUNTS", "1,2,3,6").split(","))
 STEP_HEIGHTS_PER_COUNT = int(_env("STEP_HEIGHTS_PER_COUNT", 4))
 NUM_ROWS = len(STEP_COUNTS) * STEP_HEIGHTS_PER_COUNT
+
+
+def stairs_difficulty(height: float) -> float:
+    """Terrain difficulty of the most steps (the last block of STEP_COUNTS) at this step height, m."""
+    parts = len(STEP_COUNTS)
+    sub = min(max((height - STEP_HEIGHT[0]) / (STEP_HEIGHT[1] - STEP_HEIGHT[0]), 0.0), 1.0)
+    return min((parts - 1 + sub) / parts, 1.0)
 # Stages of mdp.terrain_stages, as the share of envs on each terrain type. 1: Simple's ground. 2: rough and
 # boxes added. 3: stairs, STAIRS_SHARE of the envs, the rest kept in stage 2's mix.
 STAIRS_SHARE = _env("STAIRS_SHARE", 0.5)
@@ -107,6 +114,7 @@ FORWARD_X_MAX = _env("FORWARD_X_MAX", 0.6)
 FORWARD_Y_SCALE = _env("FORWARD_Y_SCALE", 1.0)
 FORWARD_YAW_SCALE = _env("FORWARD_YAW_SCALE", 0.3)
 _STEPS_PER_ITER = BasePPORunnerCfg().num_steps_per_env
+_CLIP_ACTIONS = BasePPORunnerCfg().clip_actions
 # Base this far from the tile centre to go up a level (0: off), on all tiles (LEAVE_DISTANCE) or on stair tiles
 # (STAIRS_LEAVE_DISTANCE; past the first edge at 1.5 m). An episode commanded twice as far that never got there
 # goes down a level, on stairs also from the first row of a step count. terrain_stages logs the share of stair
@@ -154,6 +162,10 @@ W_HEIGHT = _env("W_HEIGHT", -40.0)
 # with the stairs, or against gravity (0, Simple's flat_orientation_l2).
 W_ORIENT = _env("W_ORIENT", -2.5)
 GROUND_ORIENTATION = _env("GROUND_ORIENTATION", 1.0) > 0.5
+# The bad_orientation reset at TILT_LIMIT rad, against the same ground plane (1) or against gravity (0). Against
+# gravity, an 18 cm stair (0.54 rad) left 0.26 rad, and the nose-up pose for head clearance ended 99% of episodes there.
+GROUND_TERMINATION = _env("GROUND_TERMINATION", 1.0) > 0.5
+TILT_LIMIT = _env("TILT_LIMIT", 0.8)
 # Per m that the lower head (where the lidar sits) is closer than HEAD_CLEARANCE to the ground under it.
 HEAD_CLEARANCE = _env("HEAD_CLEARANCE", 0.15)
 W_HEAD = _env("W_HEAD", -20.0)
@@ -477,7 +489,7 @@ class CommandsCfg:
 @configclass
 class ActionsCfg:
     JointPositionAction = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=True, clip={".*": (-100.0, 100.0)}
+        asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=True, clip={".*": (-_CLIP_ACTIONS, _CLIP_ACTIONS)}
     )
 
 
@@ -687,7 +699,11 @@ class TerminationsCfg:
             "grace_s": CONTACT_GRACE,
         },
     )
-    bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.8})
+    bad_orientation = (
+        DoneTerm(func=mdp.bad_orientation_ground, params={"limit_angle": TILT_LIMIT, "sensor_cfg": _SCAN})
+        if GROUND_TERMINATION
+        else DoneTerm(func=mdp.bad_orientation, params={"limit_angle": TILT_LIMIT})
+    )
     physics_blowup = DoneTerm(func=mdp.physics_blowup)
 
 
@@ -703,6 +719,7 @@ class CurriculumCfg:
             "stair_rows_per_count": STEP_HEIGHTS_PER_COUNT,
             "stair_counts": STEP_COUNTS,
             "stair_height_range": STEP_HEIGHT,
+            "stair_top_stay": True,
             "track_ratio": STAGE_TRACK,
             "hold": STAGE_HOLD,
             "forward_hold_steps": int(FORWARD_HOLD_ITERS * _STEPS_PER_ITER),
@@ -747,6 +764,9 @@ class ClockScanEnvCfg(ManagerBasedRLEnvCfg):
 # The slopes are not in training; they are there to see how the policy copes with them.
 PLAY_TERRAIN = os.environ.get("CLOCK_SCAN_PLAY_TERRAIN", "boxes")
 PLAY_DIFFICULTY = _range("PLAY_DIFFICULTY", 0.6, 1.0)
+# On stairs, CLOCK_SCAN_PLAY_STEP_HEIGHT (m) sets the most steps at exactly that height instead.
+if os.environ.get("CLOCK_SCAN_PLAY_STEP_HEIGHT"):
+    PLAY_DIFFICULTY = (stairs_difficulty(_env("PLAY_STEP_HEIGHT", 0.18)),) * 2
 # Tiles in x. Rows run along x, so a robot pinned to walk +x crosses from its tile into the next row's.
 PLAY_ROWS = int(_env("PLAY_ROWS", 2))
 

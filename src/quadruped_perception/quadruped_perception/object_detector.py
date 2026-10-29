@@ -201,10 +201,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--camera", default="", help="default detector.camera")
     ap.add_argument("--rate", type=float, default=0.0, help="Hz, default detector.rate")
+    ap.add_argument("--classes", default="", help="comma-separated, overrides detector.classes (a -pf model "
+                                                  "is swapped for its -seg.pt)")
     ap.add_argument("--export", action="store_true", help="build the TensorRT engine and exit")
     args = ap.parse_args(remove_ros_args()[1:])
 
     cfg = load_config().get("detector") or {}
+    if args.classes:
+        model = cfg.get("model", "models/yoloe-26s-seg-pf.pt").replace("-seg-pf.pt", "-seg.pt")
+        cfg = dict(cfg, model=model, classes=[c.strip() for c in args.classes.split(",") if c.strip()])
     if args.export:
         export(cfg)
         return

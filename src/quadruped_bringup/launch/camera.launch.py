@@ -29,7 +29,8 @@ def setup(context):
     if flag(context, "check"):
         actions.append(node("quadruped_perception", "camera_lidar_check", f"--camera={get(context, 'check_camera')}"))
     if flag(context, "detect"):
-        actions.append(node("quadruped_perception", "object_detector"))
+        classes = get(context, "classes")
+        actions.append(node("quadruped_perception", "object_detector", f"--classes={classes}" if classes else ""))
     if flag(context, "map_objects"):
         actions.append(node("quadruped_perception", "object_mapper",
                             parameters=[{"use_sim_time": flag(context, "sim")}]))
@@ -44,6 +45,7 @@ def generate_launch_description():
         arg("check", "false", "also draw the lidar on a camera's image (camera_lidar_check)"),
         arg("check_camera", "front", "camera for the check"),
         arg("detect", "false", "also run object_detector (config.yaml's detector:)"),
+        arg("classes", "", "comma-separated words for object_detector (default config.yaml's detector:)"),
         arg("map_objects", "false", "also run object_mapper (config.yaml's object_mapper:; needs nav.launch.py)"),
         OpaqueFunction(function=setup),
     ])

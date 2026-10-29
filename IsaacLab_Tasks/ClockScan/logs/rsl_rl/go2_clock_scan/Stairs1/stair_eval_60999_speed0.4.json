@@ -1,0 +1,107 @@
+{
+ "speed": 0.4,
+ "seconds": 16.0,
+ "distance": 2.0,
+ "per_tile": 8,
+ "results": [
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/Stairs1/model_60999.pt",
+   "vy": 0.0,
+   "speed": 0.4,
+   "down": [
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.016
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.031
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 0.969,
+     "fell": 0.078
+    }
+   ]
+  },
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/Stairs1/model_60999.pt",
+   "vy": -0.2,
+   "speed": 0.4,
+   "down": [
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.016
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.047
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.062
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 0.984,
+     "fell": 0.125
+    }
+   ]
+  },
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/Stairs1/model_60999.pt",
+   "vy": 0.2,
+   "speed": 0.4,
+   "down": [
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.031
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.062
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 0.984,
+     "fell": 0.062
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.094
+    }
+   ]
+  }
+ ]
+}

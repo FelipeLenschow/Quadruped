@@ -1,0 +1,122 @@
+{
+ "speed": 0.5,
+ "seconds": 12.0,
+ "distance": 2.0,
+ "per_tile": 8,
+ "results": [
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/Stairs1/model_60999.pt",
+   "vy": 0.0,
+   "speed": 0.5,
+   "down": [
+    {
+     "height_cm": 15.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.016
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.109
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 15.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.031
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 0.953,
+     "fell": 0.203
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 64,
+     "across": 0.812,
+     "fell": 0.531
+    }
+   ]
+  },
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/2026-10-28_19-23-21/model_46000.pt",
+   "vy": 0.0,
+   "speed": 0.5,
+   "down": [
+    {
+     "height_cm": 15.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.031
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.125
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 64,
+     "across": 1.0,
+     "fell": 0.25
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 15.0,
+     "robots": 64,
+     "across": 0.953,
+     "fell": 0.203
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 64,
+     "across": 0.375,
+     "fell": 0.875
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 64,
+     "across": 0.0,
+     "fell": 1.0
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 64,
+     "across": 0.0,
+     "fell": 1.0
+    }
+   ]
+  }
+ ]
+}

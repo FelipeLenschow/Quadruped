@@ -22,8 +22,9 @@ Task: `Go2-Clock-Scan`
   after a fall or under 35%.
 - **Stair levels** (`mdp.CountedStairsTerrainCfg`): a 3 m platform, steps 0.3 m deep, flat ground beyond the last
   step. The 16 rows are 4 blocks of 4, one block per step count (1, 2, 3, 6; `CLOCK_SCAN_STEP_COUNTS`,
-  `_STEP_HEIGHTS_PER_COUNT`); inside a block the step height rises from 5 to 20 cm (`CLOCK_SCAN_STEP_LO`, `_HI`),
-  and starts at 5 cm again in the next block. A fall lowers the height, never the step count. The first edge is
+  `_STEP_HEIGHTS_PER_COUNT`); inside a block the step height rises from 5 to 22 cm (`CLOCK_SCAN_STEP_LO`, `_HI`),
+  and starts at 5 cm again in the next block; the target stairs are 18 x 30 cm, in the last row (17.75-22 cm). A
+  stair robot going up from the last row goes to a random row of the 6-step block, not of all rows. A fall lowers the height, never the step count. The first edge is
   1.5 m from the centre for every count. On stair tiles a level up also needs the base 2 m from the centre (past
   the first edge; `CLOCK_SCAN_STAIRS_LEAVE_DISTANCE`), and an episode commanded more than 4 m that never got there
   goes down a level, also from the first row of a step count. Without this, a robot that never climbs can track its
@@ -64,8 +65,23 @@ Task: `Go2-Clock-Scan`
   height) and `_top` (share on 6 steps). The eval viewer shows them under Curriculum.
 - **Symmetry:** every PPO mini-batch is also trained on its left-right mirror (rsl_rl's symmetry augmentation,
   `mdp.mirror_left_right`): left and right legs swapped with the hip signs flipped, y and turning negated, the clock
-  phases of the two leg pairs swapped, the height map and height grid flipped in y. `CLOCK_SCAN_SYMMETRY=0` turns it
-  off. Without it the policy fell to its right on stairs.
+  phases of the two leg pairs swapped, the height map and height grid flipped in y. Without it the policy fell to
+  its right on stairs. A few rare states (mostly the first steps after a dropped start) give very large actor
+  outputs; both this and the mirror loss (`CLOCK_SCAN_SYMMETRY=loss`, `_MIRROR_LOSS_COEF`) push hardest there, and
+  the mirror loss broke a run in one update. `CLOCK_SCAN_SYMMETRY=0` turns it off.
+- **Reset on tilt:** `bad_orientation` ends an episode past 0.8 rad of tilt (`CLOCK_SCAN_TILT_LIMIT`) against the
+  fitted ground plane. Against gravity (`CLOCK_SCAN_GROUND_TERMINATION=0`), an 18 x 30 cm stair (0.54 rad) left only
+  0.26 rad: on model_46000, 321 of 323 episode ends on 18 cm steps were this reset, nose up 0.7-0.8 rad to keep
+  the head off the next step, with the robot still walking.
+- **Actions** are clipped to +-10 (`CLOCK_SCAN_CLIP_ACTIONS`; +-2.5 rad from the default pose, the whole joint range),
+  so the last_action input is too. At +-100, after a resume that restarted the optimizer, a policy fed its own large
+  last action grew it about 10x per step to ~40000 in a few states, and the adaptive learning rate fell to its 1e-5
+  floor. A resume that widens the critic now keeps the optimizer state (`cli_args.load_checkpoint`).
+  The clip alone did not stop the drift: when the robot gets up from a lying start, any mean past the clip gives the
+  same result, so the mean grew to 68 in 3000 iterations, and the log-probs of those samples (and of their mirrors)
+  pushed the KL up and the learning rate down. The actor's mean is now 10 * tanh(x / 10)
+  (`agents/distribution.py`, `BoundedGaussianDistribution`; bound = the clip), with no new weights, so old
+  checkpoints load. The C++ export reads the bare MLP and does not apply the tanh.
 - **Height map (actor and critic):** vertical rays turned with the base yaw, as a height map built from the lidars
   and sampled about the base would be: from x -0.2 m (just behind the rear feet) to 1.0 m, y +-0.5 m; 5 cm apart up
   to x 0.4 m and |y| 0.3 m, 10 cm beyond (19 x 17 = 323; `CLOCK_SCAN_MAP_*`). Each value is base height minus ground
@@ -86,9 +102,17 @@ Train from the repo root with `python launcher.py` -> train -> ClockScan, or dir
 
 Play on one terrain type, `CLOCK_SCAN_PLAY_TERRAIN` (default `boxes`; the stages are off in play; also `hf_pyramid_slope` and
 `hf_pyramid_slope_inv`, which are not in training) at difficulty 0.6-1.0. On stairs the difficulty sets the step count
-and the height as in training: 0.8-0.825 is 6 steps of 8-9.5 cm, 0.85-0.867 is 6 steps of 11-12 cm.
+and the height as in training; `CLOCK_SCAN_PLAY_STEP_HEIGHT` (m) gives 6 steps at exactly that height instead.
 
     PYTHONPATH=source/clock_scan python scripts/rsl_rl/play.py --task=Go2-Clock-Scan
+
+## Runs
+
+- **`Stairs1/model_60999.pt`**: the last of a chain of resumes from scratch (iterations 0-46000 in runs not kept),
+  then 15000 iterations with the tilt reset against the ground plane. On 6 steps at 0.5 m/s straight: up 18 cm
+  100% across, 3% fell; 20 cm 95% / 20%; 22 cm 81% / 53%; down 100% across to 22 cm. Best at 0.4 m/s: up 18 cm
+  98-100% across, at most 6% fell, with -0.2 to +0.2 m/s sideways; at 0.6 m/s 14-30% fell. Charts and videos in
+  the run folder.
 
 ## Evaluation and deploy
 
@@ -100,8 +124,9 @@ Use the Isaac sweep:
 
 ## Stair chart
 
-`stair_eval.py` puts 8 robots on each of 16 step heights (6 steps, 5 to 20 cm), down and up, walking +x at one
-pinned speed from the platform, and draws the share that got 2 m out and the share that fell against the step
+`stair_eval.py` puts 8 robots on each of 16 step heights (6 steps over the training range), down and up, walking +x
+at one pinned speed from the platform (or, with `--heights 15,18,20`, `--rows` x `--per_tile` robots on 6 steps at
+exactly each height in cm), and draws the share that got 2 m out and the share that fell against the step
 height, one line per checkpoint (`--compare`) and sideways speed (`--vy`). It writes `stair_eval_<checkpoint>.png`
 and `.json` next to the first checkpoint:
 
@@ -115,6 +140,6 @@ and `.json` next to the first checkpoint:
 one stair pyramid walks down it and up the next:
 
     CLOCK_SCAN_PLAY_TERRAIN=pyramid_stairs CLOCK_SCAN_PLAY_CMD_X=0.6 CLOCK_SCAN_PLAY_ROWS=3 \
-    CLOCK_SCAN_PLAY_DIFFICULTY_LO=0.85 CLOCK_SCAN_PLAY_DIFFICULTY_HI=0.867 \
+    CLOCK_SCAN_PLAY_STEP_HEIGHT=0.18 \
     PYTHONPATH=source/clock_scan python scripts/rsl_rl/play.py --task=Go2-Clock-Scan --headless --num_envs=1 \
         --video --video_length=950 --video_eye=0,3.5,1.2 --checkpoint=logs/rsl_rl/go2_clock_scan/<run>/model_<n>.pt

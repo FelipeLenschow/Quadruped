@@ -142,8 +142,13 @@ object_mapper:
 
 # mcp_server: the robot's tools for an LLM over HTTP, http://<robot>:<port>/mcp (launch arg mcp:=true).
 #   Set QUADRUPED_MCP_TOKEN to require a bearer token. approach: metres go_to_object stops from an object;
-#   visit_radius: a trick done this close to an object is marked done there; move is capped at max_speed
-#   (m/s), max_turn (rad/s) and max_move_s; look's photo is shrunk to image_width px.
+#   visit_radius: a trick done this close to an object is marked done there; move is a Nav2 goal at most
+#   max_move_m away; look's photo is shrunk to image_width px. visit: Nav2 to nav_standoff m from the object
+#   (closer, MPPI's margin stops it short), then final_step walks at final_step_speed (m/s, at most
+#   final_step_max m and final_step_s) to the trick's spot: sniff_distance m in front of the object, or for
+#   pee the object pee_distance m beside the base and pee_back m behind its centre. final_step: false skips it.
+#   frontiers: edges of /map between free and unknown, at least frontier_min_m long and frontier_clearance m from a
+#   wall, the nearest frontiers_max of them.
 mcp:
   host: 0.0.0.0
   port: 8765
@@ -152,9 +157,18 @@ mcp:
   goal_timeout: 120
   approach: 0.6
   visit_radius: 1.0
-  max_speed: 0.4
-  max_turn: 0.8
-  max_move_s: 3.0
+  max_move_m: 2.0
+  nav_standoff: 0.8
+  sniff_distance: 0.5
+  pee_distance: 0.4
+  pee_back: 0.15
+  final_step: true
+  final_step_speed: 0.15
+  final_step_max: 0.6
+  final_step_s: 6.0
+  frontier_min_m: 0.6
+  frontier_clearance: 0.2
+  frontiers_max: 8
 
 # --- Motor Physical Parameters ---
 motor:

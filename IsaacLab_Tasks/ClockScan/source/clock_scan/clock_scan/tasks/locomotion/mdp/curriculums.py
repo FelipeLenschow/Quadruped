@@ -107,7 +107,8 @@ class terrain_stages(ManagerTermBase):
     With stair_rows_per_count, stair levels come in blocks of that many rows, one block per entry of
     stair_counts (the step count): a fall or poor tracking at the first row of a block does not move the env
     down, so it never loses a step count. stair_leave_distance is leave_distance for stair tiles only; an env
-    that fails it goes down also from the first row of a block.
+    that fails it goes down also from the first row of a block. With stair_top_stay, a stair env going up from
+    the top row goes to a random row of the last block, not of all rows, so the hardest stairs keep their robots.
 
     Logs the stage, the mean level, the forward-only share, the share of stair episodes that got the
     base report_distance from the tile centre (onto the steps), and the mean step count on stairs. Per stair
@@ -237,6 +238,7 @@ class terrain_stages(ManagerTermBase):
         stair_rows_per_count: int = 0,
         stair_counts: tuple = (),
         stair_height_range: tuple | None = None,
+        stair_top_stay: bool = False,
         track_term: str = "track_lin_vel_xy",
         track_ratio: float = 0.75,
         hold: int = 3,
@@ -270,7 +272,13 @@ class terrain_stages(ManagerTermBase):
             move_down |= stayed
             move_up &= ~move_down
         moving = self.target[ids] != self.kind[ids]
+        top = terrain.terrain_origins.shape[0] - 1
+        past_top = on_stairs & move_up & ~moving & (terrain.terrain_levels[ids] == top)
         terrain.update_env_origins(ids, move_up & ~moving, move_down & ~moving)
+        if stair_top_stay and stair_rows_per_count > 0 and bool(past_top.any()):
+            sel = ids[past_top]
+            terrain.terrain_levels[sel] = torch.randint(top + 1 - stair_rows_per_count, top + 1, (sel.numel(),), device=env.device)
+            terrain.env_origins[sel] = terrain.terrain_origins[terrain.terrain_levels[sel], terrain.terrain_types[sel]]
         if bool(moving.any()):
             self._move(ids[moving])
 
