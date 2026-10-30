@@ -36,7 +36,9 @@ def xyz(msg):
 
 
 def project(info, pts):
-    """Points in the camera's optical frame to pixels of info's image, with its distortion."""
+    """Points in the camera's optical frame to pixels of info's image, with its distortion; NaN for points outside
+    the image's field of view. The distortion polynomial only holds inside it: past it, it folds back, and floor
+    points 62 deg below the Go2's camera (it sees +-24 deg) landed mid-image, so objects were put on them."""
     k = np.array(info.k).reshape(3, 3)
     d = np.array(info.d, float)
     zero = np.zeros(3)
@@ -44,7 +46,32 @@ def project(info, pts):
         uv, _ = cv2.fisheye.projectPoints(pts[:, None, :], zero, zero, k, d[:4])
     else:
         uv, _ = cv2.projectPoints(pts, zero, zero, k, d)
-    return uv.reshape(-1, 2)
+    uv = uv.reshape(-1, 2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        outside = ~(np.hypot(pts[:, 0], pts[:, 1]) / pts[:, 2] <= view_limit(info))
+    uv[outside | (pts[:, 2] <= 0)] = np.nan
+    return uv
+
+
+def view_limit(info):
+    """The largest undistorted radius (x/z, y/z) that info's distortion maps into the image: where the distorted
+    radius reaches the image's corners, or where it stops growing, whichever is first. (Undistorting the corners
+    does not give it: with the Go2's calibration the radius peaks, at 55 deg, before it reaches them.)"""
+    k = np.array(info.k).reshape(3, 3)
+    d = np.array(info.d, float)
+    corner = max(np.hypot((u - k[0, 2]) / k[0, 0], (v - k[1, 2]) / k[1, 1])
+                 for u in (0, info.width - 1) for v in (0, info.height - 1))
+    r = np.linspace(0.0, 5.0, 5001)
+    if info.distortion_model == "equidistant":
+        t = np.arctan(r)
+        rd = t * (1 + sum(c * t ** (2 * i + 2) for i, c in enumerate(d[:4])))
+    else:  # plumb_bob (k1 k2 p1 p2 k3) or rational_polynomial (... k4 k5 k6); the tangential terms are left out
+        c = np.zeros(8)
+        c[:min(len(d), 8)] = d[:8]
+        r2 = r * r
+        rd = r * (1 + c[0] * r2 + c[1] * r2 ** 2 + c[4] * r2 ** 3) / (1 + c[5] * r2 + c[6] * r2 ** 2 + c[7] * r2 ** 3)
+    stop = (rd >= corner) | (np.diff(rd, append=-np.inf) <= 0)
+    return r[np.argmax(stop)]
 
 
 def pixel_ray(info, u, v):

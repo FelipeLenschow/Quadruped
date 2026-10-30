@@ -108,15 +108,24 @@ cameras:
 # Open-vocabulary detection (object_detector, YOLOE) on one camera:
 #   /camera/<camera>/detections (JSON) and /camera/<camera>/detections/image/compressed (boxes drawn).
 #   model: a *-seg-pf.pt model names objects from its own 4,585-word vocabulary and ignores classes;
-#          a *-seg.pt model looks only for classes. Downloaded to models/ on first use.
+#          a *-seg.pt model looks only for classes. Downloaded to models/ on first use. The -pf vocabulary
+#          is image tags, not only objects: it put "assemble", "remove" and "art vector illustration" on the map
+#          and had no word for storage bins, so the room's objects are named here instead. Prompted
+#          scores are lower than -pf's, and the word matters: the lab's bins scored 0.41 as "stacking bin",
+#          0.08 as "storage bin" (a chair 0.83), so conf is 0.3, not -pf's 0.7.
+#   class_conf: a label's own threshold over conf (real chairs scored 0.8-0.9, a black case 0.32 as one).
+#   max_overlap: a box that much inside or around a higher-scoring box of the same label is dropped (YOLO26
+#   has no NMS, and a chair's second box became a second chair on the map).
 #   On the Jetson, `ros2 run quadruped_perception object_detector --export` builds a TensorRT engine
 #   for this model, classes and imgsz (once, on the robot); the node uses it when it is there.
 detector:
   camera: front
-  model: models/yoloe-26s-seg-pf.pt
-  classes: []
+  model: models/yoloe-26s-seg.pt
+  classes: [chair, stacking bin, backpack, trash can, box, monitor, door, person]
   rate: 5
-  conf: 0.7
+  conf: 0.3
+  class_conf: {chair: 0.5}
+  max_overlap: 0.6
   imgsz: 640
 
 # object_mapper: detector's objects on the map (lidar points inside each outline; the floor when none hit it),
@@ -124,7 +133,8 @@ detector:
 #   min_sightings times. Both see the object's front, so it is pushed back by half its width (at most
 #   max_depth_shift). ignore: labels never mapped (people move, surfaces are not objects); max_box_fraction
 #   and max_box_width drop boxes bigger or wider than that share of the image (whole-scene tags like "room",
-#   or the floor). /objects/clear forgets them.
+#   or the floor). Lidar points under floor_z + floor_margin are not used for a position (the L1's floor reads
+#   up to 10 cm high; an outline's lower edge takes in the floor in front of the object). /objects/clear forgets them.
 #   Check in Gazebo's nav world: `ros2 run quadruped_perception object_check`.
 object_mapper:
   frame: map
@@ -135,6 +145,7 @@ object_mapper:
   min_sightings: 3
   min_points: 3
   floor_z: 0.0
+  floor_margin: 0.12
   max_box_fraction: 0.5
   max_box_width: 0.9
   max_depth_shift: 0.3

@@ -48,6 +48,7 @@ class ObjectMapper(Node):
         self.min_sightings = int(cfg.get("min_sightings", 3))
         self.min_points = int(cfg.get("min_points", 3))
         self.floor_z = float(cfg.get("floor_z", 0.0))
+        self.floor_margin = float(cfg.get("floor_margin", 0.12))
         self.max_box = float(cfg.get("max_box_fraction", 0.5))
         self.max_width = float(cfg.get("max_box_width", 0.9))
         self.max_shift = float(cfg.get("max_depth_shift", 0.3))
@@ -125,7 +126,8 @@ class ObjectMapper(Node):
         pts = np.vstack([c for _, c in self.clouds]) if self.clouds else np.zeros((0, 3))
         cam = pts @ to_cam[0].T + to_cam[1]
         dist = np.linalg.norm(cam, axis=1)
-        keep = (cam[:, 2] > 0.1) & (dist < self.max_range)
+        # Not the floor: an outline's lower edge takes in the floor in front of the object, nearer than it.
+        keep = (cam[:, 2] > 0.1) & (dist < self.max_range) & (pts[:, 2] > self.floor_z + self.floor_margin)
         pts, dist = pts[keep], dist[keep]
         uv = project(self.info, cam[keep]) / scale if keep.any() else np.zeros((0, 2))
         for o in objects:
