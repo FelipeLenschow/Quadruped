@@ -1232,11 +1232,14 @@ def run_cli_menu():
     if action == "llm_agent":
         print("\nNeeds the robot running with the MCP server on ([4], [5] or [6]), plus [N] for go_to and")
         print("[I] with detection and the map for the objects. Ollama must serve the model on this machine.")
+        # On the Jetson the model shares the 7 GB with the stack: a small one, and a context that fits beside it.
+        model_def, ctx_def, keep_def = ("qwen3vl-2b-gpu", "8192", "12") if IS_ROBOT else ("qwen3.8:27b", "32768", "40")
         url = input("MCP server [http://127.0.0.1:8765/mcp]: ").strip() or "http://127.0.0.1:8765/mcp"
-        model = input("Ollama model [qwen3.8:27b]: ").strip() or "qwen3.8:27b"
+        model = input(f"Ollama model [{model_def}]: ").strip() or model_def
+        ctx = input(f"Context tokens [{ctx_def}]: ").strip() or ctx_def
         task = input("Task (Enter for the cone-visiting loop): ").strip()
         minutes = input("Minutes to keep going, 0 = until it stops [10]: ").strip() or "10"
-        sweep_opts = {"url": url, "model": model, "task": task, "minutes": minutes}
+        sweep_opts = {"url": url, "model": model, "ctx": ctx, "keep": keep_def, "task": task, "minutes": minutes}
 
     if action == "lio":
         save = input("Save the 3D map to third_party/point_lio_ros2/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
@@ -1626,7 +1629,9 @@ def main():
             if sweep_opts.get("task"):
                 cmd.append(sweep_opts["task"])
             cmd += [f"--mcp={sweep_opts.get('url', 'http://127.0.0.1:8765/mcp')}",
-                    f"--model={sweep_opts.get('model', 'qwen3.8:27b')}", f"--minutes={sweep_opts.get('minutes', '10')}"]
+                    f"--model={sweep_opts.get('model', 'qwen3.8:27b')}", f"--minutes={sweep_opts.get('minutes', '10')}",
+                    f"--ctx={sweep_opts.get('ctx', '8192' if IS_ROBOT else '32768')}",
+                    f"--keep={sweep_opts.get('keep', '12' if IS_ROBOT else '40')}"]
 
         elif action == "lio":
             # Needs the real driver running (its real_sensors publishes the lidar and its IMU).
