@@ -1237,7 +1237,7 @@ def run_cli_menu():
         url = input("MCP server [http://127.0.0.1:8765/mcp]: ").strip() or "http://127.0.0.1:8765/mcp"
         model = input(f"Ollama model [{model_def}]: ").strip() or model_def
         ctx = input(f"Context tokens [{ctx_def}]: ").strip() or ctx_def
-        task = input("Task (Enter for the cone-visiting loop): ").strip()
+        task = input("Task (Enter for the cone-visiting loop, or exploring without object detection): ").strip()
         minutes = input("Minutes to keep going, 0 = until it stops [10]: ").strip() or "10"
         sweep_opts = {"url": url, "model": model, "ctx": ctx, "keep": keep_def, "task": task, "minutes": minutes}
 

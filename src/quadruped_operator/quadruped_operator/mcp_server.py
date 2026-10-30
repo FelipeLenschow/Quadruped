@@ -95,6 +95,13 @@ class Robot(Node):
         ids = {o["id"] for o in self.objects}
         self.visits = {k: v for k, v in self.visits.items() if k in ids}
 
+    def objects_on(self):
+        """config.yaml mcp.objects: true, false, or auto (on while object_mapper publishes /objects)."""
+        mode = self.cfg.get("objects", "auto")
+        if mode == "auto":
+            return self.count_publishers("/objects") > 0
+        return bool(mode)
+
     def fresh(self):
         if self.state is None or time.monotonic() - self.state_time > 1.0:
             return None
@@ -488,6 +495,14 @@ TOOLS = [
     ("look", "A photo from the front camera.",
      schema({"boxes": {"type": "boolean", "description": "with the object detector's boxes drawn"}})),
 ]
+OBJECT_TOOLS = {"list_objects", "go_to_object", "visit"}
+
+
+def tools_for(objects):
+    """TOOLS, or without the object tools and look's boxes when there is no object detection."""
+    if objects:
+        return TOOLS
+    return [(n, d, schema() if n == "look" else s) for n, d, s in TOOLS if n not in OBJECT_TOOLS]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -555,12 +570,14 @@ class Handler(BaseHTTPRequestHandler):
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
-                result = {"tools": [{"name": n, "description": d, "inputSchema": s} for n, d, s in TOOLS]}
+                tools = tools_for(self.robot.objects_on())
+                result = {"tools": [{"name": n, "description": d, "inputSchema": s} for n, d, s in tools]}
             elif method == "tools/call":
                 name = params.get("name")
-                if name not in [t[0] for t in TOOLS]:
+                if name not in [t[0] for t in tools_for(self.robot.objects_on())]:
+                    why = " (object detection is off)" if name in OBJECT_TOOLS else ""
                     return {"jsonrpc": "2.0", "id": m["id"],
-                            "error": {"code": -32602, "message": f"unknown tool {name}"}}
+                            "error": {"code": -32602, "message": f"unknown tool {name}{why}"}}
                 args = params.get("arguments") or {}
                 self.robot.get_logger().info(f"{name} {json.dumps(args)}")
                 result = getattr(self.robot, name)(**args)
@@ -580,8 +597,12 @@ def main():
     ap.add_argument("--host", default="", help="default config.yaml mcp.host")
     ap.add_argument("--port", type=int, default=0, help="default config.yaml mcp.port")
     ap.add_argument("--token", default=os.environ.get("QUADRUPED_MCP_TOKEN", ""))
+    ap.add_argument("--objects", choices=["auto", "on", "off"], default="",
+                    help="object tools (list_objects, go_to_object, visit); default config.yaml mcp.objects")
     args = ap.parse_args(remove_ros_args()[1:])
     cfg = load_config().get("mcp") or {}
+    if args.objects:
+        cfg["objects"] = {"auto": "auto", "on": True, "off": False}[args.objects]
 
     rclpy.init()
     robot = Robot(cfg)
@@ -593,7 +614,8 @@ def main():
     host, port = args.host or cfg.get("host", "0.0.0.0"), args.port or int(cfg.get("port", 8765))
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
-    robot.get_logger().info(f"MCP on http://{host}:{port}/mcp" + (" (token required)" if args.token else ""))
+    robot.get_logger().info(f"MCP on http://{host}:{port}/mcp" + (" (token required)" if args.token else "")
+                            + f", object tools: {cfg.get('objects', 'auto')}")
     try:
         server.serve_forever()
     except (KeyboardInterrupt, ExternalShutdownException):

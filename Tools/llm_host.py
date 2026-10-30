@@ -28,6 +28,14 @@ FUN = """You are the robot dog. Have fun with the traffic cones in this room, on
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
 Keep each message short: one line on what you do next, then the tool call."""
 
+# FUN without object detection (the server then offers no list_objects): explore and describe what the camera sees.
+EXPLORE = """You are the robot dog. Explore this room on your own:
+1. call frontiers and go_to the nearest one; if none is left, go_to the middle of a part of the room you have not
+   stood in yet.
+2. There, move turn_deg 90 four times, with look after each turn, and say in one line what you see.
+Call skill walk first if you are not walking. If a call fails, read why and try something else.
+Keep each message short: one line on what you do next, then the tool call."""
+
 KEEP_GOING = "Keep going: pick the next thing to do and call a tool."
 
 
@@ -91,7 +99,8 @@ def trim(messages, keep):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("task", nargs="?", default=FUN, help="what to do (default: the having-fun loop)")
+    ap.add_argument("task", nargs="?", default="",
+                    help="what to do (default: the having-fun loop, or exploring without object detection)")
     ap.add_argument("--mcp", default="http://127.0.0.1:8765/mcp")
     ap.add_argument("--token", default=os.environ.get("QUADRUPED_MCP_TOKEN", ""))
     ap.add_argument("--ollama", default="http://localhost:11434")
@@ -108,7 +117,8 @@ def main():
     tools = [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""),
                                                "parameters": t["inputSchema"]}} for t in mcp_tools]
     print(f"{args.model} with {len(tools)} tools from {args.mcp}: {', '.join(t['name'] for t in mcp_tools)}")
-    messages = [{"role": "system", "content": instructions}, {"role": "user", "content": args.task}]
+    task = args.task or (FUN if any(t["name"] == "list_objects" for t in mcp_tools) else EXPLORE)
+    messages = [{"role": "system", "content": instructions}, {"role": "user", "content": task}]
     end = time.monotonic() + args.minutes * 60
     calls = 0
     try:

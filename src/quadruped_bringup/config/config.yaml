@@ -149,8 +149,11 @@ object_mapper:
 #   pee the object pee_distance m beside the base and pee_back m behind its centre. final_step: false skips it.
 #   frontiers: edges of /map between free and unknown, at least frontier_min_m long and frontier_clearance m from a
 #   wall, the nearest frontiers_max of them.
+#   objects: the object tools (list_objects, go_to_object, visit, look's boxes): true, false, or auto = offered
+#   only while object_mapper publishes /objects ([I] with detection). Off, an on-board LLM is not sent after them.
 mcp:
   host: 0.0.0.0
+  objects: auto
   port: 8765
   camera: front
   image_width: 640
