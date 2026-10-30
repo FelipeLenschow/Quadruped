@@ -3,7 +3,11 @@ from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
 
+from isaaclab.envs.mdp import reset_root_state_uniform
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.utils import math as math_utils
+
+from .terrain_info import tile_heading
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -58,6 +62,7 @@ def reset_start_pose(
     drop_tilt: float = 0.3,
     joint_noise: float = 0.1,
     xy_range: float = 0.5,
+    aligned_range: tuple[float, float, float] = (0.3, 0.15, 0.3),
 ) -> None:
     """Start a share of episodes lying on folded legs, and a share dropped from above standing height.
     lying_joint_pos may be a list of poses; each lying start picks one, and with lying_blend lands a random
@@ -68,7 +73,6 @@ def reset_start_pose(
     back from the sim: the write reset_base just made is not guaranteed to be visible in the data
     buffers before the next physics step.
     """
-    from isaaclab.utils import math as math_utils
 
     asset = env.scene[asset_cfg.name]
     device = asset.device
@@ -96,6 +100,13 @@ def reset_start_pose(
     roll = math_utils.sample_uniform(-1.0, 1.0, (k,), device) * tilt
     pitch = math_utils.sample_uniform(-1.0, 1.0, (k,), device) * tilt
     yaw = math_utils.sample_uniform(-torch.pi, torch.pi, (k,), device)
+    heading = tile_heading(env, ids)
+    aligned = ~torch.isnan(heading)
+    if bool(aligned.any()):
+        half = torch.tensor(aligned_range, device=device)
+        noise = math_utils.sample_uniform(-half, half, (k, 3), device)
+        pos[aligned, 0:2] = default_pose[aligned, 0:2] + origins[aligned, 0:2] + noise[aligned, 0:2]
+        yaw[aligned] = heading[aligned] + noise[aligned, 2]
     quat = math_utils.quat_mul(default_pose[:, 3:7], math_utils.quat_from_euler_xyz(roll, pitch, yaw))
     asset.write_root_pose_to_sim_index(root_pose=torch.cat([pos, quat], dim=-1), env_ids=ids)
     asset.write_root_velocity_to_sim_index(root_velocity=torch.zeros(k, 6, device=device), env_ids=ids)
@@ -121,3 +132,40 @@ def reset_start_pose(
     joint_pos = joint_pos.clamp(limits[..., 0], limits[..., 1])
     asset.write_joint_position_to_sim_index(position=joint_pos, env_ids=ids)
     asset.write_joint_velocity_to_sim_index(velocity=torch.zeros_like(joint_pos), env_ids=ids)
+
+
+class reset_root_state_aligned(reset_root_state_uniform):
+    """reset_root_state_uniform, but on tiles with a start heading (mdp.tile_heading) the yaw is that heading
+    +- aligned_range[2] and the position the origin +- aligned_range[0:2] (x, y)."""
+
+    def __call__(
+        self,
+        env: ManagerBasedEnv,
+        env_ids: torch.Tensor,
+        pose_range: dict[str, tuple[float, float]],
+        velocity_range: dict[str, tuple[float, float]],
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+        aligned_range: tuple[float, float, float] = (0.3, 0.15, 0.3),
+    ):
+        asset = env.scene[asset_cfg.name]
+        n = len(env_ids)
+        default_root_pose = asset.data.default_root_pose.torch[env_ids]
+        ranges = self._pose_ranges
+        pose = math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (n, 6), device=asset.device)
+        heading = tile_heading(env, env_ids)
+        aligned = ~torch.isnan(heading)
+        if bool(aligned.any()):
+            half = torch.tensor(aligned_range, device=asset.device)
+            noise = math_utils.sample_uniform(-half, half, (n, 3), device=asset.device)
+            pose[aligned, 0:2] = noise[aligned, 0:2]
+            pose[aligned, 5] = heading[aligned] + noise[aligned, 2]
+        positions = default_root_pose[:, 0:3] + env.scene.env_origins[env_ids] + pose[:, 0:3]
+        orientations = math_utils.quat_mul(
+            default_root_pose[:, 3:7], math_utils.quat_from_euler_xyz(pose[:, 3], pose[:, 4], pose[:, 5])
+        )
+        ranges = self._velocity_ranges
+        velocities = asset.data.default_root_vel.torch[env_ids] + math_utils.sample_uniform(
+            ranges[:, 0], ranges[:, 1], (n, 6), device=asset.device
+        )
+        asset.write_root_pose_to_sim_index(root_pose=torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
+        asset.write_root_velocity_to_sim_index(root_velocity=velocities, env_ids=env_ids)

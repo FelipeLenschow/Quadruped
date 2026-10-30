@@ -6,6 +6,9 @@ from dataclasses import MISSING
 
 from isaaclab.envs.mdp import UniformVelocityCommand, UniformVelocityCommandCfg
 from isaaclab.utils import configclass
+from isaaclab.utils.math import wrap_to_pi
+
+from ..terrain_info import tile_heading
 
 
 def foot_sweep_speed(velocity: torch.Tensor, foot_x: float, foot_y: float) -> torch.Tensor:
@@ -56,6 +59,8 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         self.metrics["max_distance"] = torch.zeros(self.num_envs, device=self.device)
         # Set per env by mdp.terrain_stages at reset.
         self.forward_only = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # Heading an operator holds on tiles that have one (mdp.tile_heading), NaN elsewhere.
+        self.steer_heading = torch.full((self.num_envs,), float("nan"), device=self.device)
         # Leash: a reference pose moved by the command, from the robot's pose one step after reset.
         self.ref_pos_xy = torch.zeros(self.num_envs, 2, device=self.device)
         self.ref_yaw = torch.zeros(self.num_envs, device=self.device)
@@ -159,6 +164,7 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         if ids.numel() == 0:
             return
         self._apply_forward_only(ids)
+        self._apply_steer(ids)
         self._apply_axis_only(ids)
         self._apply_slow(ids)
         self._apply_foot_speed_limit(ids)
@@ -173,6 +179,25 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         self.vel_command_b[ids, 0] = self.vel_command_b[ids, 0].abs().clamp(max=self.cfg.forward_only_x_max)
         self.vel_command_b[ids, 1] *= self.cfg.forward_only_y_scale
         self.vel_command_b[ids, 2] *= self.cfg.forward_only_yaw_scale
+
+    def _apply_steer(self, ids: torch.Tensor):
+        """On tiles with a heading, sideways speed x steer_y_scale; the turning is set every step by _update_command."""
+        self.steer_heading[ids] = tile_heading(self._env, ids) if self.cfg.steer_gain > 0.0 else float("nan")
+        steered = ids[~torch.isnan(self.steer_heading[ids])]
+        self.vel_command_b[steered, 1] *= self.cfg.steer_y_scale
+
+    def _update_command(self):
+        """Upstream's standing envs at zero, then on tiles with a heading, while the command moves the robot, the
+        turning an operator would give to hold that heading: steer_gain x the heading error, within +-steer_max."""
+        super()._update_command()
+        if self.cfg.steer_gain <= 0.0:
+            return
+        moving = torch.linalg.norm(self.vel_command_b[:, :2], dim=1) > 0.0
+        steered = (~torch.isnan(self.steer_heading) & moving).nonzero(as_tuple=False).flatten()
+        if steered.numel() == 0:
+            return
+        error = wrap_to_pi(self.steer_heading[steered] - self.robot.data.heading_w.torch[steered])
+        self.vel_command_b[steered, 2] = (self.cfg.steer_gain * error).clamp(-self.cfg.steer_max, self.cfg.steer_max)
 
     def _apply_pause(self, ids: torch.Tensor):
         """Turn a share of resamples into a short zero-command pause, so the next command is a start
@@ -292,5 +317,10 @@ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
     forward_only_x_max: float = float("inf")
     forward_only_y_scale: float = 0.0
     forward_only_yaw_scale: float = 0.3
+    # On tiles with a heading (mdp.tile_heading): turning steer_gain x heading error within +-steer_max, as an
+    # operator holding the line, and sideways speed x steer_y_scale. steer_gain 0 disables.
+    steer_gain: float = 0.0
+    steer_max: float = 0.5
+    steer_y_scale: float = 1.0
     foot_x: float = 0.19
     foot_y: float = 0.14

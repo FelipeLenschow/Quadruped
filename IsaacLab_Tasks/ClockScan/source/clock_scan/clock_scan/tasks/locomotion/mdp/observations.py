@@ -56,8 +56,10 @@ def speed_clock_contact(env: ManagerBasedRLEnv, command_name: str = "clock") -> 
 def base_height_ground(
     env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
-    """Base height above the mean of the height scan."""
-    ground = env.scene.sensors[sensor_cfg.name].data.ray_hits_w.torch[..., 2].mean(dim=1)
+    """Base height above the ground under it (rewards.ground_height)."""
+    from .rewards import ground_height
+
+    ground = ground_height(env, sensor_cfg)
     return (env.scene[asset_cfg.name].data.root_pos_w.torch[:, 2] - ground).unsqueeze(1)
 
 
@@ -101,3 +103,65 @@ def head_clearance(
     body = env.scene[asset_cfg.name].data.body_pos_w.torch[:, asset_cfg.body_ids[0], 2]
     gap = torch.where(torch.isfinite(hit), body - hit, torch.full_like(body, max_clearance))
     return gap.clamp(0.0, max_clearance).unsqueeze(1)
+
+
+class lidar_ranges(ManagerTermBase):
+    """Distance along each ray of a ray caster from its origin (the lidar), clipped to max_range (no hit reads
+    max_range), as the L1 measures it, for the frames lags steps back (0 is now), oldest last. Each ray of each
+    frame is, independently: max_range with drop_prob (no return), an older reading (1 to stale_steps more steps
+    back) with stale_prob (the sparse, non-repeating scan), plus uniform noise of +-noise m."""
+
+    def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        p = cfg.params
+        self._sensor = env.scene.sensors[p["sensor_cfg"].name]
+        # data.pos_w is the frame the sensor rides on; the rays start at the offset from it.
+        self._offset = torch.tensor(self._sensor.cfg.offset.pos, device=env.device).unsqueeze(0)
+        self._lags = torch.tensor(p.get("lags", (0,)), device=env.device)
+        self._depth = int(self._lags.max()) + int(p.get("stale_steps", 0)) + 1
+        rays = self._sensor.num_rays if hasattr(self._sensor, "num_rays") else self._sensor.ray_directions.shape[1]
+        self._buf = torch.zeros(env.num_envs, self._depth, rays, device=env.device)
+        self._fresh = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+        self._step = -1
+
+    def reset(self, env_ids: torch.Tensor | None = None) -> dict:
+        self._fresh[slice(None) if env_ids is None else env_ids] = True
+        return {}
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        sensor_cfg: SceneEntityCfg,
+        max_range: float = 3.0,
+        lags: tuple[int, ...] = (0,),
+        noise: float = 0.0,
+        drop_prob: float = 0.0,
+        stale_prob: float = 0.0,
+        stale_steps: int = 0,
+    ) -> torch.Tensor:
+        from isaaclab.utils.math import quat_apply
+
+        data = self._sensor.data
+        hits = data.ray_hits_w.torch
+        quat = data.quat_w.torch
+        origin = data.pos_w.torch + quat_apply(quat, self._offset.expand(quat.shape[0], -1))
+        dist = torch.linalg.norm(hits - origin.unsqueeze(1), dim=-1)
+        dist = torch.nan_to_num(dist, nan=max_range, posinf=max_range).clamp(max=max_range)
+        if env.common_step_counter != self._step:
+            self._step = env.common_step_counter
+            self._buf = torch.roll(self._buf, 1, dims=1)
+        self._buf[:, 0] = dist
+        fresh = self._fresh
+        self._buf[fresh] = dist[fresh].unsqueeze(1).expand(-1, self._depth, -1)
+        self._fresh[:] = False
+        n, rays = dist.shape
+        lag = self._lags.view(1, -1, 1).expand(n, -1, rays)
+        if stale_prob > 0.0 and stale_steps > 0:
+            extra = torch.randint(1, stale_steps + 1, lag.shape, device=env.device)
+            lag = lag + extra * (torch.rand(lag.shape, device=env.device) < stale_prob)
+        out = torch.gather(self._buf, 1, lag)
+        if noise > 0.0:
+            out = out + torch.empty_like(out).uniform_(-noise, noise)
+        if drop_prob > 0.0:
+            out = torch.where(torch.rand_like(out) < drop_prob, torch.full_like(out, max_range), out)
+        return out.clamp(0.0, max_range).reshape(n, -1)

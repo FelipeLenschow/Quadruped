@@ -223,10 +223,10 @@ def base_height_moving(
     command_name: str = "base_velocity",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
-    """Squared base height error above the scan, clipped to max_error and zero while the command is zero,
-    so a robot lying down or getting up is not paid to end the episode instead."""
+    """Squared base height error above the ground (ground_height), clipped to max_error and zero while the
+    command is zero, so a robot lying down or getting up is not paid to end the episode instead."""
     asset: RigidObject = env.scene[asset_cfg.name]
-    ground = env.scene.sensors[sensor_cfg.name].data.ray_hits_w.torch[..., 2].mean(dim=1)
+    ground = ground_height(env, sensor_cfg)
     error = (asset.data.root_pos_w.torch[:, 2] - ground - target_height).clamp(-max_error, max_error)
     moving = torch.norm(env.command_manager.get_command(command_name), dim=1) > 0.0
     return torch.square(error) * moving
@@ -265,21 +265,44 @@ def terrain_scaled(env: ManagerBasedRLEnv, term, term_params: dict, scales: dict
     return value * table[kind]
 
 
-def ground_normal_b(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_slope: float = 0.8, asset_cfg=None) -> torch.Tensor:
-    """Unit normal, in the base frame, of a plane fitted to the yaw-turned vertical height grid of sensor_cfg, its
-    slope clipped to max_slope. Rays with no hit take the mean of the others."""
-    asset: RigidObject = env.scene["robot" if asset_cfg is None else asset_cfg.name]
+def ground_plane(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, half_width: float = 0.25, band: float = 0.7):
+    """Plane z = c0 + c1 x + c2 y (x, y from the base, turned with its yaw) fitted to the vertical height grid of
+    sensor_cfg, from the rays within half_width of the base's line (y) and within band of their median height,
+    so the floor below a narrow flight's open side, and walls or balusters beside it, do not count. Returns the
+    coefficients and whether at least 4 rays counted."""
     sensor = env.scene.sensors[sensor_cfg.name]
     cache = env.__dict__.setdefault("_ground_plane_fit", {})
     if sensor_cfg.name not in cache:
         pattern = sensor.cfg.pattern_cfg
         xy = pattern.func(pattern, env.device)[0][:, :2] + torch.tensor(sensor.cfg.offset.pos[:2], device=env.device)
-        cache[sensor_cfg.name] = torch.linalg.pinv(torch.cat([torch.ones(len(xy), 1, device=env.device), xy], dim=1))
+        cache[sensor_cfg.name] = (torch.cat([torch.ones(len(xy), 1, device=env.device), xy], dim=1), xy[:, 1].abs() <= half_width)
+    design, strip = cache[sensor_cfg.name]
     z = sensor.data.ray_hits_w.torch[..., 2]
-    finite = torch.isfinite(z)
-    fill = torch.where(finite, z, torch.zeros_like(z)).sum(dim=1, keepdim=True) / finite.sum(dim=1, keepdim=True).clamp(min=1)
-    z = torch.where(finite, z, fill)
-    slope = (z @ cache[sensor_cfg.name].T)[:, 1:].clamp(-max_slope, max_slope)
+    keep = torch.isfinite(z) & strip
+    median = torch.where(keep, z, torch.full_like(z, float("nan"))).nanmedian(dim=1, keepdim=True).values
+    keep &= (z - median).abs() <= band
+    w = keep.float()
+    z = torch.where(keep, z, torch.zeros_like(z))
+    lhs = torch.einsum("rk,nr,rl->nkl", design, w, design) + 1e-6 * torch.eye(3, device=env.device)
+    rhs = torch.einsum("rk,nr->nk", design, w * z)
+    return torch.linalg.solve(lhs, rhs), w.sum(dim=1) >= 4
+
+
+def ground_height(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Height of the ground under the base: the fitted plane (ground_plane) at the base, or the mean of the grid
+    where too few rays count."""
+    coef, valid = ground_plane(env, sensor_cfg)
+    mean = env.scene.sensors[sensor_cfg.name].data.ray_hits_w.torch[..., 2].mean(dim=1)
+    return torch.where(valid, coef[:, 0], mean)
+
+
+def ground_normal_b(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, max_slope: float = 0.8, asset_cfg=None) -> torch.Tensor:
+    """Unit normal, in the base frame, of the fitted ground plane (ground_plane), its slope clipped to max_slope;
+    level where too few rays count."""
+    asset: RigidObject = env.scene["robot" if asset_cfg is None else asset_cfg.name]
+    coef, valid = ground_plane(env, sensor_cfg)
+    slope = coef[:, 1:].clamp(-max_slope, max_slope)
+    slope = torch.where(valid.unsqueeze(1), slope, torch.zeros_like(slope))
     quat = asset.data.root_quat_w.torch
     normal = torch.cat([-slope, torch.ones_like(slope[:, :1])], dim=1)
     normal = quat_apply(yaw_quat(quat), normal / torch.linalg.norm(normal, dim=1, keepdim=True))

@@ -40,13 +40,14 @@ def _joint_map(names: list[str], device) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def _ray_map(sensor, device) -> torch.Tensor:
-    """Index of the ray at (x, -y) for each ray (x, y) of the sensor's pattern."""
+    """Index of the ray mirrored in y for each ray of the sensor's pattern: same start and direction with y negated."""
     pattern = sensor.cfg.pattern_cfg
-    starts = pattern.func(pattern, device)[0][:, :2]
-    mirrored = starts * torch.tensor([1.0, -1.0], device=device)
-    dist = torch.cdist(mirrored, starts, compute_mode="donot_use_mm_for_euclid_dist")
+    starts, directions = pattern.func(pattern, device)
+    rays = torch.cat([starts, directions], dim=1)
+    mirrored = rays * torch.tensor([1.0, -1.0, 1.0, 1.0, -1.0, 1.0], device=device)
+    dist = torch.cdist(mirrored, rays, compute_mode="donot_use_mm_for_euclid_dist")
     index = dist.argmin(dim=1)
-    if float(dist.min(dim=1).values.max()) > 1e-4:
+    if float(dist.min(dim=1).values.max()) > 1e-4 or abs(float(sensor.cfg.offset.pos[1])) > 1e-6:
         raise ValueError("mirror: the ray pattern is not symmetric in y")
     return index
 
@@ -81,6 +82,10 @@ class _Mirror:
                 elif name in _SCAN_TERMS:
                     sensor = env.scene.sensors[cfg.params["sensor_cfg"].name]
                     plan.append((sl, _ray_map(sensor, device), None))
+                elif name == "lidar_ranges":
+                    index = _ray_map(env.scene.sensors[cfg.params["sensor_cfg"].name], device)
+                    frames = width // len(index)
+                    plan.append((sl, torch.cat([index + f * len(index) for f in range(frames)]), None))
                 elif name in _KEEP:
                     continue
                 else:
