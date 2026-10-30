@@ -56,6 +56,25 @@ def outline(points, tolerance_px=2.0):
     return poly.reshape(-1, 2).round().astype(int).tolist()
 
 
+def overlap(a, b):
+    """The share of the smaller of boxes a and b ([x1, y1, x2, y2]) that lies inside the other."""
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    if w <= 0 or h <= 0:
+        return 0.0
+    return w * h / max(min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1])), 1e-6)
+
+
+def drop_overlaps(objects, limit):
+    """objects without those mostly (limit) inside, or around, a higher-scoring one of the same label. YOLO26 has
+    no NMS: a chair got a second box (0.50 and 0.39), and the mapper put the two apart as two chairs."""
+    kept = []
+    for o in sorted(objects, key=lambda o: -o["score"]):
+        if all(k["label"] != o["label"] or overlap(k["box"], o["box"]) < limit for k in kept):
+            kept.append(o)
+    return kept
+
+
 def label_color(label):
     return tuple(int(c) for c in np.random.default_rng(zlib.crc32(label.encode())).integers(64, 256, 3))
 
@@ -108,13 +127,17 @@ def export(cfg):
 class ObjectDetector(Node):
     def __init__(self, args, cfg):
         super().__init__("object_detector")
-        import torch
         self.camera = args.camera or cfg.get("camera", "front")
         self.period = 1.0 / float(args.rate or cfg.get("rate", 5))
         self.conf = float(cfg.get("conf", 0.25))
+        self.class_conf = {str(k): float(v) for k, v in (cfg.get("class_conf") or {}).items()}
+        self.max_overlap = float(cfg.get("max_overlap", 0.6))
         self.imgsz = int(cfg.get("imgsz", 640))
-        self.device = 0 if torch.cuda.is_available() else "cpu"
+        # Load before touching CUDA: with torch.cuda.is_available() called first, a prompted model's set_classes
+        # gave embeddings that matched nothing (0 objects on the Jetson; the same frame had a chair at 0.88).
         self.model, source = load(cfg)
+        import torch
+        self.device = 0 if torch.cuda.is_available() else "cpu"
         self.warm = False
         self.latest = None
         self.new = threading.Event()
@@ -146,7 +169,8 @@ class ObjectDetector(Node):
             self.stop.wait(max(0.0, self.period - (time.monotonic() - t0)))
 
     def _predict(self, image):
-        return self.model.predict(image, imgsz=self.imgsz, conf=self.conf, device=self.device,
+        conf = min([self.conf, *self.class_conf.values()])
+        return self.model.predict(image, imgsz=self.imgsz, conf=conf, device=self.device,
                                   quantize=16 if self.device == 0 else None, verbose=False)[0]
 
     def _detect(self, m):
@@ -163,7 +187,9 @@ class ObjectDetector(Node):
         objects = [{"label": r.names[int(c)], "score": round(s, 3), "box": [round(v, 1) for v in b],
                     "mask": outline(m)}
                    for b, s, c, m in zip(r.boxes.xyxy.tolist(), r.boxes.conf.tolist(), r.boxes.cls.tolist(),
-                                         outlines)]
+                                         outlines)
+                   if s >= self.class_conf.get(r.names[int(c)], self.conf)]
+        objects = drop_overlaps(objects, self.max_overlap)
         h, w = image.shape[:2]
         stamp = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
         self.pub.publish(String(data=json.dumps({"stamp": stamp, "frame": m.header.frame_id, "width": w,

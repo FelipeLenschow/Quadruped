@@ -1223,7 +1223,7 @@ def run_cli_menu():
         detect = input("Also detect objects (object_detector, config.yaml's detector:)? [y/N]: ").lower().strip() == "y"
         classes = ""
         if detect:
-            look = input("Look for [1: everything (config.yaml's detector:), 2: traffic cones only] (default 2): ").strip() or "2"
+            look = input("Look for [1: config.yaml's detector: classes, 2: traffic cones only] (default 2): ").strip() or "2"
             classes = "traffic cone" if look == "2" else ""
         map_objects = detect and input("Also put them on the map (object_mapper; needs [N] running)? [y/N]: ").lower().strip() == "y"
         sweep_opts = {"only": only, "sim": sim, "check": check, "check_camera": check_camera, "detect": detect,
