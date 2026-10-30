@@ -22,6 +22,7 @@ setup(
         "lidar_imu_calib = quadruped_perception.lidar_imu_calib:main",
         "lio_map_stream = quadruped_perception.lio_map_stream:main",
         "camera_lidar_check = quadruped_perception.camera_lidar_check:main",
+        "camera_calib = quadruped_perception.camera_calib:main",
         "object_detector = quadruped_perception.object_detector:main",
         "object_mapper = quadruped_perception.object_mapper:main",
         "object_check = quadruped_perception.object_check:main",
