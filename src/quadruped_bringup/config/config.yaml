@@ -131,10 +131,13 @@ detector:
 # object_mapper: detector's objects on the map (lidar points inside each outline; the floor when none hit it),
 #   merged within radius and published on /objects (JSON, latched) and /objects/markers (rviz) once seen
 #   min_sightings times. Both see the object's front, so it is pushed back by half its width (at most
-#   max_depth_shift). ignore: labels never mapped (people move, surfaces are not objects); max_box_fraction
+#   max_depth_shift). ignore: labels never mapped (surfaces are not objects); max_box_fraction
 #   and max_box_width drop boxes bigger or wider than that share of the image (whole-scene tags like "room",
 #   or the floor). Lidar points under floor_z + floor_margin are not used for a position (the L1's floor reads
 #   up to 10 cm high; an outline's lower edge takes in the floor in front of the object). /objects/clear forgets them.
+#   forget_unseen: labels that move, each with the detector frames (at detector.rate) it may be in clear view, within
+#   forget_range m, without being detected before it is removed; they also follow their sightings faster. Other
+#   labels stay, as the detector misses objects from some angles.
 #   Check in Gazebo's nav world: `ros2 run quadruped_perception object_check`.
 object_mapper:
   frame: map
@@ -149,7 +152,9 @@ object_mapper:
   max_box_fraction: 0.5
   max_box_width: 0.9
   max_depth_shift: 0.3
-  ignore: [person, floor, ground, wall, ceiling, sky]
+  ignore: [floor, ground, wall, ceiling, sky]
+  forget_unseen: {person: 5, backpack: 15}
+  forget_range: 4.0
 
 # mcp_server: the robot's tools for an LLM over HTTP, http://<robot>:<port>/mcp (launch arg mcp:=true).
 #   Set QUADRUPED_MCP_TOKEN to require a bearer token. approach: metres go_to_object stops from an object;

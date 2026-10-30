@@ -1,8 +1,8 @@
 """LLM host: a local model on Ollama drives the robot through the MCP server's tools.
 
 Lists the server's tools (mcp_server in quadruped_operator), hands them to the model, runs each tool call
-it makes and gives it the result, until it answers without one. With --minutes it is told to keep going
-until the time is up. Ctrl+C sends stop before leaving. Standard library only, so it runs on any machine
+it makes and gives it the result, until it answers without one. Then you can answer it in the terminal
+(Enter: it keeps going until --minutes are up; --auto never waits). Ctrl+C sends stop before leaving. Standard library only, so it runs on any machine
 that reaches both Ollama and the robot:
 
     python3 Tools/llm_host.py                                  # the "having fun" loop, 10 minutes
@@ -15,6 +15,7 @@ QUADRUPED_MCP_TOKEN (or --token) is sent as the bearer token when the server req
 import argparse
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -37,6 +38,8 @@ Call skill walk first if you are not walking. If a call fails, read why and try 
 Keep each message short: one line on what you do next, then the tool call."""
 
 KEEP_GOING = "Keep going: pick the next thing to do and call a tool."
+OPERATOR = ("The operator reads your messages and may answer when you reply without a tool call. Ask only when you "
+            "cannot go on without them.")
 
 
 class Mcp:
@@ -110,6 +113,7 @@ def main():
     ap.add_argument("--think", action="store_true", help="let the model think first (slower)")
     ap.add_argument("--ctx", type=int, default=32768, help="model context in tokens")
     ap.add_argument("--keep", type=int, default=40, help="recent messages kept in context")
+    ap.add_argument("--auto", action="store_true", help="never wait for the operator: always tell it to keep going")
     args = ap.parse_args()
 
     mcp = Mcp(args.mcp, args.token)
@@ -118,7 +122,9 @@ def main():
                                                "parameters": t["inputSchema"]}} for t in mcp_tools]
     print(f"{args.model} with {len(tools)} tools from {args.mcp}: {', '.join(t['name'] for t in mcp_tools)}")
     task = args.task or (FUN if any(t["name"] == "list_objects" for t in mcp_tools) else EXPLORE)
-    messages = [{"role": "system", "content": instructions}, {"role": "user", "content": task}]
+    ask = not args.auto and sys.stdin.isatty()
+    system = instructions + ("\n" + OPERATOR if ask else "")
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
     end = time.monotonic() + args.minutes * 60
     calls = 0
     try:
@@ -132,9 +138,10 @@ def main():
             todo = reply.get("tool_calls") or []
             messages.append({"role": "assistant", "content": reply.get("content") or "", "tool_calls": todo})
             if not todo:
-                if args.minutes <= 0 or time.monotonic() > end:
+                answer = input("\nyou (Enter: keep going, q: quit)> ").strip() if ask else ""
+                if answer.lower() == "q" or (not answer and (args.minutes <= 0 or time.monotonic() > end)):
                     break
-                messages.append({"role": "user", "content": KEEP_GOING})
+                messages.append({"role": "user", "content": answer or KEEP_GOING})
                 continue
             for tc in todo:
                 name, targs = tc["function"]["name"], tc["function"].get("arguments") or {}

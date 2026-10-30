@@ -7,6 +7,10 @@ the floor. Both see the object's front, so the position is pushed back by half i
 points spread sideways, or from the box), up to max_depth_shift. A sighting within radius of a known object
 updates it, and labels are voted, so a few odd names ("extrude" up close) do not stick.
 
+Objects of a forget_unseen label (people move) are removed after that many detector frames in which they should
+be in clear view but are not detected: inside the image, within forget_range, and no lidar points nearer along the
+way. Other labels are never removed, as the detector can miss an object from one angle.
+
 Publishes /objects (JSON, latched): {"frame", "objects": [{"id", "label", "x", "y", "z", "sightings",
 "last_seen", "labels": {label: votes}}]}, only objects seen min_sightings times, and /objects/markers for rviz.
 Any message on /objects/clear forgets them all.
@@ -36,6 +40,7 @@ from quadruped_perception.lidar_filter import rotation
 from quadruped_perception.object_detector import label_color
 
 CLUSTER_M = 0.3
+OCCLUDER_M = 0.4
 
 
 class ObjectMapper(Node):
@@ -53,6 +58,8 @@ class ObjectMapper(Node):
         self.max_width = float(cfg.get("max_box_width", 0.9))
         self.max_shift = float(cfg.get("max_depth_shift", 0.3))
         self.ignore = set(cfg.get("ignore") or [])
+        self.forget = {str(k): int(v) for k, v in (cfg.get("forget_unseen") or {}).items()}
+        self.forget_range = float(cfg.get("forget_range", 4.0))
         self.info = None
         self.clouds = deque()
         self.objects = []
@@ -115,7 +122,8 @@ class ObjectMapper(Node):
         objects = [o for o in d["objects"] if o["label"] not in self.ignore and
                    o["box"][2] - o["box"][0] <= self.max_width * w and
                    (o["box"][2] - o["box"][0]) * (o["box"][3] - o["box"][1]) <= self.max_box * w * h]
-        if not objects:
+        watched = [ob for ob in self.objects if label_of(ob) in self.forget]
+        if not objects and not watched:
             return
         stamp = Time(nanoseconds=int(d["stamp"] * 1e9))
         to_cam = self._transform(d["frame"], self.frame, stamp)
@@ -134,6 +142,36 @@ class ObjectMapper(Node):
             p, source = self._locate(o, uv, pts, dist, to_map, scale, h)
             if p is not None:
                 self._add(o["label"], p, source, d["stamp"])
+        if watched:
+            self._forget_unseen(watched, d["objects"], to_cam, uv, dist, scale, w, h)
+
+    def _forget_unseen(self, watched, seen, to_cam, uv, dist, scale, w, h):
+        rot, t = to_cam
+        mx, my = 0.1 * w, 0.1 * h
+        for ob in watched:
+            label = label_of(ob)
+            c = rot @ ob["pos"] + t
+            r = np.linalg.norm(c)
+            if c[2] < 0.3 or r > self.forget_range:
+                continue
+            u, v = project(self.info, c[None])[0] / scale
+            if not (mx <= u < w - mx and my <= v < h - my):
+                continue
+            if any(o["label"] == label and o["box"][0] - mx <= u <= o["box"][2] + mx and
+                   o["box"][1] - my <= v <= o["box"][3] + my for o in seen):
+                ob["misses"] = 0
+                continue
+            near = (np.abs(uv[:, 0] - u) < mx) & (np.abs(uv[:, 1] - v) < my)
+            if np.count_nonzero(dist[near] < r - OCCLUDER_M) >= self.min_points:
+                continue
+            ob["misses"] = ob.get("misses", 0) + 1
+        gone = [ob for ob in watched if ob.get("misses", 0) >= self.forget[label_of(ob)]]
+        if gone:
+            ids = {ob["id"] for ob in gone}
+            self.objects = [ob for ob in self.objects if ob["id"] not in ids]
+            self.changed = True
+            self.get_logger().info("in view but not seen, removed: "
+                                   + ", ".join(f"{label_of(ob)} {ob['id']}" for ob in gone))
 
     def _locate(self, o, uv, pts, dist, to_map, scale, height):
         """The object's position in the map frame and how it was found ("lidar" or "floor"), or (None, None)."""
@@ -191,10 +229,11 @@ class ObjectMapper(Node):
             self.next_id += 1
             self.objects.append(best)
         best["n"] += 1
-        best["pos"] += max(1.0 / best["n"], 0.05) * (p - best["pos"])
+        best["pos"] += max(1.0 / best["n"], 0.5 if label in self.forget else 0.05) * (p - best["pos"])
         best["labels"][label] += 1
         best["sources"][source] += 1
         best["last_seen"] = stamp
+        best["misses"] = 0
         self.changed = True
 
     def _publish(self):
@@ -202,7 +241,7 @@ class ObjectMapper(Node):
             return
         self.changed = False
         shown = [ob for ob in self.objects if ob["n"] >= self.min_sightings]
-        out = [{"id": ob["id"], "label": ob["labels"].most_common(1)[0][0],
+        out = [{"id": ob["id"], "label": label_of(ob),
                 "x": round(float(ob["pos"][0]), 3), "y": round(float(ob["pos"][1]), 3),
                 "z": round(float(ob["pos"][2]), 3), "sightings": ob["n"], "last_seen": round(ob["last_seen"], 2),
                 "labels": dict(ob["labels"].most_common(5))} for ob in shown]
@@ -221,6 +260,10 @@ class ObjectMapper(Node):
                 mk.text = f"{o['label']} ({o['sightings']})"
                 markers.markers.append(mk)
         self.marker_pub.publish(markers)
+
+
+def label_of(ob):
+    return ob["labels"].most_common(1)[0][0]
 
 
 def main():
