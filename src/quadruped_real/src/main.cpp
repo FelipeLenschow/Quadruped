@@ -30,9 +30,11 @@ int main(int argc, char** argv) {
   rt.core = get<int>(config["realtime"], "core", -1);
   rt.priority = get<int>(config["realtime"], "priority", 80);
   const std::optional<int> core = reserved_core(rt);
+  std::string lock_err;
   if (core) {
     move_other_threads_off(*core);
     avoid_core(*core);  // this thread and everything it starts: ROS, loaders, the console
+    lock_err = lock_memory();
   }
 
   LoopConfig lc;
@@ -65,6 +67,10 @@ int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<DriverNode>(paths, config, loop, commands, snapshots);
   if (!note.empty()) RCLCPP_INFO(node->get_logger(), "%s", note.c_str());
+  if (core) {
+    if (lock_err.empty()) RCLCPP_INFO(node->get_logger(), "[RealDriver] Memory locked in RAM: swapping cannot stall the loop.");
+    else RCLCPP_WARN(node->get_logger(), "[RealDriver] %s", lock_err.c_str());
+  }
   RCLCPP_INFO(node->get_logger(), "[RealDriver] Contact threshold: %.0f counts above each foot's offset (start %.0f, %s).",
               lc.contact_threshold, lc.fsr_bias,
               lc.calib_time > 0 ? ("calibrating over " + std::to_string(lc.calib_time).substr(0, 3) + "s").c_str()

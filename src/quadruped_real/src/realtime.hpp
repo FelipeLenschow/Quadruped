@@ -20,5 +20,8 @@ void move_other_threads_off(int core);
 void avoid_core(int core);
 // The calling thread: alone on `core` at SCHED_FIFO. Returns an error text when FIFO was refused (still pinned).
 std::string take_core(int core, int priority);
+// The whole process: every page it touches stays in RAM, so other processes' memory use (detector, LLM) cannot
+// push the loop into swap and stall a step. Returns an error text when the lock was refused.
+std::string lock_memory();
 
 }  // namespace quadruped_real

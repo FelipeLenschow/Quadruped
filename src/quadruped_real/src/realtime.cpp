@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -94,6 +95,16 @@ std::string take_core(int core, int priority) {
   param.sched_priority = priority;
   if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
     return "no permission for SCHED_FIFO (needs root, rtprio, or a container with a realtime budget); pinned only";
+  }
+  return "";
+}
+
+std::string lock_memory() {
+  // ONFAULT: lock pages as they are touched instead of populating every mapping up front (each thread's 8 MB
+  // stack, the policy runtime's reserved arenas), which would pin hundreds of MB for nothing.
+  if (mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT) != 0) {
+    return std::string("could not lock memory (") + std::strerror(errno) +
+           "; needs root or CAP_IPC_LOCK): the loop can stall when the machine swaps";
   }
   return "";
 }
