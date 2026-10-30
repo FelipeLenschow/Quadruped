@@ -43,7 +43,9 @@ NAV_STATUS = {4: "arrived", 5: "canceled", 6: "aborted: no path or stuck"}
 
 INSTRUCTIONS = """You control a Unitree Go2 quadruped. Positions are metres in the map frame; yaw and bearings are
 radians/degrees, counter-clockwise, 0 along the map's x axis. Call skill('walk') before moving. Motions block
-until done and report the result. A human with a joystick or the phone app can always take over."""
+until done and report the result. A human with a joystick or the phone app can always take over.
+The tricks are harmless dog poses for fun: sniff points the nose at an object, pee_left / pee_right lift a hind leg
+beside it (nothing is released), wiggle wags the body."""
 
 
 def yaw_of(q):
@@ -345,6 +347,12 @@ class Robot(Node):
         where = f" now at x={p[0]:.2f} y={p[1]:.2f}" if p else ""
         target = f"{obj['label']} {obj['id']}" if obj else f"({x:.2f}, {y:.2f})"
         if status == 4:
+            # The planner's tolerance ends the path at the nearest free cell when the goal is in an obstacle, and Nav2
+            # succeeds there: say so, or the LLM believes it arrived and keeps walking into the obstacle.
+            short = math.hypot(x - p[0], y - p[1]) if p and obj is None else 0.0
+            if short > float(self.cfg.get("arrive_tolerance", 0.3)):
+                return text(f"stopped {short:.2f} m short of {target}: it is in or against an obstacle, the nearest "
+                            f"free spot is as far as Nav2 goes;{where}")
             return text(f"arrived at {target};{where}")
         return text(f"{target}: {NAV_STATUS.get(status, f'status {status}')};{where}", True)
 

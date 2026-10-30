@@ -149,6 +149,8 @@ object_mapper:
 #   pee the object pee_distance m beside the base and pee_back m behind its centre. final_step: false skips it.
 #   frontiers: edges of /map between free and unknown, at least frontier_min_m long and frontier_clearance m from a
 #   wall, the nearest frontiers_max of them.
+#   arrive_tolerance: go_to / move ending farther than this from the goal (Nav2 stops at the nearest free spot
+#   when the goal is in an obstacle) is reported as stopped short, not arrived.
 #   objects: the object tools (list_objects, go_to_object, visit, look's boxes): true, false, or auto = offered
 #   only while object_mapper publishes /objects ([I] with detection). Off, an on-board LLM is not sent after them.
 mcp:
@@ -161,6 +163,7 @@ mcp:
   approach: 0.6
   visit_radius: 1.0
   max_move_m: 2.0
+  arrive_tolerance: 0.3
   nav_standoff: 0.8
   sniff_distance: 0.5
   pee_distance: 0.4
