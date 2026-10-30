@@ -10,5 +10,13 @@ from .events import *  # noqa: F401, F403
 from .observations import *  # noqa: F401, F403
 from .rewards import *  # noqa: F401, F403
 from .terminations import *  # noqa: F401, F403
-from .scan_pattern import FootprintPatternCfg, footprint_pattern  # noqa: F401, F403
-from .stairs_terrain import CountedStairsTerrainCfg, counted_stairs_terrain, stair_count_and_height  # noqa: F401
+from .terrain_info import tile_heading  # noqa: F401
+from .scan_pattern import FanPatternCfg, FootprintPatternCfg, fan_pattern, footprint_pattern  # noqa: F401, F403
+from .stairs_terrain import (  # noqa: F401
+    CountedStairsTerrainCfg,
+    NarrowStairsTerrainCfg,
+    counted_stairs_terrain,
+    narrow_stairs_terrain,
+    stair_count_and_height,
+    start_heading,
+)

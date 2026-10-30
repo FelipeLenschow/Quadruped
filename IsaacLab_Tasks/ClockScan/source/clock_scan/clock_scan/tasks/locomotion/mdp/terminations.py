@@ -40,3 +40,10 @@ def bad_orientation_ground(
     from .rewards import ground_normal_b
 
     return torch.acos(ground_normal_b(env, sensor_cfg, max_slope)[:, 2].clamp(-1.0, 1.0)) > limit_angle
+
+
+def falling(
+    env: ManagerBasedRLEnv, max_down_speed: float = 3.0, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """The base going down faster than max_down_speed (m/s; 3 is a free fall of 0.46 m): it went over an edge."""
+    return env.scene[asset_cfg.name].data.root_lin_vel_w.torch[:, 2] < -max_down_speed

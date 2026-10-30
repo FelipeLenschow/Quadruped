@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 from typing import TYPE_CHECKING
 
@@ -54,6 +55,13 @@ def load_checkpoint(runner, path):
     print(f"[rsl_rl] Loaded legacy checkpoint (iteration {data['iter']}); optimizer state not restored.")
 
 
+def _kept_inputs(old: int) -> int:
+    """Inputs of a widened first layer that keep their weights: all old ones, or only the first
+    CLOCK_SCAN_NEW_INPUTS_FROM when the old ones from there on were replaced (the actor's height map by lidar ranges)."""
+    keep = int(os.environ.get("CLOCK_SCAN_NEW_INPUTS_FROM", "0"))
+    return min(keep, old) if keep > 0 else old
+
+
 def _widen_inputs(runner, data) -> bool:
     """Zero-pad first-layer weights of a checkpoint whose actor or critic had fewer inputs, for observation
     terms appended since (the Clock-Rough critic's height scan). Returns whether anything was padded."""
@@ -69,10 +77,11 @@ def _widen_inputs(runner, data) -> bool:
             if value.dim() != 2 or value.shape[0] != want.shape[0] or value.shape[1] > want.shape[1]:
                 raise RuntimeError(f"{key}.{name}: checkpoint {tuple(value.shape)} cannot widen to {tuple(want.shape)}")
             padded = torch.zeros(want.shape, dtype=value.dtype)
-            padded[:, : value.shape[1]] = value
+            kept = _kept_inputs(value.shape[1])
+            padded[:, :kept] = value[:, :kept]
             data[key][name] = padded
             widened = True
-            print(f"[rsl_rl] {key}.{name}: {value.shape[1]} -> {want.shape[1]} inputs")
+            print(f"[rsl_rl] {key}.{name}: {value.shape[1]} -> {want.shape[1]} inputs, first {kept} kept")
     return widened
 
 
@@ -95,7 +104,8 @@ def _widen_optimizer(runner, data) -> bool:
             if value.dim() != 2 or value.shape[0] != want[0] or value.shape[1] > want[1]:
                 return False
             padded = torch.zeros(want, dtype=value.dtype)
-            padded[:, : value.shape[1]] = value
+            kept = _kept_inputs(value.shape[1])
+            padded[:, :kept] = value[:, :kept]
             state[key] = padded
     return True
 

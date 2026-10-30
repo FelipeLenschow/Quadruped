@@ -98,7 +98,8 @@ class terrain_stages(ManagerTermBase):
     each type (sub-terrain name -> share). An env moved to another type starts it at level 0, at its next
     reset. Going from stage i to i + 1 needs, for `hold` checks in a row (one per episode length of steps),
     the full speed range open, mean tracking over the resets above track_ratio x the weight of track_term,
-    and the mean level of envs on `level_types` of stage i at least level_gates[i]. Moving between stages
+    and the mean level of envs on `level_types` of stage i at least level_gates[i] (level_types is one tuple of
+    names for every gate, or one tuple per gate). Moving between stages
     keeps as many envs as it can on their type.
 
     Once a stage has stairs (stair_types), envs on stairs get forward-only commands: all of them for
@@ -112,11 +113,12 @@ class terrain_stages(ManagerTermBase):
 
     Logs the stage, the mean level, the forward-only share, the share of stair episodes that got the
     base report_distance from the tile centre (onto the steps), and the mean step count on stairs. Per stair
-    direction (down: platform on top, up: the inverted type), as running means over about 200 episodes:
-    <dir>_left (got report_distance out), <dir>_falls (ended by a termination other than the time limit),
-    <dir>_stuck (commanded more than twice report_distance and never got out), and over all envs on that
-    type: <dir>_steps (mean step count), <dir>_height_cm (mean step height, with stair_height_range) and
-    <dir>_top (share in the last block of step counts)."""
+    type (<dir> is down: platform on top, or up: the inverted type; narrow_down and narrow_up on narrow_* types),
+    as running means over about 200 episodes: <dir>_left (got report_distance out), <dir>_falls (ended by a
+    termination other than the time limit), <dir>_stuck (commanded more than twice report_distance and never got
+    out), and over all envs on that type: <dir>_steps (mean step count, or <dir>_width_cm, the flight width, on
+    narrow_* types), <dir>_height_cm (mean step height, with stair_height_range) and <dir>_top (share in the
+    last block)."""
 
     def __init__(self, cfg: CurriculumTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
@@ -138,7 +140,9 @@ class terrain_stages(ManagerTermBase):
                 if share[t] > 0 and len(self.columns[t]) == 0:
                     raise ValueError(f"terrain_stages: '{n}' has no column; raise its proportion")
             self.mixes.append(share / share.sum())
-        self.level_types = [self.names.index(n) for n in p.get("level_types", ()) if n in self.names]
+        types = p.get("level_types", ())
+        per_gate = [types] * max(len(p.get("level_gates", ())), 1) if not types or isinstance(types[0], str) else list(types)
+        self.level_types = [[self.names.index(n) for n in names if n in self.names] for names in per_gate]
         self.stair_types = torch.tensor([self.names.index(n) for n in p.get("stair_types", ()) if n in self.names], device=env.device, dtype=torch.long)
         self.stage = 0
         self.stairs_since = None
@@ -163,7 +167,8 @@ class terrain_stages(ManagerTermBase):
         kind = self.kind[ids]
         died = env.termination_manager.terminated[ids]
         for t in self.stair_types.tolist():
-            tag = "up" if self.names[t].endswith("_inv") else "down"
+            name = self.names[t]
+            tag = ("narrow_" if name.startswith("narrow") else "") + ("up" if name.endswith("_inv") else "down")
             sel = ids[kind == t]
             if sel.numel():
                 left = term.max_distance[sel] > report_distance
@@ -174,7 +179,11 @@ class terrain_stages(ManagerTermBase):
             if rows_per_count > 0 and len(counts) and bool(on.any()):
                 levels = terrain.terrain_levels[on]
                 block = (levels // rows_per_count).clamp(max=len(counts) - 1)
-                self._stair_means[f"{tag}_steps"] = float(torch.tensor(counts, device=env.device, dtype=torch.float)[block].mean())
+                values = getattr(env.scene.terrain.cfg.terrain_generator.sub_terrains[name], "widths", None)
+                if values is None:
+                    self._stair_means[f"{tag}_steps"] = float(torch.tensor(counts, device=env.device, dtype=torch.float)[block].mean())
+                else:
+                    self._stair_means[f"{tag}_width_cm"] = 100.0 * float(torch.tensor(values, device=env.device)[block].mean())
                 self._stair_means[f"{tag}_top"] = float((block == len(counts) - 1).float().mean())
                 if height_range is not None:
                     row = (levels % rows_per_count).float()
@@ -221,7 +230,8 @@ class terrain_stages(ManagerTermBase):
         cmd = env.command_manager.get_term(command_name).cfg
         full = cmd.ranges.lin_vel_x[1] >= cmd.limit_ranges.lin_vel_x[1] - 1e-6
         level_ok = True
-        on_levels = torch.isin(self.kind, torch.tensor(self.level_types, device=env.device, dtype=torch.long))
+        types = self.level_types[min(self.stage, len(self.level_types) - 1)]
+        on_levels = torch.isin(self.kind, torch.tensor(types, device=env.device, dtype=torch.long))
         if self.stage < len(level_gates) and bool(on_levels.any()):
             level_ok = float(env.scene.terrain.terrain_levels[on_levels].float().mean()) >= level_gates[self.stage]
         state["passed"] = state["passed"] + 1 if (full and tracking > track_ratio * weight and level_ok) else 0

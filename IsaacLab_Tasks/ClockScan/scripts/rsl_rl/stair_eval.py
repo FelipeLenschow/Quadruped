@@ -2,9 +2,10 @@
 
 Every robot gets a tile of the top block of step counts (6 steps over the training height range), down
 (platform on top) or up (pit), or with --heights a tile of 6 steps at exactly one of those heights, and walks at one pinned command from a standing start on the platform, heading +x, for --seconds.
-Only its first episode counts. Per tile it records whether the base got --distance m from the tile centre
-(past the first edge at 1.5 m) and whether the episode ended by a fall. The step height of each tile is read
-from the terrain.
+With --narrow (and --heights) the tiles are narrow stairs instead: one flight of --flight_width m between two floors,
+the robot starting before it, facing it, with an operator holding that heading.
+Only its first episode counts. Per tile it records whether the base got --distance m from its start (2 m: past
+the first edge at 1.5 m; 5.4 m with --narrow: onto the far floor) and whether the episode ended by a fall.
 
 Writes stair_eval_<checkpoint>.png and .json next to the first checkpoint (or --out), one line per checkpoint
 and sideways speed:
@@ -29,7 +30,10 @@ parser.add_argument("--rows", type=int, default=16, help="Step heights tested (t
 parser.add_argument("--heights", type=str, default=None, help="Comma-separated exact step heights, cm, instead of the sweep.")
 parser.add_argument("--per_tile", type=int, default=8, help="Robots per tile.")
 parser.add_argument("--seconds", type=float, default=12.0)
-parser.add_argument("--distance", type=float, default=2.0, help="Distance from the tile centre that counts as across.")
+parser.add_argument("--distance", type=float, default=None,
+                    help="Distance from the start that counts as across (default 2.0, with --narrow 5.4: the far floor).")
+parser.add_argument("--narrow", action="store_true", help="Narrow stairs (needs --heights): one flight between two floors.")
+parser.add_argument("--flight_width", type=float, default=0.8, help="Flight width with --narrow, m.")
 parser.add_argument("--out", type=str, default=None, help="Output path without extension.")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -39,6 +43,10 @@ if "--headless" in unknown:
     args_cli.headless = True
 if unknown:
     parser.error(f"unrecognized arguments: {' '.join(unknown)}")
+if args_cli.narrow and not args_cli.heights:
+    parser.error("--narrow needs --heights")
+if args_cli.distance is None:
+    args_cli.distance = 5.4 if args_cli.narrow else 2.0
 os.environ["CLOCK_SCAN_PLAY_CMD_X"] = str(args_cli.speed)
 os.environ["CLOCK_SCAN_PLAY_YAW"] = "0"
 
@@ -61,7 +69,11 @@ import clock_scan.tasks  # noqa: F401
 from clock_scan.tasks.locomotion.robots.go2.clock_scan_env_cfg import ROUGH_TERRAINS_CFG, STEP_COUNTS
 from clock_scan.utils.parser_cfg import parse_env_cfg
 
-TYPES = {"down": "pyramid_stairs", "up": "pyramid_stairs_inv"}
+TYPES = (
+    {"down": "narrow_stairs", "up": "narrow_stairs_inv"}
+    if args_cli.narrow
+    else {"down": "pyramid_stairs", "up": "pyramid_stairs_inv"}
+)
 
 
 @torch.inference_mode()
@@ -101,9 +113,9 @@ def main():
         subs = {}
         for tag, name in TYPES.items():
             for h in heights:
-                subs[f"{tag}_{h:g}"] = ROUGH_TERRAINS_CFG.sub_terrains[name].replace(
-                    step_counts=(steps,), step_height_range=(h / 100.0, h / 100.0)
-                )
+                sub = ROUGH_TERRAINS_CFG.sub_terrains[name]
+                block = {"widths": (args_cli.flight_width,)} if args_cli.narrow else {"step_counts": (steps,)}
+                subs[f"{tag}_{h:g}"] = sub.replace(step_height_range=(h / 100.0, h / 100.0), **block)
         difficulty = (0.0, 1.0)
     else:
         subs = {name: ROUGH_TERRAINS_CFG.sub_terrains[name] for name in TYPES.values()}
@@ -130,8 +142,11 @@ def main():
     col = (ids // rows) % cols
     names = list(subs.keys())
     col_tag = ["up" if subs[n].inverted else "down" for n in names]
-    height_cm = (100.0 * terrain.terrain_origins[:, :, 2].abs() / steps).cpu()
-    env_height = torch.round(height_cm[level.cpu(), col.cpu()] * 10.0) / 10.0
+    if args_cli.heights:
+        env_height = torch.tensor([float(names[c].split("_")[-1]) for c in col.tolist()])
+    else:
+        height_cm = (100.0 * terrain.terrain_origins[:, :, 2].abs() / steps).cpu()
+        env_height = torch.round(height_cm[level.cpu(), col.cpu()] * 10.0) / 10.0
     env_tag = [col_tag[c] for c in col.tolist()]
 
     results = []
@@ -166,7 +181,7 @@ def main():
         os.path.dirname(os.path.abspath(checkpoints[0])), "stair_eval_" + os.path.splitext(os.path.basename(checkpoints[0]))[0]
     )
     with open(out + ".json", "w") as f:
-        json.dump({"speed": args_cli.speed, "seconds": args_cli.seconds, "distance": args_cli.distance,
+        json.dump({"narrow_width": args_cli.flight_width if args_cli.narrow else None, "speed": args_cli.speed, "seconds": args_cli.seconds, "distance": args_cli.distance,
                    "per_tile": args_cli.per_tile, "results": results}, f, indent=1)
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.8), sharey=True)
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -180,7 +195,8 @@ def main():
             ax.plot(h, [p["across"] for p in pts], "-o", ms=3, color=colors[k % len(colors)], label=label + " across")
             ax.plot(h, [p["fell"] for p in pts], "--x", ms=4, color=colors[k % len(colors)], alpha=0.7, label=label + " fell")
     for ax, tag in zip(axes, TYPES):
-        ax.set_title(f"{tag}: {steps} steps, {args_cli.speed:.2f} m/s forward, {results[0][tag][0]['robots']} robots per point")
+        where = f"narrow {args_cli.flight_width:g} m, {ROUGH_TERRAINS_CFG.sub_terrains[TYPES[tag]].num_steps} steps" if args_cli.narrow else f"{steps} steps"
+        ax.set_title(f"{tag}: {where}, {args_cli.speed:.2f} m/s forward, {results[0][tag][0]['robots']} robots per point")
         ax.set_xlabel("step height (cm)")
         ax.set_ylim(-0.02, 1.02)
         ax.grid(alpha=0.3)

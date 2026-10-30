@@ -12,12 +12,14 @@ Task: `Go2-Clock-Scan`
   robots on each.
   1. Simple's ground: 30% flat, 70% smooth (noise to 2 cm).
   2. 15% flat, 15% smooth, 35% rough (to 4 cm), 35% boxes (2-10 cm).
-  3. 50% stairs (`CLOCK_SCAN_STAIRS_SHARE`; half down from a platform on top, half up from a pit), the rest in
-     stage 2's mix.
+  3. 50% square stairs (`CLOCK_SCAN_STAIRS_SHARE`; half down from a platform on top, half up from a pit), the rest
+     in stage 2's mix.
+  4. Half of the stair robots (`CLOCK_SCAN_NARROW_SHARE`) moved to narrow stairs, half down and half up.
 
   A stage opens after 3 checks in a row (`CLOCK_SCAN_STAGE_HOLD`, one per episode length of steps) with the full
-  speed range, mean tracking above 0.65 x its weight (`CLOCK_SCAN_STAGE_TRACK`), and for stage 3 a mean boxes level
-  of at least 0.4 of the rows (`CLOCK_SCAN_STAGE_BOXES_DIFFICULTY`). A robot moved to another type starts it at level 0; as many robots
+  speed range, mean tracking above 0.65 x its weight (`CLOCK_SCAN_STAGE_TRACK`), for stage 3 a mean boxes level
+  of at least 0.4 of the rows (`CLOCK_SCAN_STAGE_BOXES_DIFFICULTY`), and for stage 4 a mean square-stairs level of at
+  least 0.75 of the rows, the 6-step block (`CLOCK_SCAN_STAGE_STAIRS_DIFFICULTY`). A robot moved to another type starts it at level 0; as many robots
   as possible keep their type. Inside a type, levels go up after tracking more than 60% of the commanded path, down
   after a fall or under 35%.
 - **Stair levels** (`mdp.CountedStairsTerrainCfg`): a 3 m platform, steps 0.3 m deep, flat ground beyond the last
@@ -29,6 +31,25 @@ Task: `Go2-Clock-Scan`
   the first edge; `CLOCK_SCAN_STAIRS_LEAVE_DISTANCE`), and an episode commanded more than 4 m that never got there
   goes down a level, also from the first row of a step count. Without this, a robot that never climbs can track its
   commands on the 3 m platform and go up the levels.
+- **Narrow stairs** (`mdp.NarrowStairsTerrainCfg`, `narrow_stairs` down, `narrow_stairs_inv` up): two floors joined
+  by one straight flight of 15 steps, 0.3 m deep (`CLOCK_SCAN_NARROW_STEPS`), in the middle of the tile. Its levels
+  use the same 4 blocks: the flight is 1.6, 1.2, 1.0 and 0.8 m wide (`CLOCK_SCAN_NARROW_WIDTHS`), the height rising
+  from 5 to 22 cm inside each, so the top row is a 2.7-3.3 m storey on an 0.8 m flight. Each side of the flight, and
+  the upper floor's edge on that side of the stairwell, is open (40%), has balusters 12 cm apart with a handrail at
+  0.9 m (40%), or a wall (20%). In the 10 m tiles (`CLOCK_SCAN_TILE_SIZE`, all types) the lower floor runs 3 m
+  before the flight (`CLOCK_SCAN_NARROW_APPROACH`) and the upper floor 2.5 m after it, with a 1 m wall on the tile edges. The robot starts before the flight
+  (up) or on the upper floor (down), facing it within 0.3 rad and 0.3 x 0.15 m of the start
+  (`CLOCK_SCAN_ALIGNED_X`, `_Y`, `_YAW`; `mdp.reset_root_state_aligned`, `reset_start_pose`). It never turns by
+  itself: an operator in the command holds the flight's heading (turning 1.0 x the heading error, at most 0.5 rad/s;
+  `CLOCK_SCAN_STEER_GAIN`, `_MAX`), and the sideways command is halved (`CLOCK_SCAN_STEER_Y_SCALE`), so it still
+  pushes robots toward the edges. Going over an edge ends the episode (`falling`: the base down faster than
+  3 m/s, `CLOCK_SCAN_FALL_SPEED`) at 750 on top of the fall penalty (`CLOCK_SCAN_W_FALL_OFF`). Logged as
+  `narrow_down_` and `narrow_up_`, with `_width_cm` in place of `_steps`. Stairs1 never saw this: on 0.8 m at 10 cm
+  it got 0% up and 34% down, crouching onto the steps (see Ground below).
+- **Ground under the robot** (`mdp.ground_plane`): a plane fitted to the critic's height grid from the rays within
+  0.25 m of the base's line and within 0.7 m of their median height. The base height (reward and critic) is that
+  plane at the base, and the tilt penalty and reset use its slope. With the whole grid, the floor beside an 0.8 m
+  flight put a robot standing 0.28 m above the steps at 0.79 m, and the tilt was off by up to the 35 degree clip.
 - **Stairs:** robots on stairs get forward-only commands: 0 <= x <= 0.6 m/s, sideways kept, turning x0.3
   (`CLOCK_SCAN_FORWARD_X_MAX`, `_Y_SCALE`, `_YAW_SCALE`), always (`CLOCK_SCAN_FORWARD_END` 1.0; with less, the share falls
   to it over `_RAMP_ITERS` after `_HOLD_ITERS`). On stair tiles a fall costs 0.25 of a fall elsewhere (`CLOCK_SCAN_STAIRS_FALL_SCALE`); a foot hitting
@@ -39,7 +60,7 @@ Task: `Go2-Clock-Scan`
   (`CLOCK_SCAN_W_STUMBLE`). At 0.25x on stairs, 2 per second and a 4x ratio, about one foot swing in five hit a riser
   going up, the rear legs most.
 - **Body tilt** (`mdp.ground_orientation_l2`, 2.5 per unit, `CLOCK_SCAN_W_ORIENT`): the tilt penalty is measured
-  against a plane fitted to the critic's height grid (slope clipped at 35 degrees), not against gravity, so on stairs
+  against the ground plane (Ground under the robot; slope clipped at 35 degrees), not against gravity, so on stairs
   the body may pitch with the steps; on flat ground it is the same as `flat_orientation_l2`
   (`CLOCK_SCAN_GROUND_ORIENTATION=0` goes back to that). Against gravity, robots climbed with the body 7 degrees
   flatter than 15 cm stairs and the lower head 10-11 cm above the step under it.
@@ -82,7 +103,7 @@ Task: `Go2-Clock-Scan`
   pushed the KL up and the learning rate down. The actor's mean is now 10 * tanh(x / 10)
   (`agents/distribution.py`, `BoundedGaussianDistribution`; bound = the clip), with no new weights, so old
   checkpoints load. The C++ export reads the bare MLP and does not apply the tanh.
-- **Height map (actor and critic):** vertical rays turned with the base yaw, as a height map built from the lidars
+- **Height map (critic; actor with `CLOCK_SCAN_ACTOR_SCAN=map`):** vertical rays turned with the base yaw, as a height map built from the lidars
   and sampled about the base would be: from x -0.2 m (just behind the rear feet) to 1.0 m, y +-0.5 m; 5 cm apart up
   to x 0.4 m and |y| 0.3 m, 10 cm beyond (19 x 17 = 323; `CLOCK_SCAN_MAP_*`). Each value is base height minus ground
   height minus 0.5 m, clipped to +-1 m. The actor's copy has uniform noise of +-0.05 m per ray
@@ -90,8 +111,19 @@ Task: `Go2-Clock-Scan`
 - **Height grid (critic only):** a 1.6 x 1.0 m grid at 0.1 m (187 rays) under the base, turned with its yaw
   (`CLOCK_SCAN_SCAN_LENGTH`, `_SCAN_WIDTH`, `_SCAN_RESOLUTION`), same values. The base-height reward and the critic's
   base height come from it.
-- **Actor input:** 379 = Simple's 48-wide layout, the clock (8), the height map (323), in this order.
-  The critic gets 592 (the head clearance last).
+- **Lidar ranges (actor, `CLOCK_SCAN_ACTOR_SCAN=lidar`, the default):** what the L1 measures, so the top of a tall
+  step that its riser hides stays hidden. A fan of 16 x 21 = 336 rays from the L1's place on the base (x 0.289 m,
+  z -0.047 m; config.yaml's `real_lidar`), turning with the whole base: 16 rows aimed at flat ground 0.07-1.3 m ahead
+  of the lidar (x 0.36-1.53 m from the base standing; `CLOCK_SCAN_LIDAR_ROWS`, `_NEAR`, `_FAR`, `_HEIGHT`), 21 columns
+  over +-60 deg (`_COLS`, `_AZIMUTH`). Each value is the range from the lidar, clipped to 3 m (no hit reads 3 m,
+  `_RANGE`), now and 5 steps (0.1 s) back (`_LAG`): 672 inputs. Per ray and step: +-0.02 m noise (`_NOISE`), 15% no
+  return (`_DROP`), 15% a reading 1-10 steps older (`_STALE`, `_STALE_STEPS`), for the L1's sparse scan.
+  `mdp.lidar_ranges`, pattern `mdp.FanPatternCfg`; the mirror swaps the columns. Plan and deploy notes:
+  `LIDAR_RANGES_PLAN.md`.
+- **Actor input:** 728 = Simple's 48-wide layout, the clock (8), the lidar ranges (672), in this order (379 with the
+  height map). The critic gets 592 (the head clearance last). To run or evaluate a height-map checkpoint (Stairs1),
+  set `CLOCK_SCAN_ACTOR_SCAN=map`. To resume a height-map checkpoint into the lidar actor, set
+  `CLOCK_SCAN_NEW_INPUTS_FROM=56`: the first 56 inputs keep their weights, the lidar ones start at zero.
 
 ## Training
 
@@ -132,6 +164,9 @@ and `.json` next to the first checkpoint:
 
     PYTHONPATH=source/clock_scan python scripts/rsl_rl/stair_eval.py --headless \
         --checkpoint logs/rsl_rl/go2_clock_scan/<run>/model_<n>.pt --compare <older .pt> --vy 0,-0.2,0.2
+
+With `--narrow --heights 10,15,18` it uses narrow stairs of `--flight_width` m (0.8) instead, with the operator
+holding the heading, and across means onto the far floor (5.4 m). Give `--seconds 20` so slow robots can get there.
 
 ## Video
 

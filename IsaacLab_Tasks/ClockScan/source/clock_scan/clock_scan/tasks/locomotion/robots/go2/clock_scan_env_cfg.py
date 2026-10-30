@@ -66,12 +66,41 @@ def _axis(lo: float, hi: float, fine_lo: float, fine_hi: float) -> tuple[float, 
 
 MAP_X = _axis(MAP_BACK, MAP_FRONT, MAP_BACK, MAP_FINE_FRONT)
 MAP_Y = _axis(-MAP_SIDE, MAP_SIDE, -MAP_FINE_SIDE, MAP_FINE_SIDE)
+# Actor scan (ACTOR_SCAN): "lidar", the ranges along a fan of rays from the L1's place on the base (LIDAR_POS,
+# config.yaml's real_lidar), as the lidar measures them, so what a riser hides stays hidden; or "map", the height map
+# above. The critic always gets the height map and the grid below. The fan: LIDAR_ROWS rows aimed at the ground
+# LIDAR_NEAR to LIDAR_FAR m ahead of the lidar (standing, LIDAR_HEIGHT above flat ground) by LIDAR_COLS columns over
+# +-LIDAR_AZIMUTH deg, turning with the whole base. Ranges clipped to LIDAR_RANGE m (no hit reads LIDAR_RANGE), now and
+# LIDAR_LAG steps back; per ray +-LIDAR_NOISE m, LIDAR_DROP no return, LIDAR_STALE a reading 1 to LIDAR_STALE_STEPS
+# steps older (the L1's sparse scan).
+ACTOR_SCAN = os.environ.get("CLOCK_SCAN_ACTOR_SCAN", "lidar")
+LIDAR_POS = (0.28945, 0.0, -0.046825)
+LIDAR_HEIGHT = _env("LIDAR_HEIGHT", 0.273)
+LIDAR_ROWS = int(_env("LIDAR_ROWS", 16))
+LIDAR_COLS = int(_env("LIDAR_COLS", 21))
+LIDAR_NEAR = _env("LIDAR_NEAR", 0.07)
+LIDAR_FAR = _env("LIDAR_FAR", 1.3)
+LIDAR_AZIMUTH = _env("LIDAR_AZIMUTH", 60.0)
+LIDAR_RANGE = _env("LIDAR_RANGE", 3.0)
+LIDAR_LAG = int(_env("LIDAR_LAG", 5))
+LIDAR_NOISE = _env("LIDAR_NOISE", 0.02)
+LIDAR_DROP = _env("LIDAR_DROP", 0.15)
+LIDAR_STALE = _env("LIDAR_STALE", 0.15)
+LIDAR_STALE_STEPS = int(_env("LIDAR_STALE_STEPS", 10))
+LIDAR_DEPRESSIONS = tuple(
+    round(float(np.degrees(np.arctan2(LIDAR_HEIGHT, d))), 3) for d in np.linspace(LIDAR_NEAR, LIDAR_FAR, LIDAR_ROWS)
+)
+LIDAR_AZIMUTHS = tuple(round(float(a), 3) for a in np.linspace(-LIDAR_AZIMUTH, LIDAR_AZIMUTH, LIDAR_COLS))
 # Height grid, critic only: 1.6 x 1.0 m at 0.1 m (187 rays) under the base, turned with its yaw. Base height
 # for the reward and the critic is taken from it.
 SCAN_SIZE = (_env("SCAN_LENGTH", 1.6), _env("SCAN_WIDTH", 1.0))
 SCAN_RESOLUTION = _env("SCAN_RESOLUTION", 0.1)
 
 # ── Terrain ────────────────────────────────────────────────────────────────────────────────
+# Square tile side, m. On narrow stairs, NARROW_APPROACH m of lower floor before the flight; the upper floor gets the
+# rest (2.5 m at 10 m tiles).
+TILE_SIZE = _env("TILE_SIZE", 10.0)
+NARROW_APPROACH = _env("NARROW_APPROACH", 3.0)
 SMOOTH_NOISE = _env("SMOOTH_NOISE", 0.02)
 ROUGH_NOISE = _env("ROUGH_NOISE", 0.04)
 BOX_HEIGHT = _range("BOX", 0.02, 0.10)
@@ -81,6 +110,12 @@ STEP_HEIGHT = _range("STEP", 0.05, 0.22)
 STEP_COUNTS = tuple(int(c) for c in os.environ.get("CLOCK_SCAN_STEP_COUNTS", "1,2,3,6").split(","))
 STEP_HEIGHTS_PER_COUNT = int(_env("STEP_HEIGHTS_PER_COUNT", 4))
 NUM_ROWS = len(STEP_COUNTS) * STEP_HEIGHTS_PER_COUNT
+# Narrow stairs: two floors joined by one straight flight of NARROW_STEPS steps, its sides open, with balusters and a
+# handrail, or a wall. Its levels come in the same blocks as STEP_COUNTS, the flight narrowing over NARROW_WIDTHS (m).
+NARROW_WIDTHS = tuple(float(w) for w in os.environ.get("CLOCK_SCAN_NARROW_WIDTHS", "1.6,1.2,1.0,0.8").split(","))
+NARROW_STEPS = int(_env("NARROW_STEPS", 15))
+if len(NARROW_WIDTHS) != len(STEP_COUNTS):
+    raise ValueError("CLOCK_SCAN_NARROW_WIDTHS needs one width per entry of CLOCK_SCAN_STEP_COUNTS")
 
 
 def stairs_difficulty(height: float) -> float:
@@ -89,21 +124,30 @@ def stairs_difficulty(height: float) -> float:
     sub = min(max((height - STEP_HEIGHT[0]) / (STEP_HEIGHT[1] - STEP_HEIGHT[0]), 0.0), 1.0)
     return min((parts - 1 + sub) / parts, 1.0)
 # Stages of mdp.terrain_stages, as the share of envs on each terrain type. 1: Simple's ground. 2: rough and
-# boxes added. 3: stairs, STAIRS_SHARE of the envs, the rest kept in stage 2's mix.
+# boxes added. 3: square stairs, STAIRS_SHARE of the envs, the rest kept in stage 2's mix. 4: NARROW_SHARE of the
+# stair envs moved to narrow stairs.
 STAIRS_SHARE = _env("STAIRS_SHARE", 0.5)
+NARROW_SHARE = _env("NARROW_SHARE", 0.5)
 _STAGE2 = {"flat": 0.15, "smooth": 0.15, "random_rough": 0.35, "boxes": 0.35}
 TERRAIN_STAGES = [
     {"flat": 0.3, "smooth": 0.7},
     _STAGE2,
     {**{k: v * (1.0 - STAIRS_SHARE) for k, v in _STAGE2.items()},
      "pyramid_stairs": STAIRS_SHARE / 2, "pyramid_stairs_inv": STAIRS_SHARE / 2},
+    {**{k: v * (1.0 - STAIRS_SHARE) for k, v in _STAGE2.items()},
+     "pyramid_stairs": STAIRS_SHARE * (1.0 - NARROW_SHARE) / 2,
+     "pyramid_stairs_inv": STAIRS_SHARE * (1.0 - NARROW_SHARE) / 2,
+     "narrow_stairs": STAIRS_SHARE * NARROW_SHARE / 2,
+     "narrow_stairs_inv": STAIRS_SHARE * NARROW_SHARE / 2},
 ]
-STAIR_TYPES = ("pyramid_stairs", "pyramid_stairs_inv")
+STAIR_TYPES = ("pyramid_stairs", "pyramid_stairs_inv", "narrow_stairs", "narrow_stairs_inv")
 # Next stage after STAGE_HOLD checks in a row (one per episode length) with the full speed range, tracking
-# above STAGE_TRACK x its weight, and (stage 2 to 3) a mean boxes difficulty of at least STAGE_BOXES_DIFFICULTY.
+# above STAGE_TRACK x its weight, and a mean difficulty of at least STAGE_BOXES_DIFFICULTY on boxes (stage 2 to 3) and
+# STAGE_STAIRS_DIFFICULTY on square stairs (3 to 4; 0.75: the last block of step counts).
 STAGE_TRACK = _env("STAGE_TRACK", 0.65)
 STAGE_HOLD = int(_env("STAGE_HOLD", 3))
 STAGE_BOXES_DIFFICULTY = _env("STAGE_BOXES_DIFFICULTY", 0.4)
+STAGE_STAIRS_DIFFICULTY = _env("STAGE_STAIRS_DIFFICULTY", 0.75)
 # Once stairs are in: every env on stairs walks forward only for FORWARD_HOLD_ITERS iterations, then the share
 # falls linearly to FORWARD_END over FORWARD_RAMP_ITERS. Forward only: 0 <= x <= FORWARD_X_MAX, y x FORWARD_Y_SCALE,
 # turning x FORWARD_YAW_SCALE.
@@ -123,6 +167,10 @@ LEAVE_DISTANCE = _env("LEAVE_DISTANCE", 0.0)
 STAIRS_LEAVE_DISTANCE = _env("STAIRS_LEAVE_DISTANCE", 2.0)
 # Fall penalty on stair tiles, as a share of W_TERMINATION.
 STAIRS_FALL_SCALE = _env("STAIRS_FALL_SCALE", 0.25)
+# Going over an edge: the base down faster than FALL_SPEED (m/s) ends the episode, with W_FALL_OFF on top of
+# the fall penalty.
+FALL_SPEED = _env("FALL_SPEED", 3.0)
+W_FALL_OFF = _env("W_FALL_OFF", -750.0)
 # Feet hitting a vertical face (feet_stumble) and body contacts on stair tiles, as a share of their weights.
 STAIRS_STUMBLE_SCALE = _env("STAIRS_STUMBLE_SCALE", 1.0)
 STAIRS_CONTACT_SCALE = _env("STAIRS_CONTACT_SCALE", 1.0)
@@ -136,6 +184,13 @@ SLOW_FRACTION = _env("SLOW_FRACTION", 0.6)
 SLOW_RANGE = _range("SLOW", 0.05, 0.3)
 YAW_ONLY = _env("YAW_ONLY", 0.15)
 STANDBY = _range("STANDBY", 1.0, 3.0)
+# On narrow stairs the robot starts at the tile's heading +- ALIGNED_YAW (rad) and within +-ALIGNED_X, +-ALIGNED_Y
+# (m) of its origin, and an operator holds that heading: turning STEER_GAIN x the heading error within +-STEER_MAX,
+# sideways speed x STEER_Y_SCALE. The policy is never told where the stairs go.
+ALIGNED_RANGE = (_env("ALIGNED_X", 0.3), _env("ALIGNED_Y", 0.15), _env("ALIGNED_YAW", 0.3))
+STEER_GAIN = _env("STEER_GAIN", 1.0)
+STEER_MAX = _env("STEER_MAX", 0.5)
+STEER_Y_SCALE = _env("STEER_Y_SCALE", 0.5)
 
 # ── Trot clock ─────────────────────────────────────────────────────────────────────────────
 FEET = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
@@ -256,7 +311,7 @@ def _robot_cfg() -> ArticulationCfg:
 
 
 ROUGH_TERRAINS_CFG = terrain_gen.TerrainGeneratorCfg(
-    size=(8.0, 8.0),
+    size=(TILE_SIZE, TILE_SIZE),
     border_width=20.0,
     num_rows=NUM_ROWS,
     num_cols=20,
@@ -278,11 +333,19 @@ ROUGH_TERRAINS_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.15, grid_width=0.45, grid_height_range=BOX_HEIGHT, platform_width=2.0
         ),
         "pyramid_stairs": mdp.CountedStairsTerrainCfg(
-            proportion=0.25, step_counts=STEP_COUNTS, step_height_range=STEP_HEIGHT, step_width=0.3, platform_width=3.0
+            proportion=0.1, step_counts=STEP_COUNTS, step_height_range=STEP_HEIGHT, step_width=0.3, platform_width=3.0
         ),
         "pyramid_stairs_inv": mdp.CountedStairsTerrainCfg(
-            proportion=0.25, step_counts=STEP_COUNTS, step_height_range=STEP_HEIGHT, step_width=0.3, platform_width=3.0,
+            proportion=0.1, step_counts=STEP_COUNTS, step_height_range=STEP_HEIGHT, step_width=0.3, platform_width=3.0,
             inverted=True,
+        ),
+        "narrow_stairs": mdp.NarrowStairsTerrainCfg(
+            proportion=0.15, widths=NARROW_WIDTHS, step_height_range=STEP_HEIGHT, num_steps=NARROW_STEPS,
+            approach=NARROW_APPROACH,
+        ),
+        "narrow_stairs_inv": mdp.NarrowStairsTerrainCfg(
+            proportion=0.15, widths=NARROW_WIDTHS, step_height_range=STEP_HEIGHT, num_steps=NARROW_STEPS,
+            approach=NARROW_APPROACH, inverted=True,
         ),
     },
 )
@@ -323,6 +386,15 @@ class RobotSceneCfg(InteractiveSceneCfg):
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
         ray_alignment="yaw",
         pattern_cfg=mdp.FootprintPatternCfg(x_points=MAP_X, y_points=MAP_Y),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+    lidar = RayCasterCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/base",
+        offset=RayCasterCfg.OffsetCfg(pos=LIDAR_POS),
+        ray_alignment="base",
+        pattern_cfg=mdp.FanPatternCfg(depressions=LIDAR_DEPRESSIONS, azimuths=LIDAR_AZIMUTHS),
+        max_distance=LIDAR_RANGE,
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
     )
@@ -398,9 +470,10 @@ class EventCfg:
 
     # reset, in this order: reset_start_pose overwrites the envs it picks after the nominal reset
     reset_base = EventTerm(
-        func=mdp.reset_root_state_uniform,
+        func=mdp.reset_root_state_aligned,
         mode="reset",
         params={
+            "aligned_range": ALIGNED_RANGE,
             "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
             "velocity_range": {
                 "x": (0.0, 0.0),
@@ -436,6 +509,7 @@ class EventCfg:
             "lying_joint_pos": LYING_JOINT_POS,
             "drop_fraction": DROP_FRACTION,
             "drop_height_range": DROP_HEIGHT,
+            "aligned_range": ALIGNED_RANGE,
         },
     )
 
@@ -473,6 +547,9 @@ class CommandsCfg:
         forward_only_x_max=FORWARD_X_MAX,
         forward_only_y_scale=FORWARD_Y_SCALE,
         forward_only_yaw_scale=FORWARD_YAW_SCALE,
+        steer_gain=STEER_GAIN,
+        steer_max=STEER_MAX,
+        steer_y_scale=STEER_Y_SCALE,
     )
     # After base_velocity: the clock reads its command.
     clock = mdp.SpeedClockCommandCfg(
@@ -497,7 +574,7 @@ class ActionsCfg:
 class ObservationsCfg:
     @configclass
     class PolicyCfg(ObsGroup):
-        """Deployment's 48-wide layout, then the clock (8) and the height map, in this order."""
+        """Deployment's 48-wide layout, then the clock (8) and the actor scan (ACTOR_SCAN), in this order."""
 
         base_lin_vel = ObsTerm(
             func=mdp.biased_obs,
@@ -533,6 +610,18 @@ class ObservationsCfg:
             params={"sensor_cfg": _MAP, "bias": MAP_BIAS},
             noise=Unoise(n_min=-SCAN_NOISE, n_max=SCAN_NOISE) if SCAN_NOISE else None,
             clip=(-1.0, 1.0),
+        )
+        lidar_ranges = ObsTerm(
+            func=mdp.lidar_ranges,
+            params={
+                "sensor_cfg": SceneEntityCfg("lidar"),
+                "max_range": LIDAR_RANGE,
+                "lags": (0, LIDAR_LAG),
+                "noise": LIDAR_NOISE,
+                "drop_prob": LIDAR_DROP,
+                "stale_prob": LIDAR_STALE,
+                "stale_steps": LIDAR_STALE_STEPS,
+            },
         )
 
         def __post_init__(self):
@@ -621,6 +710,7 @@ class RewardsCfg:
         weight=W_TERMINATION,
         params={"scales": {name: STAIRS_FALL_SCALE for name in STAIR_TYPES}},
     )
+    fall_off = RewTerm(func=mdp.is_terminated_term, weight=W_FALL_OFF, params={"term_keys": "falling"})
 
     # -- posture
     joint_pos = RewTerm(
@@ -705,6 +795,7 @@ class TerminationsCfg:
         else DoneTerm(func=mdp.bad_orientation, params={"limit_angle": TILT_LIMIT})
     )
     physics_blowup = DoneTerm(func=mdp.physics_blowup)
+    falling = DoneTerm(func=mdp.falling, params={"max_down_speed": FALL_SPEED})
 
 
 @configclass
@@ -713,8 +804,8 @@ class CurriculumCfg:
         func=mdp.terrain_stages,
         params={
             "stages": TERRAIN_STAGES,
-            "level_types": ("boxes",),
-            "level_gates": (0.0, STAGE_BOXES_DIFFICULTY * NUM_ROWS),
+            "level_types": [("boxes",), ("boxes",), ("pyramid_stairs", "pyramid_stairs_inv")],
+            "level_gates": (0.0, STAGE_BOXES_DIFFICULTY * NUM_ROWS, STAGE_STAIRS_DIFFICULTY * NUM_ROWS),
             "stair_types": STAIR_TYPES,
             "stair_rows_per_count": STEP_HEIGHTS_PER_COUNT,
             "stair_counts": STEP_COUNTS,
@@ -751,11 +842,19 @@ class ClockScanEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
-        self.sim.physics = PhysxCfg(gpu_max_rigid_patch_count=10 * 2**15)
+        # Narrow stairs (balusters, walls) took 380k contact patches with 4096 robots, over the old 328k.
+        self.sim.physics = PhysxCfg(gpu_max_rigid_patch_count=int(_env("PATCH_COUNT", 2**20)))
         self.sim.use_newton_actuators = False
         self.scene.contact_forces.update_period = self.sim.dt
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
         self.scene.map_scanner.update_period = self.decimation * self.sim.dt
+        self.scene.lidar.update_period = self.decimation * self.sim.dt
+        if ACTOR_SCAN == "lidar":
+            self.observations.policy.height_map = None
+        elif ACTOR_SCAN == "map":
+            self.observations.policy.lidar_ranges = None
+        else:
+            raise ValueError(f"CLOCK_SCAN_ACTOR_SCAN must be lidar or map, not {ACTOR_SCAN}")
         for foot in FEET:
             getattr(self.scene, f"foot_ground_{foot[:2]}").update_period = self.decimation * self.sim.dt
 
@@ -794,6 +893,7 @@ class ClockScanPlayEnvCfg(ClockScanEnvCfg):
             self.events.push_robot = None
             yaw = _env("PLAY_YAW", 0.0)
             self.events.reset_base.params["pose_range"]["yaw"] = (yaw, yaw)
+            self.events.reset_base.params["aligned_range"] = (0.0, 0.0, 0.0)
             print(f"[ClockScan] every env pinned to lin_vel_x = {v} m/s, start yaw {yaw} rad, standing starts, no pushes")
 
         gen = self.scene.terrain.terrain_generator
