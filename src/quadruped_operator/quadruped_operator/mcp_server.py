@@ -243,15 +243,19 @@ class Robot(Node):
     def skill(self, name, seconds=0.0):
         name = str(name).strip().lower()
         if name in VISIT_SKILLS and name not in SKILLS:
-            return text(f"{name} is done at an object: call visit(id, '{name}')", True)
+            return text(f"{name} is done at an object: call visit('{name}', id) or visit('{name}', x=, y=)", True)
         if name not in SKILLS:
             return text(f"unknown skill '{name}'; one of {', '.join(SKILLS)}", True)
         return self._motion(name, self._skill, name, float(seconds or 0.0))
 
-    def visit(self, id, trick):
+    def visit(self, trick, id=None, x=None, y=None):
         trick = str(trick).strip().lower()
         if trick not in VISIT_SKILLS:
             return text(f"unknown trick '{trick}'; one of {', '.join(VISIT_SKILLS)}", True)
+        if id is None:
+            if x is None or y is None:
+                return text("give the object's id, or its x and y on the map", True)
+            return self._motion("visit", self._visit, {"x": float(x), "y": float(y)}, trick)
         o = next((o for o in self.objects if o["id"] == int(id)), None)
         if o is None:
             return text(f"no object {id}; call list_objects", True)
@@ -375,14 +379,15 @@ class Robot(Node):
             gap = float(self.cfg.get("approach", 0.6))
         nav_gap = max(gap, float(self.cfg.get("nav_standoff", 0.8)))
         nx, ny = spot(nav_gap)
-        res = self._go_to(nx, ny, math.degrees(yaw), o)
+        obj = o if "id" in o else None
+        res = self._go_to(nx, ny, math.degrees(yaw), obj)
         if res["isError"] or self.stopping.is_set():
             return res
         if gap < nav_gap and self.cfg.get("final_step", True):
             why = self._final_step(*spot(gap), yaw)
             if why:
                 return text(f"{why}; no {trick}", True)
-        return self._skill(trick, 0.0, o)
+        return self._skill(trick, 0.0, obj)
 
     def _final_step(self, x, y, yaw):
         p = self.pose()
@@ -491,9 +496,11 @@ TOOLS = [
      "localize (find itself on a saved map). Tricks at an object go through visit.",
      schema({"name": {"type": "string", "enum": SKILLS},
              "seconds": {"type": "number", "description": "for tricks; 0 = the default length"}}, ["name"])),
-    ("visit", "Walk to an object from list_objects, take the trick's pose there and do the trick: sniff (nose at "
-     "it), pee_left / pee_right (it beside that hind leg), wiggle (facing it). Needs walk first.",
-     schema({"id": {"type": "integer"}, "trick": {"type": "string", "enum": VISIT_SKILLS}}, ["id", "trick"])),
+    ("visit", "Walk to an object (its id from list_objects, or its x and y on the map), take the trick's pose there "
+     "and do the trick: sniff (nose at it), pee_left / pee_right (it beside that hind leg), wiggle (facing it). "
+     "Needs walk first.",
+     schema({"trick": {"type": "string", "enum": VISIT_SKILLS}, "id": {"type": "integer"},
+             "x": {"type": "number"}, "y": {"type": "number"}}, ["trick"])),
     ("move", "Step or turn from where the robot stands, with Nav2 (it goes around obstacles or refuses), e.g. to "
      "turn and look around. At most 2 m. Blocks until there.",
      schema({"forward": {"type": "number", "description": "metres, - is back"},
@@ -503,14 +510,21 @@ TOOLS = [
     ("look", "A photo from the front camera.",
      schema({"boxes": {"type": "boolean", "description": "with the object detector's boxes drawn"}})),
 ]
-OBJECT_TOOLS = {"list_objects", "go_to_object", "visit"}
+OBJECT_TOOLS = {"list_objects", "go_to_object"}
+VISIT_AT_POINT = ("visit", "Walk to a point on the map (an object seen in a photo), take the trick's pose there and do "
+                  "the trick: sniff (nose at it), pee_left / pee_right (it beside that hind leg), wiggle (facing "
+                  "it). Needs walk first.",
+                  schema({"trick": {"type": "string", "enum": VISIT_SKILLS},
+                          "x": {"type": "number"}, "y": {"type": "number"}}, ["trick", "x", "y"]))
 
 
 def tools_for(objects):
-    """TOOLS, or without the object tools and look's boxes when there is no object detection."""
+    """TOOLS, or without the object tools and look's boxes, and visit by point only, when there is no object
+    detection."""
     if objects:
         return TOOLS
-    return [(n, d, schema() if n == "look" else s) for n, d, s in TOOLS if n not in OBJECT_TOOLS]
+    return [VISIT_AT_POINT if n == "visit" else (n, d, schema() if n == "look" else s)
+            for n, d, s in TOOLS if n not in OBJECT_TOOLS]
 
 
 class Handler(BaseHTTPRequestHandler):

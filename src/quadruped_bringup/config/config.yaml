@@ -151,8 +151,9 @@ object_mapper:
 #   wall, the nearest frontiers_max of them.
 #   arrive_tolerance: go_to / move ending farther than this from the goal (Nav2 stops at the nearest free spot
 #   when the goal is in an obstacle) is reported as stopped short, not arrived.
-#   objects: the object tools (list_objects, go_to_object, visit, look's boxes): true, false, or auto = offered
-#   only while object_mapper publishes /objects ([I] with detection). Off, an on-board LLM is not sent after them.
+#   objects: the object tools (list_objects, go_to_object, visit by id, look's boxes): true, false, or auto = offered
+#   only while object_mapper publishes /objects ([I] with detection). Off, an on-board LLM is not sent after them;
+#   visit then takes a map point (x, y) only.
 mcp:
   host: 0.0.0.0
   objects: auto
