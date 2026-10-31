@@ -170,6 +170,8 @@ object_mapper:
 #   objects: the object tools (list_objects, go_to_object, visit by id, look's boxes): true, false, or auto = offered
 #   only while object_mapper publishes /objects ([I] with detection). Off, an on-board LLM is not sent after them;
 #   visit then takes a map point (x, y) only.
+#   tf_idle_s: TF is listened to only around tool calls and this long after the last (a Python TF listener costs
+#   ~20% of an Orin Nano core at the robot's 100 /tf messages per second).
 mcp:
   host: 0.0.0.0
   objects: auto
