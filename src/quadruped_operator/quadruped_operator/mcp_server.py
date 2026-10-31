@@ -12,6 +12,7 @@ Set QUADRUPED_MCP_TOKEN (or --token) to require "Authorization: Bearer <token>".
 
 import argparse
 import base64
+import contextlib
 import json
 import math
 import os
@@ -68,8 +69,15 @@ class Robot(Node):
         self.map_error = ""
         self.stopping = threading.Event()
         self.goal = None
+        # TF only around tool calls: a Python TF listener decodes every /tf message (100/s on the robot, 20% of
+        # an Orin Nano core with nothing asked of it). Opened by tf_in_use, closed tf_idle_s after the last call.
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.tf_listener = None
+        self.tf_lock = threading.Lock()
+        self.tf_users = 0
+        self.tf_opened = 0.0
+        self.tf_last = 0.0
+        self.create_timer(5.0, self._tf_close_idle)
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(String, "/robot_state", self._state_cb, 10)
         self.create_subscription(String, "/objects", self._objects_cb, latched)
@@ -109,8 +117,39 @@ class Robot(Node):
             return None
         return self.state
 
+    @contextlib.contextmanager
+    def tf_in_use(self):
+        with self.tf_lock:
+            if self.tf_listener is None:
+                self.tf_buffer = Buffer()  # new: the old one stopped being filled when it closed
+                self.tf_listener = TransformListener(self.tf_buffer, self)
+                self.tf_opened = time.monotonic()
+            self.tf_users += 1
+        try:
+            yield
+        finally:
+            with self.tf_lock:
+                self.tf_users -= 1
+                self.tf_last = time.monotonic()
+
+    def _tf_close_idle(self):
+        with self.tf_lock:
+            if (self.tf_listener is not None and self.tf_users == 0
+                    and time.monotonic() - self.tf_last > float(self.cfg.get("tf_idle_s", 30.0))):
+                self.tf_listener.unregister()
+                self.tf_listener = None
+
     def pose(self):
-        """(x, y, yaw, frame) of base_footprint: map when Nav2/SLAM runs, else odom."""
+        """(x, y, yaw, frame) of base_footprint: map when Nav2/SLAM runs, else odom. Just after tf_in_use opened
+        the listener, waits up to a second for the first transforms."""
+        end = self.tf_opened + 1.0
+        while True:
+            p = self._pose()
+            if (p is not None and p[3] == "map") or time.monotonic() >= end:
+                return p
+            time.sleep(0.02)
+
+    def _pose(self):
         for frame in ("map", "odom"):
             try:
                 t = self.tf_buffer.lookup_transform(frame, "base_footprint", Time())
@@ -602,7 +641,8 @@ class Handler(BaseHTTPRequestHandler):
                             "error": {"code": -32602, "message": f"unknown tool {name}{why}"}}
                 args = params.get("arguments") or {}
                 self.robot.get_logger().info(f"{name} {json.dumps(args)}")
-                result = getattr(self.robot, name)(**args)
+                with self.robot.tf_in_use():
+                    result = getattr(self.robot, name)(**args)
                 self.robot.get_logger().info(f"{name} -> {result['content'][0].get('text', 'image')[:200]}")
             else:
                 return {"jsonrpc": "2.0", "id": m["id"],
