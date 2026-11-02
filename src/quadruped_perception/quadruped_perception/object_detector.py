@@ -139,6 +139,7 @@ class ObjectDetector(Node):
         import torch
         self.device = 0 if torch.cuda.is_available() else "cpu"
         self.warm = False
+        self.width = None
         self.latest = None
         self.new = threading.Event()
         self.stop = threading.Event()
@@ -174,9 +175,19 @@ class ObjectDetector(Node):
                                   quantize=16 if self.device == 0 else None, verbose=False)[0]
 
     def _detect(self, m):
-        image = cv2.imdecode(np.frombuffer(bytes(m.data), np.uint8), cv2.IMREAD_COLOR)
+        # A JPEG decoded at 1/2 or 1/4 size while that is still imgsz wide: the model shrinks it to imgsz anyway, and
+        # the full 1920 x 1080 decode was most of the node's CPU. Boxes are in this image's pixels ("width").
+        flag = cv2.IMREAD_COLOR
+        if self.width and "png" not in m.format:
+            for k, f in ((4, cv2.IMREAD_REDUCED_COLOR_4), (2, cv2.IMREAD_REDUCED_COLOR_2)):
+                if self.width // k >= self.imgsz:
+                    flag = f
+                    break
+        image = cv2.imdecode(np.frombuffer(bytes(m.data), np.uint8), flag)
         if image is None:
             return
+        if flag == cv2.IMREAD_COLOR:
+            self.width = image.shape[1]
         if not self.warm:
             self._predict(image)
             self.warm = True

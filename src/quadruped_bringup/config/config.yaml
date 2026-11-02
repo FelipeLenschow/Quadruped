@@ -114,6 +114,7 @@ cameras:
 #          scores are lower than -pf's, and the word matters: the lab's bins scored 0.41 as "stacking bin",
 #          0.08 as "storage bin" (a chair 0.83), so conf is 0.3, not -pf's 0.7.
 #   class_conf: a label's own threshold over conf (real chairs scored 0.8-0.9, a black case 0.32 as one).
+#   rate: Hz; the object mapper's work scales with it too (5 Hz: detector 20%, mapper 39% of a core).
 #   max_overlap: a box that much inside or around a higher-scoring box of the same label is dropped (YOLO26
 #   has no NMS, and a chair's second box became a second chair on the map).
 #   On the Jetson, `ros2 run quadruped_perception object_detector --export` builds a TensorRT engine
@@ -122,7 +123,7 @@ detector:
   camera: front
   model: models/yoloe-26s-seg.pt
   classes: [chair, stacking bin, backpack, trash can, box, monitor, door, person]
-  rate: 5
+  rate: 2
   conf: 0.3
   class_conf: {chair: 0.5}
   max_overlap: 0.6
