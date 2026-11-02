@@ -173,7 +173,8 @@ object_mapper:
 #   visit then takes a map point (x, y) only.
 #   find: look, then the vision model (vlm_model on Ollama at ollama) is asked for the thing's box alone, then
 #   locate. vlm_ctx must be the context the agent loads the model with ([A]: 8192), or Ollama reloads it. What it
-#   finds goes on /objects (the app's map) while object_mapper does not publish there.
+#   finds goes on /objects (the app's map) while object_mapper does not publish there. A name already on /objects
+#   (found before, or object_mapper's label) is given from there, with no photo: cleared by the app's "Clear objects".
 #   locate: a box in look's last photo to a map point, from object_mapper's cloud, floor_z, floor_margin and
 #   max_depth_shift (no detector needed). Not listed to the agent (its own boxes are wrong), but callable for tests.
 #   tf_idle_s: TF is listened to only around tool calls and this long after the last (a Python TF listener costs

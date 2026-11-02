@@ -57,8 +57,8 @@ INSTRUCTIONS = """You control a Unitree Go2 quadruped. Positions are metres in t
 radians/degrees, counter-clockwise, 0 along the map's x axis. Call skill('walk') before moving. Motions block
 until done and report the result. A human with a joystick or the phone app can always take over.
 The tricks are harmless dog poses for fun: sniff points the nose at an object, pee_left / pee_right lift a hind leg
-beside it (nothing is released), wiggle wags the body. To go to something you see: find it by name ("the trash
-can"), then visit or go_to the x, y that find gives."""
+beside it (nothing is released), wiggle wags the body. To go to something you see: find it by name, then visit or
+go_to the x, y that find gives."""
 
 
 def yaw_of(q):
@@ -144,9 +144,14 @@ class Robot(Node):
             return self.mapper_on()
         return bool(mode)
 
+    @staticmethod
+    def _label(what):
+        """'my shoe', 'the shoe' and 'Shoe' are all 'shoe'."""
+        return re.sub(r"^((the|a|an|my|your|his|her|their|our|this|that)\s+)+", "", what.strip().lower())
+
     def _add_found(self, what, x, y):
         """The same name found again within 1 m is the same thing, moved to the new point."""
-        label = re.sub(r"^(the|a|an)\s+", "", what.lower())
+        label = self._label(what)
         f = next((f for f in self.found if f["label"] == label and math.hypot(f["x"] - x, f["y"] - y) < 1.0), None)
         if f is None:
             f = {"id": max((f["id"] for f in self.found), default=0) + 1, "label": label, "sightings": 0}
@@ -398,7 +403,14 @@ class Robot(Node):
         2B model's boxes missed 5 times out of 5, alone 0 out of 5), then locate."""
         what = str(what).strip()
         if not what:
-            return text("say what to find, e.g. 'the trash can'", True)
+            return text("say what to find: the thing's name", True)
+        # Already on /objects (found before, or object_mapper's): its place on the map, with no photo, so it is found
+        # while out of view too (and ~5 s faster). Of several, the nearest.
+        known = [dict(o, **self._toward(o["x"], o["y"])) for o in self.objects if o["label"] == self._label(what)]
+        if known:
+            o = min(known, key=lambda o: o.get("distance_m", 0.0))
+            out = {"x": o["x"], "y": o["y"], "from": "on the map (found before; no photo taken)"}
+            return text(json.dumps(dict(out, **{k: o[k] for k in ("distance_m", "bearing_deg") if k in o})))
         seen = self.look()
         if seen["isError"]:
             return seen
@@ -472,12 +484,16 @@ class Robot(Node):
             source = "floor under the box (no lidar points in it)"
         out = {"x": round(float(p[0]), 2), "y": round(float(p[1]), 2), "from": source,
                "photo_age_s": round(time.monotonic() - s["time"], 1)}
+        return text(json.dumps(dict(out, **self._toward(p[0], p[1]))))
+
+    def _toward(self, x, y):
+        """distance_m and bearing_deg from the robot to map point (x, y); {} without a map pose."""
         r = self.pose()
-        if r is not None and r[3] == "map":
-            out["distance_m"] = round(math.hypot(p[0] - r[0], p[1] - r[1]), 2)
-            b = math.atan2(p[1] - r[1], p[0] - r[0]) - r[2]
-            out["bearing_deg"] = round(math.degrees(math.atan2(math.sin(b), math.cos(b))))
-        return text(json.dumps(out))
+        if r is None or r[3] != "map":
+            return {}
+        b = math.atan2(y - r[1], x - r[0]) - r[2]
+        return {"distance_m": round(math.hypot(x - r[0], y - r[1]), 2),
+                "bearing_deg": round(math.degrees(math.atan2(math.sin(b), math.cos(b))))}
 
     # --- helpers ---
 
@@ -741,10 +757,12 @@ TOOLS = [
     ("stop", "Cancel navigation and stop moving.", schema()),
     ("look", "A photo from the front camera.",
      schema({"boxes": {"type": "boolean", "description": "with the object detector's boxes drawn"}})),
+    # No example names in find's text or INSTRUCTIONS: the 2B agent called find with the example ("the trash can")
+    # 18 times in 20, not with the thing in its task.
     ("find", "Find a thing in the camera's view and where it is on the map, for visit or go_to: takes a photo and "
-     "returns x, y. Name a thing you can see, e.g. 'the trash can' or 'the red bins', not a purpose ('a place to "
-     "pee'). Not found: name another thing, or turn and try again.",
-     schema({"what": {"type": "string", "description": "the thing, e.g. 'the trash can'"}}, ["what"])),
+     "returns x, y. Name a thing you can see, not a purpose. A thing already on the map comes from there, also out of view. "
+     "Not found: name another thing, or turn and try again.",
+     schema({"what": {"type": "string", "description": "the thing's name"}}, ["what"])),
     ("locate", "Where something in the last look photo is on the map, for visit or go_to: give its box [x1, y1, x2, "
      "y2] (or a point x, y) in pixels of that photo, or in thousandths of its width and height with thousandths "
      "true (Qwen-VL boxes are in thousandths). Uses the lidar inside the box, or the floor under it.",

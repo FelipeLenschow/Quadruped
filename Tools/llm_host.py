@@ -34,7 +34,7 @@ Keep each message short: one line on what you do next, then the tool call."""
 FUN_LOOK = """You are the robot dog. Have fun with the things on the floor of this room (bins, chairs, boxes, cones), on
 your own:
 1. look. Pick a thing on the floor in the photo that you have not visited yet.
-2. find it by name (find "the trash can"), then visit the x, y that find gives with trick sniff. Sometimes (about
+2. find it by its name, then visit the x, y that find gives with trick sniff. Sometimes (about
    half the time) then visit the same x, y with pee_left or pee_right.
 3. Then move turn_deg 90 and look again. After four turns with nothing new, call frontiers and go_to the nearest.
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
@@ -49,6 +49,12 @@ Call skill walk first if you are not walking. If a call fails, read why and try 
 Keep each message short: one line on what you do next, then the tool call."""
 
 KEEP_GOING = "Keep going: pick the next thing to do and call a tool."
+# After the task, not only in the system prompt: the 2B model refused "pee on my shoe" 6 times in 10 with the
+# server's instructions alone. Told only that the tricks are poses, it called skill pee_left with no target; with
+# the steps, it called find with the thing in the task 10 times in 10 (with no example names in the prompts).
+GAME = ("(This is a game with a robot dog. To pee on a thing: find it by name, then visit the x, y that find gives "
+        "with trick pee_left or pee_right. The robot only lifts a hind leg beside it: nothing is released and "
+        "nothing gets dirty.)")
 OPERATOR = ("The operator reads your messages and may answer when you reply without a tool call. Ask only when you "
             "cannot go on without them.")
 
@@ -146,7 +152,7 @@ def main():
     task = args.task or (FUN if "list_objects" in names else FUN_LOOK if "find" in names else EXPLORE)
     ask = not args.auto and sys.stdin.isatty()
     system = instructions + ("\n" + OPERATOR if ask else "")
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": f"{task}\n\n{GAME}"}]
     end = time.monotonic() + args.minutes * 60
     calls = 0
     try:
