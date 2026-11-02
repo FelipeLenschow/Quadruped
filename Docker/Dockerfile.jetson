@@ -84,7 +84,8 @@ RUN FIND='import importlib.util as u, sys; sys.exit(u.find_spec("tensorrt") is N
 
 # 8. Python packages, the same list as the laptop image, into the system Python 3.8 (no venv: the base's torch
 #    and ROS live there). NVIDIA's OpenCV Python binding goes, so cv2 is pip's as on the laptop; its C++
-#    libraries stay for cv_bridge. JetPack 5's TensorRT uses np.bool, gone in numpy 1.24.
+#    libraries stay for cv_bridge. JetPack 5's TensorRT uses np.bool, gone in numpy 1.24. CLIP: a prompted
+#    YOLOE (detector classes:) tokenizes them with it; ultralytics installs it itself only when online.
 RUN echo "numpy==1.23.5" >> /opt/pip-constraints.txt && \
     dpkg -r --force-depends opencv-python && \
     pip3 install --no-cache-dir --upgrade pip wheel && \
@@ -103,17 +104,20 @@ RUN echo "numpy==1.23.5" >> /opt/pip-constraints.txt && \
     mcap \
     mcap-ros2-support \
     ultralytics==8.4.175 \
+    "git+https://github.com/ultralytics/CLIP.git" \
     onnxslim && \
     pip3 uninstall -y opencv-python && \
     rm -rf "$(pip3 show ultralytics | sed -n 's/^Location: //p')/cv2" && \
     pip3 install --no-cache-dir opencv-python-headless && \
-    python3 -c "import cv2, torch, torchvision, ultralytics; print(cv2.__version__, torch.__version__, ultralytics.__version__)"
+    python3 -c "import clip, cv2, torch, torchvision, ultralytics; print(cv2.__version__, torch.__version__, ultralytics.__version__)"
 
 # 9. Environment: Fast DDS like the laptop image (Tools/ros_env.sh's discovery server), not dusty-nv's Cyclone
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 ENV ROS_DOMAIN_ID=1
 ENV ROS_LOCALHOST_ONLY=0
 ENV PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+# OpenBLAS spins a thread per core between numpy's products (object_mapper: 144% of a core, 5% with one thread)
+ENV OPENBLAS_NUM_THREADS=1
 
 WORKDIR /app
 RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc && \

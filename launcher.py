@@ -29,6 +29,9 @@ if IS_ROBOT:
     sys.path.insert(0, os.path.join(REPO_DIR, "src", "quadruped_common"))
     from quadruped_common import realtime
     realtime.avoid_reserved_core()
+    # numpy's OpenBLAS starts a thread per core that spins between products: object_mapper took 144% of a core
+    # for 36% of work, and its products of ~100k points ran 3x faster on one thread.
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 def discovery_server_address():
     """The configured FastDDS discovery server address ("host:port")."""
