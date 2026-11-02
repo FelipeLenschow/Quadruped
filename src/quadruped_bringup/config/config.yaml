@@ -171,6 +171,10 @@ object_mapper:
 #   objects: the object tools (list_objects, go_to_object, visit by id, look's boxes): true, false, or auto = offered
 #   only while object_mapper publishes /objects ([I] with detection). Off, an on-board LLM is not sent after them;
 #   visit then takes a map point (x, y) only.
+#   find: look, then the vision model (vlm_model on Ollama at ollama) is asked for the thing's box alone, then
+#   locate. vlm_ctx must be the context the agent loads the model with ([A]: 8192), or Ollama reloads it.
+#   locate: a box in look's last photo to a map point, from object_mapper's cloud, floor_z, floor_margin and
+#   max_depth_shift (no detector needed). Not listed to the agent (its own boxes are wrong), but callable for tests.
 #   tf_idle_s: TF is listened to only around tool calls and this long after the last (a Python TF listener costs
 #   ~20% of an Orin Nano core at the robot's 100 /tf messages per second).
 mcp:
@@ -195,6 +199,9 @@ mcp:
   frontier_min_m: 0.6
   frontier_clearance: 0.2
   frontiers_max: 8
+  ollama: http://localhost:11434
+  vlm_model: qwen3vl-2b-gpu
+  vlm_ctx: 8192
 
 # --- Motor Physical Parameters ---
 motor:
@@ -226,13 +233,13 @@ state_estimator:
   fsr_calibration_time: 1.0   # Seconds of samples at startup; 0 disables
   fsr_offset_max: 25.0        # Reject a zero above this (foot was loaded)
   fsr_spread_max: 3.0         # Reject a zero noisier than this (foot was moving)
-
-  # Simulated FSR (MuJoCo only). MuJoCo's touch sensor gives clean newtons, which
   # The gyro's zero is measured in the same window and subtracted (this Go2 reads 0.009 rad/s in pitch while
   # still, which the estimator turned into 1.6 mm/s of forward drift through omega x r_foot). Rejected, and
   # left at zero, when the robot moved in the window: a mean above gyro_offset_max or noise above gyro_spread_max.
   gyro_offset_max: 0.05       # rad/s
   gyro_spread_max: 0.02       # rad/s
+
+  # Simulated FSR (MuJoCo only). MuJoCo's touch sensor gives clean newtons, which
   # hides the offset problem entirely. These map newtons back onto the robot's raw
   # scale (raw = bias + N / scale, plus noise) so the SAME contact_threshold above
   # is what the simulator applies. The simulated sensor is built from fsr_bias, so

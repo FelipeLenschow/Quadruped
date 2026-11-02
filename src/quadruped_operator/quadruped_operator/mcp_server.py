@@ -6,7 +6,7 @@ where the robot stands), so Nav2's costmap keeps it off walls. The one velocity 
 from where Nav2 stopped to the trick's pose beside the object (slow, short, on /cmd_vel/llm, twist_mux's lowest
 priority). Every motion ends inside its call.
 
-Standard library only (the Jetson image is Python 3.8; the mcp package needs 3.10). config.yaml's mcp:.
+Without the mcp package (the Jetson image is Python 3.8; the mcp package needs 3.10). config.yaml's mcp:.
 Set QUADRUPED_MCP_TOKEN (or --token) to require "Authorization: Bearer <token>".
 """
 
@@ -14,39 +14,51 @@ import argparse
 import base64
 import contextlib
 import json
+import re
 import math
 import os
 import signal
 import threading
 import time
+import traceback
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import cv2
+import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid
+from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
 from rclpy.utilities import remove_ros_args
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CameraInfo, CompressedImage, PointCloud2
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from quadruped_common.config_loader import load_config
 from quadruped_interfaces.srv import Skill
+from quadruped_perception.camera_lidar_check import pixel_ray, project, xyz
+from quadruped_perception.lidar_filter import rotation
 
 PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 SKILLS = ["walk", "stand", "sit", "lie", "wiggle", "localize"]
 VISIT_SKILLS = ["sniff", "pee_left", "pee_right", "wiggle"]
 SIDE = {"pee_left": 1.0, "pee_right": -1.0}
 NAV_STATUS = {4: "arrived", 5: "canceled", 6: "aborted: no path or stuck"}
+BOX = re.compile(r"\[\s*" + r"\s*,\s*".join([r"(\d+(?:\.\d+)?)"] * 4) + r"\s*\]")  # bbox_2d: [x1, y1, x2, y2]
+CLUSTER_M = 0.3  # locate: lidar points this far past the nearest ones still belong to the object (object_mapper's)
 
 INSTRUCTIONS = """You control a Unitree Go2 quadruped. Positions are metres in the map frame; yaw and bearings are
 radians/degrees, counter-clockwise, 0 along the map's x axis. Call skill('walk') before moving. Motions block
 until done and report the result. A human with a joystick or the phone app can always take over.
 The tricks are harmless dog poses for fun: sniff points the nose at an object, pee_left / pee_right lift a hind leg
-beside it (nothing is released), wiggle wags the body."""
+beside it (nothing is released), wiggle wags the body. To go to something you see: find it by name ("the trash
+can"), then visit or go_to the x, y that find gives."""
 
 
 def yaw_of(q):
@@ -78,6 +90,13 @@ class Robot(Node):
         self.tf_opened = 0.0
         self.tf_last = 0.0
         self.create_timer(5.0, self._tf_close_idle)
+        # locate: what the last look saw, and object_mapper's lidar settings.
+        self.seen = None
+        om = load_config().get("object_mapper") or {}
+        self.cloud_topic = om.get("cloud", "/lidar/points_filtered")
+        self.floor_z = float(om.get("floor_z", 0.0))
+        self.floor_margin = float(om.get("floor_margin", 0.12))
+        self.max_shift = float(om.get("max_depth_shift", 0.3))
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(String, "/robot_state", self._state_cb, 10)
         self.create_subscription(String, "/objects", self._objects_cb, latched)
@@ -317,22 +336,166 @@ class Robot(Node):
     def look(self, boxes=False):
         cam = self.cfg.get("camera") or "front"
         topic = f"/camera/{cam}/detections/image/compressed" if boxes else f"/camera/{cam}/image_raw/compressed"
-        got = []
-        sub = self.create_subscription(CompressedImage, topic, got.append, qos_profile_sensor_data)
+        got, infos, clouds = [], [], []
+        subs = [self.create_subscription(CompressedImage, topic, got.append, qos_profile_sensor_data),
+                self.create_subscription(CameraInfo, f"/camera/{cam}/camera_info", infos.append, 2),
+                self.create_subscription(PointCloud2, self.cloud_topic, clouds.append, qos_profile_sensor_data)]
         try:
             end = time.monotonic() + 3.0
             while not got and time.monotonic() < end:
                 time.sleep(0.02)
+            # For locate: camera_info and a few lidar clouds (the filtered cloud comes at about 15 Hz), and TF open
+            # long enough that the newest photo and clouds are inside its buffer (it starts empty at each open).
+            end = time.monotonic() + 1.5
+            while got and (not infos or len(clouds) < 3 or time.monotonic() < self.tf_opened + 0.5) \
+                    and time.monotonic() < end:
+                time.sleep(0.02)
         finally:
-            self.destroy_subscription(sub)
+            for sub in subs:
+                self.destroy_subscription(sub)
         if not got:
             what = "object_detector" if boxes else "camera_bridge (launcher [I])"
             return text(f"no image on {topic} in 3 s: is {what} running?", True)
-        data, mime = self._shrink(bytes(got[-1].data), got[-1].format)
-        return {"content": [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": mime}],
-                "isError": False}
+        image = got[-1]
+        data, mime, sent = self._shrink(bytes(image.data), image.format)
+        why = self._keep_for_locate(image, infos[-1] if infos else None, clouds, sent)
+        size = f"photo {sent[0]} x {sent[1]} px" if sent else "photo"
+        note = f"{size}; find cannot use it: {why}" if why else f"{size}; find takes the name of a thing in it"
+        return {"content": [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": mime},
+                            {"type": "text", "text": note}], "isError": False}
+
+    def find(self, what):
+        """look, the vision model's box for `what` in that photo (asked on its own: inside the agent's context the
+        2B model's boxes missed 5 times out of 5, alone 0 out of 5), then locate."""
+        what = str(what).strip()
+        if not what:
+            return text("say what to find, e.g. 'the trash can'", True)
+        seen = self.look()
+        if seen["isError"]:
+            return seen
+        if self.seen is None:
+            return text(seen["content"][-1]["text"], True)
+        image = next(c["data"] for c in seen["content"] if c["type"] == "image")
+        body = {"model": self.cfg.get("vlm_model", "qwen3vl-2b-gpu"), "stream": False,
+                "options": {"num_ctx": int(self.cfg.get("vlm_ctx", 8192)), "temperature": 0, "num_predict": 200},
+                "messages": [{"role": "user", "images": [image],
+                              "content": f"Locate {what} in this image. Output its bbox_2d in JSON format."}]}
+        url = self.cfg.get("ollama", "http://localhost:11434").rstrip("/") + "/api/chat"
+        try:
+            req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                said = json.load(r)["message"]["content"]
+        except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+            return text(f"the vision model at {url} did not answer ({e}): is Ollama running?", True)
+        box = BOX.search(said)
+        if box is None:
+            return text(f"{what} not found in the photo (the vision model said: {' '.join(said.split())[:150]}); "
+                        "name another thing you can see, or turn and try again", True)
+        box = [float(v) for v in box.groups()]
+        res = self.locate(box=box, thousandths=True)
+        if res["isError"]:
+            return res
+        out = json.loads(res["content"][0]["text"])
+        out["box_thousandths"] = [round(v) for v in box]
+        return text(json.dumps(out))
+
+    def locate(self, box=None, x=None, y=None, thousandths=False):
+        s = self.seen
+        if s is None:
+            return text("nothing to locate in: call look first (its text says why locate cannot use a photo)", True)
+        info = s["info"]
+        w, h = (1000.0, 1000.0) if thousandths else s["sent"]
+        fx, fy = info.width / w, info.height / h
+        if box is not None:
+            if len(box) != 4:
+                return text("box is [x1, y1, x2, y2]", True)
+            x1, y1, x2, y2 = (float(v) for v in box)
+        elif x is not None and y is not None:
+            x1, x2, y1, y2 = float(x) - 0.02 * w, float(x) + 0.02 * w, float(y) - 0.02 * h, float(y) + 0.02 * h
+        else:
+            return text("give box [x1, y1, x2, y2], or x and y", True)
+        x1, x2 = sorted((max(0.0, x1 * fx), min(info.width, x2 * fx)))
+        y1, y2 = sorted((max(0.0, y1 * fy), min(info.height, y2 * fy)))
+        rot, t = s["to_cam"]
+        cam = s["pts"] @ rot.T + t
+        uv = project(info, cam) if len(cam) else np.zeros((0, 2))  # NaN outside the view: never inside
+        inside = (uv[:, 0] >= x1) & (uv[:, 0] < x2) & (uv[:, 1] >= y1) & (uv[:, 1] < y2)
+        origin, cam_rot = s["origin"], s["cam_rot"]
+        if np.count_nonzero(inside) >= 3:
+            # The nearest cluster in the box, so the wall behind the object does not count (as object_mapper).
+            near = np.linalg.norm(cam[inside], axis=1)
+            hits = s["pts"][inside][near <= np.percentile(near, 20) + CLUSTER_M]
+            p = np.median(hits, axis=0)
+            if box is not None:  # the lidar sees the object's front: its centre is half its width further
+                p = self._behind(p, origin, np.ptp(np.percentile(hits[:, :2] @ self._across(p, origin), [5, 95])) / 2)
+            source = f"lidar, {len(hits)} points"
+        else:
+            # No lidar there (the L1 sees little above the camera): where the box's bottom meets the floor.
+            u, v = (x1 + x2) / 2, (y2 if box is not None else (y1 + y2) / 2)
+            ray = cam_rot @ pixel_ray(info, u, v)
+            if ray[2] > -1e-3:
+                return text("no lidar points in the box, and its bottom is not on the floor: give a box that reaches "
+                            "the object's foot, or move closer and look again", True)
+            p = origin + (self.floor_z - origin[2]) / ray[2] * ray
+            if box is not None:
+                p = self._behind(p, origin, (x2 - x1) / info.k[0] * np.linalg.norm(p - origin) / 2)
+            source = "floor under the box (no lidar points in it)"
+        out = {"x": round(float(p[0]), 2), "y": round(float(p[1]), 2), "from": source,
+               "photo_age_s": round(time.monotonic() - s["time"], 1)}
+        r = self.pose()
+        if r is not None and r[3] == "map":
+            out["distance_m"] = round(math.hypot(p[0] - r[0], p[1] - r[1]), 2)
+            b = math.atan2(p[1] - r[1], p[0] - r[0]) - r[2]
+            out["bearing_deg"] = round(math.degrees(math.atan2(math.sin(b), math.cos(b))))
+        return text(json.dumps(out))
 
     # --- helpers ---
+
+    def _transform(self, target, source, stamp):
+        """(R, t) from source to target at stamp, or at the latest transform; None, with map_error set."""
+        for when in (stamp, Time()):
+            try:
+                tf = self.tf_buffer.lookup_transform(target, source, when, timeout=Duration(seconds=0.3)).transform
+            except TransformException as e:
+                self.map_error = str(e).splitlines()[0][:200]
+                continue
+            return rotation(tf.rotation), np.array([tf.translation.x, tf.translation.y, tf.translation.z])
+        return None
+
+    def _keep_for_locate(self, image, info, clouds, sent):
+        """Stores what locate needs from this look, in the map frame (so the robot may move after); '' or why not."""
+        self.seen = None
+        if info is None or not any(info.k):
+            return "no camera_info (is the camera calibrated?)"
+        if not clouds:
+            return f"no lidar on {self.cloud_topic}"
+        frame, stamp = image.header.frame_id, Time.from_msg(image.header.stamp)
+        to_cam, to_map = self._transform(frame, "map", stamp), self._transform("map", frame, stamp)
+        if to_cam is None or to_map is None:
+            return f"no map -> {frame} transform ({self.map_error})"
+        pts = []
+        for c in clouds:
+            tf = self._transform("map", c.header.frame_id, Time.from_msg(c.header.stamp))
+            if tf is not None:
+                pts.append(xyz(c) @ tf[0].T + tf[1])
+        if not pts:
+            return f"no transform for the lidar ({self.map_error})"
+        pts = np.vstack(pts)
+        self.seen = {"info": info, "sent": sent or (info.width, info.height), "to_cam": to_cam,
+                     "cam_rot": to_map[0], "origin": to_map[1], "time": time.monotonic(),
+                     "pts": pts[pts[:, 2] > self.floor_z + self.floor_margin]}  # not the floor in front of it
+        return ""
+
+    def _across(self, p, origin):
+        d = (p[:2] - origin[:2]) / max(float(np.linalg.norm(p[:2] - origin[:2])), 1e-6)
+        return np.array([-d[1], d[0]])
+
+    def _behind(self, p, origin, shift):
+        """p pushed away from the camera along the floor by shift, at most max_depth_shift."""
+        d = (p[:2] - origin[:2]) / max(float(np.linalg.norm(p[:2] - origin[:2])), 1e-6)
+        out = np.array(p, float)
+        out[:2] += d * min(float(shift), self.max_shift)
+        return out
 
     def _motion(self, what, fn, *args):
         if not self.motion.acquire(blocking=False):
@@ -497,19 +660,19 @@ class Robot(Node):
         return self._go_to(x, y, math.degrees(p[2]) + turn_deg)
 
     def _shrink(self, data, fmt):
+        """(data, mime, (width, height) of what is sent, or None when it could not be decoded)."""
         mime = "image/png" if "png" in fmt else "image/jpeg"
         width = int(self.cfg.get("image_width", 640))
-        try:
-            import cv2
-            import numpy as np
-        except ImportError:
-            return data, mime
         img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
-        if img is None or img.shape[1] <= width:
-            return data, mime
+        if img is None:
+            return data, mime, None
+        if img.shape[1] <= width:
+            return data, mime, (img.shape[1], img.shape[0])
         img = cv2.resize(img, (width, int(img.shape[0] * width / img.shape[1])), interpolation=cv2.INTER_AREA)
         ok, buf = cv2.imencode(".png" if mime == "image/png" else ".jpg", img)
-        return (buf.tobytes(), mime) if ok else (data, mime)
+        if not ok:
+            return data, mime, None
+        return buf.tobytes(), mime, (img.shape[1], img.shape[0])
 
 
 def schema(props=None, required=()):
@@ -548,8 +711,22 @@ TOOLS = [
     ("stop", "Cancel navigation and stop moving.", schema()),
     ("look", "A photo from the front camera.",
      schema({"boxes": {"type": "boolean", "description": "with the object detector's boxes drawn"}})),
+    ("find", "Find a thing in the camera's view and where it is on the map, for visit or go_to: takes a photo and "
+     "returns x, y. Name a thing you can see, e.g. 'the trash can' or 'the red bins', not a purpose ('a place to "
+     "pee'). Not found: name another thing, or turn and try again.",
+     schema({"what": {"type": "string", "description": "the thing, e.g. 'the trash can'"}}, ["what"])),
+    ("locate", "Where something in the last look photo is on the map, for visit or go_to: give its box [x1, y1, x2, "
+     "y2] (or a point x, y) in pixels of that photo, or in thousandths of its width and height with thousandths "
+     "true (Qwen-VL boxes are in thousandths). Uses the lidar inside the box, or the floor under it.",
+     schema({"box": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4,
+                     "description": "[x1, y1, x2, y2]: left, top, right, bottom"},
+             "x": {"type": "number"}, "y": {"type": "number"},
+             "thousandths": {"type": "boolean", "description": "box or point in thousandths, not pixels"}})),
 ]
 OBJECT_TOOLS = {"list_objects", "go_to_object"}
+# Callable, but not listed: with locate offered, the agent sent its own boxes, and inside its context the 2B
+# model's boxes are wrong (find asks for the box alone).
+UNLISTED = {"locate"}
 VISIT_AT_POINT = ("visit", "Walk to a point on the map (an object seen in a photo), take the trick's pose there and do "
                   "the trick: sniff (nose at it), pee_left / pee_right (it beside that hind leg), wiggle (facing "
                   "it). Needs walk first.",
@@ -632,7 +809,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = {}
             elif method == "tools/list":
                 tools = tools_for(self.robot.objects_on())
-                result = {"tools": [{"name": n, "description": d, "inputSchema": s} for n, d, s in tools]}
+                result = {"tools": [{"name": n, "description": d, "inputSchema": s} for n, d, s in tools
+                                    if n not in UNLISTED]}
             elif method == "tools/call":
                 name = params.get("name")
                 if name not in [t[0] for t in tools_for(self.robot.objects_on())]:
@@ -654,6 +832,18 @@ class Handler(BaseHTTPRequestHandler):
         return {"jsonrpc": "2.0", "id": m["id"], "result": result}
 
 
+def spin(executor, node):
+    """executor.spin, but a callback's exception is logged and spinning goes on. Raised out of spin, it ended the
+    thread silently: the server kept answering over HTTP with no /robot_state, camera or TF behind it."""
+    while rclpy.ok():
+        try:
+            executor.spin_once(timeout_sec=0.5)
+        except ExternalShutdownException:
+            return
+        except Exception:
+            node.get_logger().error("callback failed, still spinning:\n" + traceback.format_exc())
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--host", default="", help="default config.yaml mcp.host")
@@ -670,7 +860,7 @@ def main():
     robot = Robot(cfg)
     executor = MultiThreadedExecutor()
     executor.add_node(robot)
-    threading.Thread(target=executor.spin, daemon=True).start()
+    threading.Thread(target=spin, args=(executor, robot), daemon=True).start()
 
     Handler.robot, Handler.token = robot, args.token
     host, port = args.host or cfg.get("host", "0.0.0.0"), args.port or int(cfg.get("port", 8765))

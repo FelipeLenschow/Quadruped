@@ -2,8 +2,9 @@
 
 Lists the server's tools (mcp_server in quadruped_operator), hands them to the model, runs each tool call
 it makes and gives it the result, until it answers without one. Then you can answer it in the terminal
-(Enter: it keeps going until --minutes are up; --auto never waits). Ctrl+C sends stop before leaving. Standard library only, so it runs on any machine
-that reaches both Ollama and the robot:
+(Enter: it keeps going until --minutes are up; --auto never waits). Ctrl+C sends stop before leaving. On exit
+the model is unloaded from Ollama to free its memory (--keep_loaded keeps it; loading again takes ~5 s on the robot).
+Standard library only, so it runs on any machine that reaches both Ollama and the robot:
 
     python3 Tools/llm_host.py                                  # the "having fun" loop, 10 minutes
     python3 Tools/llm_host.py "walk to the nearest cone and sniff it" --minutes 0
@@ -29,7 +30,17 @@ FUN = """You are the robot dog. Have fun with the traffic cones in this room, on
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
 Keep each message short: one line on what you do next, then the tool call."""
 
-# FUN without object detection (the server then offers no list_objects): explore and describe what the camera sees.
+# FUN without object detection (no list_objects): the model picks things in its photos and find maps them.
+FUN_LOOK = """You are the robot dog. Have fun with the things on the floor of this room (bins, chairs, boxes, cones), on
+your own:
+1. look. Pick a thing on the floor in the photo that you have not visited yet.
+2. find it by name (find "the trash can"), then visit the x, y that find gives with trick sniff. Sometimes (about
+   half the time) then visit the same x, y with pee_left or pee_right.
+3. Then move turn_deg 90 and look again. After four turns with nothing new, call frontiers and go_to the nearest.
+Call skill walk first if you are not walking. If a call fails, read why and try something else.
+Keep each message short: one line on what you do next, then the tool call."""
+
+# Without object detection or find: explore and describe what the camera sees.
 EXPLORE = """You are the robot dog. Explore this room on your own:
 1. call frontiers and go_to the nearest one; if none is left, go_to the middle of a part of the room you have not
    stood in yet.
@@ -87,6 +98,15 @@ def chat(url, model, messages, tools, think, ctx):
         return json.loads(r.read())["message"]
 
 
+def unload(url, model):
+    """Ollama keeps the model (KEEP_ALIVE=-1 on the robot) and its memory grows with use: 1.3 GB free on the
+    robot fell to 0.4 GB and 0.9 GB went to swap in one run."""
+    body = {"model": model, "keep_alive": 0}
+    req = urllib.request.Request(f"{url}/api/generate", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        r.read()
+
+
 def trim(messages, keep):
     """System prompt, the task, and the last `keep` messages; photos only on the newest one."""
     if len(messages) > keep + 2:
@@ -114,6 +134,7 @@ def main():
     ap.add_argument("--ctx", type=int, default=32768, help="model context in tokens")
     ap.add_argument("--keep", type=int, default=40, help="recent messages kept in context")
     ap.add_argument("--auto", action="store_true", help="never wait for the operator: always tell it to keep going")
+    ap.add_argument("--keep_loaded", action="store_true", help="leave the model in Ollama's memory on exit")
     args = ap.parse_args()
 
     mcp = Mcp(args.mcp, args.token)
@@ -121,7 +142,8 @@ def main():
     tools = [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""),
                                                "parameters": t["inputSchema"]}} for t in mcp_tools]
     print(f"{args.model} with {len(tools)} tools from {args.mcp}: {', '.join(t['name'] for t in mcp_tools)}")
-    task = args.task or (FUN if any(t["name"] == "list_objects" for t in mcp_tools) else EXPLORE)
+    names = {t["name"] for t in mcp_tools}
+    task = args.task or (FUN if "list_objects" in names else FUN_LOOK if "find" in names else EXPLORE)
     ask = not args.auto and sys.stdin.isatty()
     system = instructions + ("\n" + OPERATOR if ask else "")
     messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
@@ -170,6 +192,12 @@ def main():
             print("stop:", mcp.call("stop", {})["content"][0]["text"])
         except Exception as e:
             print(f"stop failed: {e}")
+        if not args.keep_loaded:
+            try:
+                unload(args.ollama, args.model)
+                print(f"{args.model} unloaded")
+            except (urllib.error.URLError, OSError) as e:
+                print(f"unload failed: {e}")
     print(f"{calls} tool calls")
 
 
