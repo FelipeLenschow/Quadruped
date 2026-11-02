@@ -142,6 +142,8 @@ class ObjectMapper(Node):
             p, source = self._locate(o, uv, pts, dist, to_map, scale, h)
             if p is not None:
                 self._add(o["label"], p, source, d["stamp"])
+        # Again: a sighting just merged in can change an object's label ("person" outvoted by "chair").
+        watched = [ob for ob in self.objects if label_of(ob) in self.forget]
         if watched:
             self._forget_unseen(watched, d["objects"], to_cam, uv, dist, scale, w, h)
 
