@@ -92,6 +92,8 @@ class Robot(Node):
         self.create_timer(5.0, self._tf_close_idle)
         # locate: what the last look saw, and object_mapper's lidar settings.
         self.seen = None
+        # What find found, on /objects for the app's map while object_mapper does not publish there.
+        self.found = []
         om = load_config().get("object_mapper") or {}
         self.cloud_topic = om.get("cloud", "/lidar/points_filtered")
         self.floor_z = float(om.get("floor_z", 0.0))
@@ -100,6 +102,8 @@ class Robot(Node):
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(String, "/robot_state", self._state_cb, 10)
         self.create_subscription(String, "/objects", self._objects_cb, latched)
+        self.found_pub = self.create_publisher(String, "/objects", latched)
+        self.create_subscription(String, "/objects/clear", self._clear_cb, 1)
         self.grid = None
         self.create_subscription(OccupancyGrid, "/map", self._map_cb, latched)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel/llm", 10)
@@ -124,12 +128,37 @@ class Robot(Node):
         ids = {o["id"] for o in self.objects}
         self.visits = {k: v for k, v in self.visits.items() if k in ids}
 
+    def _clear_cb(self, msg):
+        if self.found:
+            self.found = []
+            self._publish_found()
+
+    def mapper_on(self):
+        """object_mapper publishes /objects (this node's own publisher, for find, does not count)."""
+        return any(i.node_name != self.get_name() for i in self.get_publishers_info_by_topic("/objects"))
+
     def objects_on(self):
         """config.yaml mcp.objects: true, false, or auto (on while object_mapper publishes /objects)."""
         mode = self.cfg.get("objects", "auto")
         if mode == "auto":
-            return self.count_publishers("/objects") > 0
+            return self.mapper_on()
         return bool(mode)
+
+    def _add_found(self, what, x, y):
+        """The same name found again within 1 m is the same thing, moved to the new point."""
+        label = re.sub(r"^(the|a|an)\s+", "", what.lower())
+        f = next((f for f in self.found if f["label"] == label and math.hypot(f["x"] - x, f["y"] - y) < 1.0), None)
+        if f is None:
+            f = {"id": max((f["id"] for f in self.found), default=0) + 1, "label": label, "sightings": 0}
+            self.found.append(f)
+        f.update(x=x, y=y, sightings=f["sightings"] + 1, last_seen=round(time.time(), 2))
+        self._publish_found()
+
+    def _publish_found(self):
+        if self.mapper_on():
+            return
+        objects = [dict(f, z=0.0, labels={f["label"]: f["sightings"]}) for f in self.found]
+        self.found_pub.publish(String(data=json.dumps({"frame": "map", "objects": objects})))
 
     def fresh(self):
         if self.state is None or time.monotonic() - self.state_time > 1.0:
@@ -397,6 +426,7 @@ class Robot(Node):
             return res
         out = json.loads(res["content"][0]["text"])
         out["box_thousandths"] = [round(v) for v in box]
+        self._add_found(what, out["x"], out["y"])
         return text(json.dumps(out))
 
     def locate(self, box=None, x=None, y=None, thousandths=False):
