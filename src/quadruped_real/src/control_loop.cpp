@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 
 namespace quadruped_real {
@@ -281,7 +282,11 @@ qc::RawState ControlLoop::raw_state(Snapshot& snap) {
   }
   const auto& imu = s.imu_state();
   raw.quat_wxyz = qc::Vec4(imu.quaternion()[0], imu.quaternion()[1], imu.quaternion()[2], imu.quaternion()[3]);
-  raw.gyro = qc::Vec3(imu.gyroscope()[0], imu.gyroscope()[1], imu.gyroscope()[2]);
+  // The gyro reads a few mrad/s while still (0.009 rad/s in pitch on this Go2); through the estimator's
+  // omega x r_foot that was a steady 1.6 mm/s of false forward speed, and the odometry crept 10 cm a minute.
+  const qc::Vec3 gyro(imu.gyroscope()[0], imu.gyroscope()[1], imu.gyroscope()[2]);
+  if (!calib_done_) gyro_samples_.push_back(gyro);
+  raw.gyro = gyro - gyro_offset_;
   raw.accel = qc::Vec3(imu.accelerometer()[0], imu.accelerometer()[1], imu.accelerometer()[2]);
 
   // foot_force is FR, FL, RR, RL; the controller's feet are FL, FR, RL, RR.
@@ -306,6 +311,7 @@ void ControlLoop::collect_fsr_sample(const Eigen::Vector4d& fsr, Snapshot& snap)
   spread = (spread / calib_samples_.size()).cwiseSqrt();
   calib_samples_.clear();
   calib_done_ = true;
+  set_gyro_zero(snap);
 
   // A foot carrying load reads high and steady, a moving one noisy: either way that zero is not a zero.
   static const char* names[4] = {"FL", "FR", "RL", "RR"};
@@ -334,6 +340,29 @@ void ControlLoop::collect_fsr_sample(const Eigen::Vector4d& fsr, Snapshot& snap)
         snap);
   }
   snap.calibration_changed = true;
+}
+
+// The gyro's zero from the same still window as the FSR zero, kept only if the robot did not move in it.
+void ControlLoop::set_gyro_zero(Snapshot& snap) {
+  if (gyro_samples_.empty()) return;
+  Eigen::Vector3d mean = Eigen::Vector3d::Zero(), spread = Eigen::Vector3d::Zero();
+  for (const auto& v : gyro_samples_) mean += v;
+  mean /= gyro_samples_.size();
+  for (const auto& v : gyro_samples_) spread += (v - mean).cwiseAbs2();
+  spread = (spread / gyro_samples_.size()).cwiseSqrt();
+  gyro_samples_.clear();
+  char buf[256];
+  std::snprintf(buf, sizeof(buf), "[RealDriver] Gyro zero: %.4f %.4f %.4f rad/s (+-%.4f %.4f %.4f)", mean[0], mean[1],
+                mean[2], spread[0], spread[1], spread[2]);
+  if (mean.cwiseAbs().maxCoeff() > cfg_.gyro_offset_max || spread.maxCoeff() > cfg_.gyro_spread_max) {
+    std::snprintf(buf + std::strlen(buf), sizeof(buf) - std::strlen(buf),
+                  " rejected (limits %.2f, +-%.2f): the robot moved; restart the driver with it still.",
+                  cfg_.gyro_offset_max, cfg_.gyro_spread_max);
+    log(qc::LogLevel::Warn, buf, snap);
+    return;
+  }
+  gyro_offset_ = mean;
+  log(qc::LogLevel::Info, buf, snap);
 }
 
 void ControlLoop::send(const Eigen::Matrix<float, 12, 1>& targets) {

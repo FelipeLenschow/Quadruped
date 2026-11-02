@@ -208,9 +208,12 @@ state_estimator:
   # Contact gate, in raw FSR counts ABOVE each foot's own no-load reading - not
   # an absolute value. The four sensors sit at visibly different zeros, so one
   # absolute cut is a different gate on every foot: the highest-offset foot trips
-  # early, the lowest may never trip. 10 counts is ~27 N (see fsr_scale), against
-  # ~37 N per foot in an even stance.
-  contact_threshold: 10.0
+  # early, the lowest may never trip. 5 counts is ~13 N (see fsr_scale), against
+  # ~37 N per foot in an even stance. Not 10: standing, the Go2 loads one diagonal
+  # (FR/RL 24-31 counts) and RR got only 7, so it never counted as on the ground
+  # and the estimator lost the four-leg cancellation (2.5 mm/s of sideways drift).
+  # Unloaded noise is 0.3 counts at most; zeros move about 2 counts between runs.
+  contact_threshold: 5.0
 
   # FSR zeroing on the real robot (deploy). At startup real_driver averages
   # fsr_calibration_time of readings per foot and uses those as the zeros, so the
@@ -225,6 +228,11 @@ state_estimator:
   fsr_spread_max: 3.0         # Reject a zero noisier than this (foot was moving)
 
   # Simulated FSR (MuJoCo only). MuJoCo's touch sensor gives clean newtons, which
+  # The gyro's zero is measured in the same window and subtracted (this Go2 reads 0.009 rad/s in pitch while
+  # still, which the estimator turned into 1.6 mm/s of forward drift through omega x r_foot). Rejected, and
+  # left at zero, when the robot moved in the window: a mean above gyro_offset_max or noise above gyro_spread_max.
+  gyro_offset_max: 0.05       # rad/s
+  gyro_spread_max: 0.02       # rad/s
   # hides the offset problem entirely. These map newtons back onto the robot's raw
   # scale (raw = bias + N / scale, plus noise) so the SAME contact_threshold above
   # is what the simulator applies. The simulated sensor is built from fsr_bias, so

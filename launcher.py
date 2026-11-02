@@ -382,10 +382,14 @@ def records_itself(cmd):
     return cmd[:2] == ["ros2", "launch"] and cmd[3] in RECORDING_LAUNCH_FILES
 
 
+COMPILED = (".cpp", ".cc", ".c", ".hpp", ".h", ".msg", ".srv", ".action")
+
+
 def _workspace_stale(stamp, signature):
     """True when the colcon install is missing, was built elsewhere (host vs Docker: other repo path
-    or interpreter), or is older than a package manifest or a data folder. Symlink-install links
-    each file, so editing a file needs no rebuild; adding one does."""
+    or interpreter), or is older than a package manifest, a data folder or a C/C++ source.
+    Symlink-install links each Python file, so editing one needs no rebuild; adding one does, and
+    so does editing compiled code (an edited real_driver .cpp was never rebuilt)."""
     try:
         with open(stamp) as f:
             if f.read() != signature:
@@ -397,8 +401,9 @@ def _workspace_stale(stamp, signature):
         dirs[:] = [d for d in dirs if d != "__pycache__"]
         if os.path.getmtime(root) > built:
             return True
-        for f in ("package.xml", "setup.py", "setup.cfg"):
-            if f in files and os.path.getmtime(os.path.join(root, f)) > built:
+        for f in files:
+            if (f in ("package.xml", "setup.py", "setup.cfg", "CMakeLists.txt") or f.endswith(COMPILED)) \
+                    and os.path.getmtime(os.path.join(root, f)) > built:
                 return True
     return False
 

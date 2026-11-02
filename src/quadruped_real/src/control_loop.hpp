@@ -30,6 +30,7 @@ struct LoopConfig {
   double contact_threshold = 10.0;
   double fsr_bias = 16.0;
   double calib_time = 1.0, calib_offset_max = 25.0, calib_spread_max = 3.0;
+  double gyro_offset_max = 0.05, gyro_spread_max = 0.02;  // rad/s
 };
 
 // The thread that owns the robot: LowState in, controller step, LowCmd out. With a reserved core it runs
@@ -57,6 +58,7 @@ class ControlLoop {
   bool read_low_state(double now, Snapshot& snap);
   qc::RawState raw_state(Snapshot& snap);
   void collect_fsr_sample(const Eigen::Vector4d& fsr, Snapshot& snap);
+  void set_gyro_zero(Snapshot& snap);
   void send(const Eigen::Matrix<float, 12, 1>& targets);
   void fault(const std::string& what);
   void log(qc::LogLevel level, std::string text, Snapshot& snap);
@@ -84,6 +86,8 @@ class ControlLoop {
 
   Eigen::Vector4d fsr_offset_;
   std::vector<Eigen::Vector4d> calib_samples_;
+  Eigen::Vector3d gyro_offset_ = Eigen::Vector3d::Zero();
+  std::vector<Eigen::Vector3d> gyro_samples_;
   int calib_n_ = 0;
   bool calib_done_ = true;
 };

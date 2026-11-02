@@ -51,6 +51,8 @@ int main(int argc, char** argv) {
   lc.calib_time = get<double>(est, "fsr_calibration_time", 1.0);
   lc.calib_offset_max = get<double>(est, "fsr_offset_max", 25.0);
   lc.calib_spread_max = get<double>(est, "fsr_spread_max", 3.0);
+  lc.gyro_offset_max = get<double>(est, "gyro_offset_max", 0.05);
+  lc.gyro_spread_max = get<double>(est, "gyro_spread_max", 0.02);
 
   CommandBox commands;
   SnapshotBox snapshots;
@@ -76,7 +78,7 @@ int main(int argc, char** argv) {
               lc.calib_time > 0 ? ("calibrating over " + std::to_string(lc.calib_time).substr(0, 3) + "s").c_str()
                                 : "calibration disabled");
   if (lc.calib_time > 0) {
-    RCLCPP_WARN(node->get_logger(), "[RealDriver] Keep the feet UNLOADED for the next %.1fs - the FSR zero is being measured now.",
+    RCLCPP_WARN(node->get_logger(), "[RealDriver] Keep the feet UNLOADED and the robot STILL for the next %.1fs - the FSR and gyro zeros are being measured now.",
                 lc.calib_time);
   }
   loop.run(node->make_controller(checkpoint));
