@@ -37,6 +37,10 @@ class SafetyProcessor {
   void clear_block(bool clear_reason = true);
   // Hold the joint ROM margin at this value whatever the supervisor sends (eval sweeps); nullopt to follow it again.
   void pin_rom_margin(std::optional<double> margin);
+  // A fault the state does not show (the real driver: a motor too hot, the battery low). It fails evaluate like a
+  // check, whatever the policy's protections, so the safety policy lies the robot down. "" clears it; a trip it
+  // caused stays latched until released.
+  void set_external_fault(const std::string& reason) { external_fault_ = reason; }
 
   std::pair<bool, std::string> evaluate(const State& state, uint8_t protections, double now) const;
   std::pair<Vec12, double> process(const std::optional<Vec12>& main, const std::optional<Vec12>& safety,
@@ -78,6 +82,7 @@ class SafetyProcessor {
   double forward_tilt_limit_ = 30.0;
   double rom_margin_ = 0.15;
   std::optional<double> rom_margin_pin_;
+  std::string external_fault_;
   double watchdog_timeout_;
   double tilt_thresh_ = 0.0;
   double global_max_torque_ = 0.0;

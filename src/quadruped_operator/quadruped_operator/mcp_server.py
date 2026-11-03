@@ -235,6 +235,8 @@ class Robot(Node):
                                                   "yaw_deg": round(math.degrees(p[2])), "frame": p[3]}
         out["navigating"] = self.goal is not None
         out["busy"] = self.motion.locked()
+        out["battery_pct"] = (s.get("battery") or {}).get("soc")
+        out["hottest_motor"] = s.get("hottest")
         return text(json.dumps(out))
 
     def list_objects(self, label=""):

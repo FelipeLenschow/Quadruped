@@ -334,6 +334,14 @@ safety:
   base_tilt_limit_deg: 30   # Trigger emergency stop if base tilts past 30 degrees in any direction
   base_forward_tilt_limit_deg: 30.0    # Trigger emergency stop if pitched forward past 30 degrees
   joint_rom_safety_margin: 0.15        # Protect the outer 15% range of motion of each joint
+  # Robot health (real Go2 only): the firmware cuts a motor that is too hot, and the robot falls. A warning (log,
+  # /robot_state health.warning, app banner) at *_warn, then the safety policy lies it down at *_lie, whatever
+  # the policy's protections. 0 turns a limit off. High values for now: set them from measurements (motor
+  # temperatures under the main policy's stand, sit and lie; the battery % the Go2 reports).
+  motor_temp_warn_c: 75
+  motor_temp_lie_c: 95
+  battery_warn_pct: 15
+  battery_lie_pct: 0
   # The safety policy is policies.json's safety_policy. It takes over when a check trips, with no checks
   # of its own, until the robot lies still, then the robot goes numb. Empty = numb at once.
   safety_policy_timeout_s: 10.0  # Numb after this long even if it never counts as lying.

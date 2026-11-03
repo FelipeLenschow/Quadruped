@@ -53,6 +53,10 @@ int main(int argc, char** argv) {
   lc.calib_spread_max = get<double>(est, "fsr_spread_max", 3.0);
   lc.gyro_offset_max = get<double>(est, "gyro_offset_max", 0.05);
   lc.gyro_spread_max = get<double>(est, "gyro_spread_max", 0.02);
+  lc.motor_temp_warn_c = get<int>(config["safety"], "motor_temp_warn_c", lc.motor_temp_warn_c);
+  lc.motor_temp_lie_c = get<int>(config["safety"], "motor_temp_lie_c", lc.motor_temp_lie_c);
+  lc.battery_warn_pct = get<int>(config["safety"], "battery_warn_pct", lc.battery_warn_pct);
+  lc.battery_lie_pct = get<int>(config["safety"], "battery_lie_pct", lc.battery_lie_pct);
 
   CommandBox commands;
   SnapshotBox snapshots;

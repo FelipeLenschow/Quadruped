@@ -31,6 +31,10 @@ struct LoopConfig {
   double fsr_bias = 16.0;
   double calib_time = 1.0, calib_offset_max = 25.0, calib_spread_max = 3.0;
   double gyro_offset_max = 0.05, gyro_spread_max = 0.02;  // rad/s
+  // config.yaml safety: warn (log and /robot_state health.warning), then lie down with the safety policy.
+  // 0 turns a limit off.
+  int motor_temp_warn_c = 75, motor_temp_lie_c = 95;
+  int battery_warn_pct = 15, battery_lie_pct = 0;
 };
 
 // The thread that owns the robot: LowState in, controller step, LowCmd out. With a reserved core it runs
@@ -57,6 +61,7 @@ class ControlLoop {
   void apply(Command& c, Snapshot& snap);
   bool read_low_state(double now, Snapshot& snap);
   qc::RawState raw_state(Snapshot& snap);
+  void check_health(Snapshot& snap);
   void collect_fsr_sample(const Eigen::Vector4d& fsr, Snapshot& snap);
   void set_gyro_zero(Snapshot& snap);
   void send(const Eigen::Matrix<float, 12, 1>& targets);
@@ -90,6 +95,7 @@ class ControlLoop {
   std::vector<Eigen::Vector3d> gyro_samples_;
   int calib_n_ = 0;
   bool calib_done_ = true;
+  bool warned_hot_ = false, warned_battery_ = false;
 };
 
 double steady_now();

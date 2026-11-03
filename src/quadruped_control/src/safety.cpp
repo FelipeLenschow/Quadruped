@@ -137,6 +137,7 @@ bool SafetyProcessor::heartbeat_ok(double now) const {
 }
 
 std::pair<bool, std::string> SafetyProcessor::evaluate(const State& state, uint8_t protections, double now) const {
+  if (!external_fault_.empty()) return {false, external_fault_};
   if (protections & kHeartbeat) {
     if (!has_heartbeat_) return {false, "No supervisor heartbeat received yet"};
     if (now - last_heartbeat_ > watchdog_timeout_) {

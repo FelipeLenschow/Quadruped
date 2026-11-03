@@ -256,10 +256,39 @@ private fun RobotSummary(rs: JSONObject) {
         )
         Row {
             Text("${rs.optDouble("tilt_deg").f(0)}°", color = Palette.Muted, fontFamily = Mono, fontSize = 11.sp)
+            val health = rs.optJSONObject("health")
+            rs.optJSONObject("battery")?.let { b ->
+                val soc = b.optInt("soc")
+                Text("  $soc%", color = batteryColor(soc, health), fontFamily = Mono, fontSize = 11.sp, maxLines = 1)
+            }
+            rs.optJSONObject("hottest")?.let { h ->
+                val c = h.optInt("c")
+                Text("  $c°C", color = motorTempColor(c, health), fontFamily = Mono, fontSize = 11.sp, maxLines = 1)
+            }
             flag?.let { (text, color) ->
                 Text("  $text", color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             }
         }
+    }
+}
+
+/** /robot_state health: amber from the warning limit, red from 5 °C under the lie-down limit. */
+private fun motorTempColor(c: Int, health: JSONObject?): Color {
+    val warn = health?.optInt("temp_warn_c", 0) ?: 0
+    val lie = health?.optInt("temp_lie_c", 0) ?: 0
+    return when {
+        lie > 0 && c >= lie - 5 -> Palette.Danger
+        warn > 0 && c >= warn -> Palette.Warn
+        else -> Palette.Muted
+    }
+}
+
+private fun batteryColor(soc: Int, health: JSONObject?): Color {
+    val warn = health?.optInt("battery_warn_pct", 0) ?: 0
+    return when {
+        warn > 0 && soc <= warn -> Palette.Danger
+        warn > 0 && soc <= warn + 10 -> Palette.Warn
+        else -> Palette.Muted
     }
 }
 
@@ -400,6 +429,9 @@ private fun DriveTab(s: Status?, core: ConsoleCore?, modifier: Modifier) {
                 rs?.optBoolean("safety_policy_active") == true ->
                     Banner("Safety lie-down", "Tripped: ${rs.optString("trip_reason")}. Goes numb once lying still.", Palette.Danger)
                 numb -> Banner("Numb", "${rs?.optString("numb_reason")}. Release to hold where it is in pose mode.", Palette.Warn)
+            }
+            rs?.optJSONObject("health")?.optString("warning")?.takeIf { it.isNotEmpty() }?.let {
+                Banner("Robot health", "$it. Let it sit or lie down to cool.", Palette.Warn)
             }
             if (rs?.optBoolean("safety_blocked") == true) {
                 Banner("Safety blocked", "A safety limit tripped. Reset once the cause is gone.", Palette.Danger) {
@@ -690,6 +722,7 @@ private fun MapTab(threeD: Boolean, onToggle: (Boolean) -> Unit, modifier: Modif
 /** Health first (Jetson, link, events), then the settings, which rarely change. */
 @Composable
 private fun SystemTab(s: Status?, core: ConsoleCore?, info: String) {
+    s?.robotState?.let { BodyCard(it) }
     if (s != null) SystemCard(s)
     LinkCard(s, info)
     if (s != null && s.events.isNotEmpty()) {
@@ -706,6 +739,51 @@ private fun loadColor(pct: Double) = when {
     pct >= 85 -> Palette.Danger
     pct >= 60 -> Palette.Warn
     else -> Palette.Accent
+}
+
+/** /robot_state's battery and motor temperatures (real Go2 only; the sim drivers do not send them). */
+@Composable
+private fun BodyCard(rs: JSONObject) {
+    val battery = rs.optJSONObject("battery") ?: return
+    val temps = rs.optJSONArray("motor_temp_c") ?: return
+    val health = rs.optJSONObject("health")
+    Card {
+        SectionLabel("Robot body")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val soc = battery.optInt("soc")
+            Metric("Battery", "$soc%", batteryColor(soc, health).takeIf { it != Palette.Muted } ?: Palette.Text)
+            Metric("Volts", "${battery.optDouble("v").f(1)} V")
+            Metric("Amps", "${battery.optDouble("a").f(1)} A")
+        }
+        // motor_temp_c is in the controller's joint order: hips FL FR RL RR, then thighs, then calves.
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("°C", Modifier.width(28.dp), color = Palette.Muted, fontSize = 11.sp)
+            for (joint in listOf("hip", "thigh", "calf")) {
+                Text(joint, Modifier.weight(1f), color = Palette.Muted, fontSize = 11.sp, textAlign = TextAlign.Center)
+            }
+        }
+        for ((leg, name) in listOf("FL", "FR", "RL", "RR").withIndex()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(name, Modifier.width(28.dp), color = Palette.Muted, fontSize = 12.sp, fontFamily = Mono)
+                for (joint in 0 until 3) {
+                    val c = temps.optInt(joint * 4 + leg)
+                    Text(
+                        "$c", Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(Palette.Surface2)
+                            .padding(vertical = 4.dp),
+                        color = motorTempColor(c, health).takeIf { it != Palette.Muted } ?: Palette.Text,
+                        fontSize = 13.sp, fontFamily = Mono, textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+        health?.let {
+            Text(
+                "Warns at ${it.optInt("temp_warn_c")} °C, lies down at ${it.optInt("temp_lie_c")} °C " +
+                    "(config.yaml safety:).",
+                color = Palette.Muted, fontSize = 11.sp,
+            )
+        }
+    }
 }
 
 /** /system_stats from the robot's system_monitor: CPU per core, GPU, RAM, temperatures. */

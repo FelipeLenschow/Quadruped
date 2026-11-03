@@ -87,6 +87,13 @@ struct Snapshot {
   Eigen::Vector4d fsr_offset = Eigen::Vector4d::Zero();
   double contact_threshold = 0.0;
   bool calibration_changed = false;
+  // Battery and motors from LowState (valid with has_state), joints in ROS order. motor_flags is MotorState's
+  // reserve[0], undocumented: published raw, to see what it holds when the Go2's firmware stops a motor.
+  int battery_soc = 0;
+  double power_v = 0.0, power_a = 0.0;
+  std::array<int, 12> motor_temp{};
+  std::array<uint32_t, 12> motor_flags{};
+  std::string health_warning;  // a motor near motor_temp_lie_c or the battery low; "" when fine
 };
 
 using CommandBox = Mailbox<Command, 512>;

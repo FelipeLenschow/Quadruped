@@ -150,6 +150,7 @@ void ControlLoop::policy_tick() {
   qc::Controller& ctl = *controller_;
   if (read_low_state(now, *snap)) {
     const qc::RawState raw = raw_state(*snap);
+    check_health(*snap);
     const qc::StepResult res = ctl.step(raw, std::nullopt, now, now);
     // Telemetry only (nothing to the motors) until a main policy is loaded.
     if (res.policy_step && ctl.has_policy("main")) {
@@ -273,6 +274,45 @@ bool ControlLoop::read_low_state(double now, Snapshot& snap) {
   return have_low_state_;
 }
 
+void ControlLoop::check_health(Snapshot& snap) {
+  // The Go2's firmware cuts a motor that is too hot (2026-11-03: the robot stood still under the main policy,
+  // went limp and fell on its chin). Lying down under control first is better than falling.
+  int hot = 0;
+  for (int j = 1; j < 12; ++j) {
+    if (snap.motor_temp[j] > snap.motor_temp[hot]) hot = j;
+  }
+  const int t = snap.motor_temp[hot], soc = snap.battery_soc;
+  const std::string& name = controller_->config().joint_names[hot];
+  char buf[96];
+  std::string fault;
+  if (cfg_.motor_temp_lie_c > 0 && t >= cfg_.motor_temp_lie_c) {
+    std::snprintf(buf, sizeof buf, "%s motor %d C >= %d C", name.c_str(), t, cfg_.motor_temp_lie_c);
+    fault = buf;
+  } else if (cfg_.battery_lie_pct > 0 && soc <= cfg_.battery_lie_pct) {
+    std::snprintf(buf, sizeof buf, "battery %d%% <= %d%%", soc, cfg_.battery_lie_pct);
+    fault = buf;
+  }
+  controller_->safety().set_external_fault(fault);
+
+  // Warnings once per crossing, again after 3 C or 3% back.
+  const bool hot_now = cfg_.motor_temp_warn_c > 0 && t >= cfg_.motor_temp_warn_c;
+  const bool low_now = cfg_.battery_warn_pct > 0 && soc <= cfg_.battery_warn_pct;
+  std::string warning;
+  if (hot_now) {
+    std::snprintf(buf, sizeof buf, "%s motor %d C (lies down at %d C)", name.c_str(), t, cfg_.motor_temp_lie_c);
+    warning = buf;
+    if (!warned_hot_) log(qc::LogLevel::Warn, "[Health] " + warning, snap);
+  }
+  if (low_now) {
+    std::snprintf(buf, sizeof buf, "battery %d%%", soc);
+    warning += (warning.empty() ? "" : ", ") + std::string(buf);
+    if (!warned_battery_) log(qc::LogLevel::Warn, "[Health] " + std::string(buf), snap);
+  }
+  warned_hot_ = hot_now || (warned_hot_ && t > cfg_.motor_temp_warn_c - 3);
+  warned_battery_ = low_now || (warned_battery_ && soc < cfg_.battery_warn_pct + 3);
+  snap.health_warning = warning;
+}
+
 qc::RawState ControlLoop::raw_state(Snapshot& snap) {
   const LowState& s = low_state_;
   qc::RawState raw;
@@ -288,6 +328,16 @@ qc::RawState ControlLoop::raw_state(Snapshot& snap) {
   if (!calib_done_) gyro_samples_.push_back(gyro);
   raw.gyro = gyro - gyro_offset_;
   raw.accel = qc::Vec3(imu.accelerometer()[0], imu.accelerometer()[1], imu.accelerometer()[2]);
+
+  // Health, for /robot_state: the Go2's firmware cuts the motors when they are too hot or the battery is low.
+  snap.battery_soc = s.bms_state().soc();
+  snap.power_v = s.power_v();
+  snap.power_a = s.power_a();
+  for (int j = 0; j < 12; ++j) {
+    const auto& m = s.motor_state()[kSdkToRos[j]];
+    snap.motor_temp[j] = m.temperature();
+    snap.motor_flags[j] = m.reserve()[0];
+  }
 
   // foot_force is FR, FL, RR, RL; the controller's feet are FL, FR, RL, RR.
   const auto& ff = s.foot_force();

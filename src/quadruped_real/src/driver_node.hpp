@@ -89,6 +89,7 @@ class DriverNode : public rclcpp::Node {
   std::atomic<bool> estop_{false}, blocked_{false}, numb_{false}, stdin_ok_{true};
   bool last_estop_ = false;
   double state_period_ = 0.1, state_time_ = 0.0;
+  std::array<int, 3> health_limits_{};  // motor_temp_warn_c, motor_temp_lie_c, battery_warn_pct, for the app
   double odom_height_ = 0.33;
   std::optional<Eigen::Vector3d> odom_pos_;
   std::optional<double> odom_time_;

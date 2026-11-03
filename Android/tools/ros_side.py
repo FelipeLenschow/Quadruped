@@ -1,4 +1,5 @@
 """ROS side of the link check: publishes fake robot topics and counts what the link sends."""
+import json
 import sys
 import time
 
@@ -38,8 +39,25 @@ last_twist = [None]
 node.create_subscription(Twist, "/cmd_vel/phone", lambda m: last_twist.__setitem__(0, m), 10)
 
 
+START = time.monotonic()
+
+
+def robot_state():
+    """The FR calf motor warms 1 °C a second from 60 °C and the battery reads 18%, to check the app's colours,
+    the Drive tab's health banner and the System tab's body card."""
+    hot = min(100, 60 + int(time.monotonic() - START))
+    temps = [40] * 12
+    temps[9] = hot
+    warn, lie = 75, 95
+    return json.dumps({"mode": "pose", "posture": "standing", "tilt_deg": 1.5,
+                       "battery": {"soc": 18, "v": 25.9, "a": 2.4}, "motor_temp_c": temps,
+                       "hottest": {"joint": "FR_calf_joint", "c": hot}, "motor_flags": [0] * 12,
+                       "health": {"warning": f"FR_calf_joint motor {hot} C (lies down at {lie} C)" if hot >= warn else "",
+                                  "temp_warn_c": warn, "temp_lie_c": lie, "battery_warn_pct": 15}})
+
+
 def tick():
-    state.publish(String(data='{"mode": "pose", "posture": "standing", "tilt_deg": 1.5}'))
+    state.publish(String(data=robot_state()))
     estop_state.publish(Bool(data=estop_latched[0]))
     vel.publish(Vector3(x=0.01, y=0.0, z=0.0))
     contact.publish(Float32MultiArray(data=[1.0, 1.0, 1.0, 1.0]))

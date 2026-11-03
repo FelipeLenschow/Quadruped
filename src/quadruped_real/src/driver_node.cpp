@@ -164,6 +164,10 @@ DriverNode::DriverNode(Paths paths, YAML::Node config, ControlLoop& loop, Comman
       kinematics_(qc::LegGeometry::from_yaml(paths_.geometry)) {
   joint_names_ = qc::ControllerConfig().joint_names;
   state_period_ = 1.0 / get<double>(config_["cmd_vel"], "robot_state_rate", 10.0);
+  const LoopConfig d;
+  health_limits_ = {get<int>(config_["safety"], "motor_temp_warn_c", d.motor_temp_warn_c),
+                    get<int>(config_["safety"], "motor_temp_lie_c", d.motor_temp_lie_c),
+                    get<int>(config_["safety"], "battery_warn_pct", d.battery_warn_pct)};
   odom_height_ = get<double>(config_["control"], "default_height", 0.33);
   have_calibration_ = true;
 
@@ -708,6 +712,26 @@ void DriverNode::publish_robot_state(const Snapshot& s) {
     gait = o.dump();
   }
   auto opt = [](const std::optional<std::string>& v) { return v ? json::str(*v) : std::string("null"); };
+  std::vector<std::string> temps, flags;
+  int hot = 0;
+  for (int j = 0; j < 12; ++j) {
+    temps.push_back(json::integer(s.motor_temp[j]));
+    flags.push_back(json::integer(s.motor_flags[j]));
+    if (s.motor_temp[j] > s.motor_temp[hot]) hot = j;
+  }
+  const std::string battery = json::Object()
+                                  .add("soc", json::integer(s.battery_soc))
+                                  .add("v", json::num(std::round(s.power_v * 100.0) / 100.0))
+                                  .add("a", json::num(std::round(s.power_a * 100.0) / 100.0))
+                                  .dump();
+  const std::string hottest =
+      json::Object().add("joint", json::str(joint_names_[hot])).add("c", json::integer(s.motor_temp[hot])).dump();
+  const std::string health = json::Object()
+                                 .add("warning", json::str(s.health_warning))
+                                 .add("temp_warn_c", json::integer(health_limits_[0]))
+                                 .add("temp_lie_c", json::integer(health_limits_[1]))
+                                 .add("battery_warn_pct", json::integer(health_limits_[2]))
+                                 .dump();
   std::string heartbeat;
   {
     std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -741,6 +765,11 @@ void DriverNode::publish_robot_state(const Snapshot& s) {
                .add("trick_switches", json::integer(s.trick_switches))
                .add("gait", gait)
                .add("heartbeat", heartbeat)
+               .add("battery", s.has_state ? battery : "null")
+               .add("motor_temp_c", s.has_state ? json::list(temps) : "null")
+               .add("hottest", s.has_state ? hottest : "null")
+               .add("motor_flags", s.has_state ? json::list(flags) : "null")
+               .add("health", health)
                .dump();
   state_pub_->publish(m);
 }

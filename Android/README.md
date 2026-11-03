@@ -9,8 +9,9 @@ Android, no bridge on the robot.
 - `ConsoleCore.kt`: the console logic (heartbeat, safety params, e-stop latch, policy pre-flight).
 - `ConsoleService.kt`: foreground service with wake + low-latency Wi-Fi locks, runs the heartbeat.
   Disconnect or swiping the app away sends the e-stop, like Ctrl-C on the console.
-- Top bar: link state and heartbeat loss, then the robot's posture, tilt and the worst flag
-  (blocked, numb, no torque). The STOP button is the same size on every tab. Offline, every tab keeps its
+- Top bar: link state and heartbeat loss, then the robot's posture, tilt, battery %, the hottest motor (°C)
+  and the worst flag (blocked, numb, no torque). Battery and motor colours follow `/robot_state` `health`
+  (config.yaml `safety:` limits). The STOP button is the same size on every tab. Offline, every tab keeps its
   layout, disabled.
 - Drive tab: Pose/Policy switch and the Numb / Release button (`/safety/numb`), then only what the mode
   uses. Pose: the poses and the transition time. Policy: the policy picker (the list from `/robot_state`,
@@ -20,7 +21,8 @@ Android, no bridge on the robot.
   when centred, so it holds Nav2 off. Off sends one zero and stops, and twist_mux hands back to
   Nav2 after 0.5 s. E-stop, leaving Policy or leaving the app turns it off. A stick only takes touches
   inside its circle. Banners show while the safety lie-down runs, the robot is numb or safety is blocked
-  (with Safety reset, also on the System tab).
+  (with Safety reset, also on the System tab), and for `/robot_state` `health.warning` (a hot motor, a low
+  battery).
   When the running policy is a trick (`/robot_state` `trick_switches` > 0: Pee, Sniff, Wiggle), the Trick card
   has hold buttons ("Left" and "Right" for Pee): held, its switch goes out on `/pipeline/trick` at 20 Hz;
   let go (or e-stop, numb, another policy, leaving Policy) sends all off once and the robot stands back up.
@@ -50,7 +52,8 @@ Android, no bridge on the robot.
   "Goal" mode sends a drag as `/goal_pose`. "Save map" sends a name on `/map/save`; the robot's `map_save`
   (started with SLAM) writes `maps/<name>.pgm/.yaml` and answers on `/map/save/result`. These streams are subscribed only while shown,
   best-effort, so they never compete with the heartbeat for retransmits.
-- System tab: "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
+- System tab: "Robot body" card from `/robot_state` (real Go2 only): battery %, volts and amps, and the 12
+  motor temperatures by leg and joint. Then the "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
   published once a second by `quadruped_drivers/system_monitor`, which the real launch starts;
   the DDS link, events, safety & gains, and connection settings.
 
