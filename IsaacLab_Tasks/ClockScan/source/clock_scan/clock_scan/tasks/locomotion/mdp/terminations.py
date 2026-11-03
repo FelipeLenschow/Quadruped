@@ -22,6 +22,15 @@ def illegal_contact_after(
     return hit & (env.episode_length_buf * env.step_dt >= grace_s)
 
 
+def contact_longer_than(
+    env: ManagerBasedRLEnv, max_time: float, sensor_cfg: SceneEntityCfg, grace_s: float = 0.0
+) -> torch.Tensor:
+    """A body of sensor_cfg in contact for more than max_time (s) without a break, after the first grace_s of an
+    episode. A short touch, such as the belly on a step edge, does not end the episode."""
+    contact_time = env.scene.sensors[sensor_cfg.name].data.current_contact_time.torch[:, sensor_cfg.body_ids]
+    return (contact_time.max(dim=1)[0] > max_time) & (env.episode_length_buf * env.step_dt >= grace_s)
+
+
 def physics_blowup(
     env: ManagerBasedRLEnv, max_joint_vel: float = 100.0, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:

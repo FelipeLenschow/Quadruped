@@ -52,7 +52,7 @@ Task: `Go2-Clock-Scan`
   flight put a robot standing 0.28 m above the steps at 0.79 m, and the tilt was off by up to the 35 degree clip.
 - **Stairs:** robots on stairs get forward-only commands: 0 <= x <= 0.6 m/s, sideways kept, turning x0.3
   (`CLOCK_SCAN_FORWARD_X_MAX`, `_Y_SCALE`, `_YAW_SCALE`), always (`CLOCK_SCAN_FORWARD_END` 1.0; with less, the share falls
-  to it over `_RAMP_ITERS` after `_HOLD_ITERS`). On stair tiles a fall costs 0.25 of a fall elsewhere (`CLOCK_SCAN_STAIRS_FALL_SCALE`); a foot hitting
+  to it over `_RAMP_ITERS` after `_HOLD_ITERS`). On stair tiles a fall costs the same as elsewhere (`CLOCK_SCAN_STAIRS_FALL_SCALE`, 0.25 up to Lidar1), and every step alive gives 1 per second (`CLOCK_SCAN_W_ALIVE`): with the exploration noise, a step on stairs was worth about 0, so a fall cost only 5; a foot hitting
   a vertical face and body contacts cost the same as elsewhere (`CLOCK_SCAN_STAIRS_STUMBLE_SCALE`,
   `_CONTACT_SCALE`, 1.0).
 - **Stumble:** a foot hits a vertical face when its sideways contact force is more than 2x its vertical force
@@ -94,6 +94,10 @@ Task: `Go2-Clock-Scan`
   fitted ground plane. Against gravity (`CLOCK_SCAN_GROUND_TERMINATION=0`), an 18 x 30 cm stair (0.54 rad) left only
   0.26 rad: on model_46000, 321 of 323 episode ends on 18 cm steps were this reset, nose up 0.7-0.8 rad to keep
   the head off the next step, with the robot still walking.
+- **Trunk contact:** 20 per second while the base touches anything (`CLOCK_SCAN_W_BASE_CONTACT`; 5 in the first run with it, after which the falls near the top of the stairs grew), and the episode ends
+  only when the touch lasts over 1 s (`mdp.contact_longer_than`, `CLOCK_SCAN_BASE_CONTACT_TIME`; 0: any touch ends
+  it, as before). On model_30000, all 64 episode ends going up 18 cm steps were a touch: nose up on the first
+  steps, rear legs low, belly on the first step's edge.
 - **Actions** are clipped to +-10 (`CLOCK_SCAN_CLIP_ACTIONS`; +-2.5 rad from the default pose, the whole joint range),
   so the last_action input is too. At +-100, after a resume that restarted the optimizer, a policy fed its own large
   last action grew it about 10x per step to ~40000 in a few states, and the adaptive learning rate fell to its 1e-5
@@ -116,12 +120,15 @@ Task: `Go2-Clock-Scan`
   z -0.047 m; config.yaml's `real_lidar`), turning with the whole base: 16 rows aimed at flat ground 0.07-1.3 m ahead
   of the lidar (x 0.36-1.53 m from the base standing; `CLOCK_SCAN_LIDAR_ROWS`, `_NEAR`, `_FAR`, `_HEIGHT`), 21 columns
   over +-60 deg (`_COLS`, `_AZIMUTH`). Each value is the range from the lidar, clipped to 3 m (no hit reads 3 m,
-  `_RANGE`), now and 5 steps (0.1 s) back (`_LAG`): 672 inputs. Per ray and step: +-0.02 m noise (`_NOISE`), 15% no
-  return (`_DROP`), 15% a reading 1-10 steps older (`_STALE`, `_STALE_STEPS`), for the L1's sparse scan.
+  `_RANGE`), the current scan only: 336 inputs (`CLOCK_SCAN_LIDAR_LAG=5` adds the scan 0.1 s back, as the 2026-10-30/31
+  runs had). Per ray and step: +-0.02 m noise (`_NOISE`), and a
+  reading 1-10 steps older (`_STALE_STEPS`) with a probability drawn per episode from 0 to 30% (`_STALE`): an L1 bin
+  keeps its last return. Empty rays first read 3 m at 15%; that policy (2026-10-30 run, 21300) climbed 12 cm 94% of
+  the time with that noise and 3% without it.
   `mdp.lidar_ranges`, pattern `mdp.FanPatternCfg`; the mirror swaps the columns. Plan and deploy notes:
   `LIDAR_RANGES_PLAN.md`.
-- **Actor input:** 728 = Simple's 48-wide layout, the clock (8), the lidar ranges (672), in this order (379 with the
-  height map). The critic gets 592 (the head clearance last). To run or evaluate a height-map checkpoint (Stairs1),
+- **Actor input:** 392 = Simple's 48-wide layout, the clock (8), the lidar ranges (336), in this order (379 with the
+  height map, 728 with `CLOCK_SCAN_LIDAR_LAG=5`). The critic gets 592 (the head clearance last). To run or evaluate a height-map checkpoint (Stairs1),
   set `CLOCK_SCAN_ACTOR_SCAN=map`. To resume a height-map checkpoint into the lidar actor, set
   `CLOCK_SCAN_NEW_INPUTS_FROM=56`: the first 56 inputs keep their weights, the lidar ones start at zero.
 
@@ -145,6 +152,18 @@ and the height as in training; `CLOCK_SCAN_PLAY_STEP_HEIGHT` (m) gives 6 steps a
   100% across, 3% fell; 20 cm 95% / 20%; 22 cm 81% / 53%; down 100% across to 22 cm. Best at 0.4 m/s: up 18 cm
   98-100% across, at most 6% fell, with -0.2 to +0.2 m/s sideways; at 0.6 m/s 14-30% fell. Charts and videos in
   the run folder.
+- **`Lidar1`**: the lidar actor (current scan only) from scratch, 0-30700, any trunk touch ending the episode.
+  model_24500 on 6 steps at 0.5 m/s: up 18 cm 92% across, 86% fell; down 100% / 0%. On the 0.8 m flight at
+  0.4 m/s: up 18 cm 19% / 77%, down 98% / 6%. Up at 18 cm stopped there: the falls were the belly on the first
+  step's edge (see Trunk contact).
+- **`Lidar2/model_37000.pt`**: Lidar1's model_30700, then 300 iterations with the trunk touch a penalty (5 per
+  second, ended past 1 s), then 6000 with the alive bonus, the full fall penalty on stairs and 20 per second for
+  the trunk (`CLOCK_SCAN_START_STAGE=3 CLOCK_SCAN_START_LEVEL=15` on each resume). With 5 per second alone, the falls
+  near the top of the stairs grew after 1000 iterations; here every checkpoint from 32500 to 40000 scored 0.95-0.98
+  (`compare_40000/`). Pyramid at 0.5 m/s: up and down 15-22 cm 100% across, at most 2% fell. 0.8 m flight at
+  0.4 m/s: up 18 cm 95% / 2%, down 100% / 0%. At 0.3-0.6 m/s with -0.2 to +0.2 m/s sideways (`wide_34000/`, on
+  model_34000): at most 4% fell on the pyramid and 9% on the flight. Turning is slow below 0.5 rad/s (50-65% of the
+  command).
 
 ## Evaluation and deploy
 

@@ -106,10 +106,11 @@ def head_clearance(
 
 
 class lidar_ranges(ManagerTermBase):
-    """Distance along each ray of a ray caster from its origin (the lidar), clipped to max_range (no hit reads
-    max_range), as the L1 measures it, for the frames lags steps back (0 is now), oldest last. Each ray of each
-    frame is, independently: max_range with drop_prob (no return), an older reading (1 to stale_steps more steps
-    back) with stale_prob (the sparse, non-repeating scan), plus uniform noise of +-noise m."""
+    """Distance along each ray of a ray caster from its origin (the lidar), clipped to max_range (no hit within it
+    reads max_range), as the L1 measures it, for the frames lags steps back (0 is now), oldest last. Each ray of
+    each frame keeps an older reading (1 to stale_steps more steps back) with a probability drawn per episode from
+    0 to stale_max, as a bin of the sparse, non-repeating L1 scan keeps its last return; plus uniform noise of
+    +-noise m."""
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
@@ -122,10 +123,13 @@ class lidar_ranges(ManagerTermBase):
         rays = self._sensor.num_rays if hasattr(self._sensor, "num_rays") else self._sensor.ray_directions.shape[1]
         self._buf = torch.zeros(env.num_envs, self._depth, rays, device=env.device)
         self._fresh = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+        self._stale = torch.rand(env.num_envs, device=env.device) * float(p.get("stale_max", 0.0))
         self._step = -1
 
     def reset(self, env_ids: torch.Tensor | None = None) -> dict:
-        self._fresh[slice(None) if env_ids is None else env_ids] = True
+        ids = slice(None) if env_ids is None else env_ids
+        self._fresh[ids] = True
+        self._stale[ids] = torch.rand_like(self._stale[ids]) * float(self.cfg.params.get("stale_max", 0.0))
         return {}
 
     def __call__(
@@ -135,8 +139,7 @@ class lidar_ranges(ManagerTermBase):
         max_range: float = 3.0,
         lags: tuple[int, ...] = (0,),
         noise: float = 0.0,
-        drop_prob: float = 0.0,
-        stale_prob: float = 0.0,
+        stale_max: float = 0.0,
         stale_steps: int = 0,
     ) -> torch.Tensor:
         from isaaclab.utils.math import quat_apply
@@ -156,12 +159,10 @@ class lidar_ranges(ManagerTermBase):
         self._fresh[:] = False
         n, rays = dist.shape
         lag = self._lags.view(1, -1, 1).expand(n, -1, rays)
-        if stale_prob > 0.0 and stale_steps > 0:
+        if stale_max > 0.0 and stale_steps > 0:
             extra = torch.randint(1, stale_steps + 1, lag.shape, device=env.device)
-            lag = lag + extra * (torch.rand(lag.shape, device=env.device) < stale_prob)
+            lag = lag + extra * (torch.rand(lag.shape, device=env.device) < self._stale.view(-1, 1, 1))
         out = torch.gather(self._buf, 1, lag)
         if noise > 0.0:
             out = out + torch.empty_like(out).uniform_(-noise, noise)
-        if drop_prob > 0.0:
-            out = torch.where(torch.rand_like(out) < drop_prob, torch.full_like(out, max_range), out)
         return out.clamp(0.0, max_range).reshape(n, -1)

@@ -118,7 +118,9 @@ class terrain_stages(ManagerTermBase):
     termination other than the time limit), <dir>_stuck (commanded more than twice report_distance and never got
     out), and over all envs on that type: <dir>_steps (mean step count, or <dir>_width_cm, the flight width, on
     narrow_* types), <dir>_height_cm (mean step height, with stair_height_range) and <dir>_top (share in the
-    last block)."""
+    last block).
+
+    start_stage starts at that stage, with the forward-only share already at its end (to resume a run)."""
 
     def __init__(self, cfg: CurriculumTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
@@ -144,10 +146,12 @@ class terrain_stages(ManagerTermBase):
         per_gate = [types] * max(len(p.get("level_gates", ())), 1) if not types or isinstance(types[0], str) else list(types)
         self.level_types = [[self.names.index(n) for n in names if n in self.names] for names in per_gate]
         self.stair_types = torch.tensor([self.names.index(n) for n in p.get("stair_types", ()) if n in self.names], device=env.device, dtype=torch.long)
-        self.stage = 0
+        self.stage = min(int(p.get("start_stage", 0)), len(self.mixes) - 1)
         self.stairs_since = None
+        if self.stage > 0 and len(self.stair_types) and bool(self.mixes[self.stage][self.stair_types].sum() > 0):
+            self.stairs_since = env.common_step_counter - p.get("forward_hold_steps", 0) - p.get("forward_ramp_steps", 0)
         self.kind = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
-        self.target = self._retarget(self.mixes[0], fresh=True)
+        self.target = self._retarget(self.mixes[self.stage], fresh=True)
         self._move(torch.arange(env.num_envs, device=env.device), keep_level=True)
         env._terrain_kind = self.kind
         env._terrain_kind_names = self.names
@@ -263,6 +267,7 @@ class terrain_stages(ManagerTermBase):
         after_full_speed: bool = True,
         leave_distance: float = 0.0,
         stair_leave_distance: float = 0.0,
+        start_stage: int = 0,
     ) -> dict:
         ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long).reshape(-1)
         term = env.command_manager.get_term(command_name)

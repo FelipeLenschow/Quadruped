@@ -1,0 +1,180 @@
+{
+ "narrow_width": null,
+ "speed": 0.3,
+ "seconds": 12.0,
+ "distance": 2.0,
+ "per_tile": 8,
+ "results": [
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/2026-11-02_14-11-23/model_34000.pt",
+   "vy": -0.2,
+   "speed": 0.3,
+   "down": [
+    {
+     "height_cm": 15.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.016
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.016
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 15.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 128,
+     "across": 0.977,
+     "fell": 0.008
+    }
+   ]
+  },
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/2026-11-02_14-11-23/model_34000.pt",
+   "vy": 0.0,
+   "speed": 0.3,
+   "down": [
+    {
+     "height_cm": 15.0,
+     "robots": 128,
+     "across": 0.93,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 128,
+     "across": 0.938,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 128,
+     "across": 0.898,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 128,
+     "across": 0.945,
+     "fell": 0.0
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 15.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 128,
+     "across": 0.992,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 128,
+     "across": 0.977,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 128,
+     "across": 0.984,
+     "fell": 0.0
+    }
+   ]
+  },
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/2026-11-02_14-11-23/model_34000.pt",
+   "vy": 0.2,
+   "speed": 0.3,
+   "down": [
+    {
+     "height_cm": 15.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.008
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.008
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.023
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 15.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 128,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 128,
+     "across": 0.984,
+     "fell": 0.0
+    }
+   ]
+  }
+ ]
+}

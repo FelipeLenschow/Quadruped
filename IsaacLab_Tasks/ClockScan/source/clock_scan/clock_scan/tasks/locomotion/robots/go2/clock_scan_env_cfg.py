@@ -70,9 +70,10 @@ MAP_Y = _axis(-MAP_SIDE, MAP_SIDE, -MAP_FINE_SIDE, MAP_FINE_SIDE)
 # config.yaml's real_lidar), as the lidar measures them, so what a riser hides stays hidden; or "map", the height map
 # above. The critic always gets the height map and the grid below. The fan: LIDAR_ROWS rows aimed at the ground
 # LIDAR_NEAR to LIDAR_FAR m ahead of the lidar (standing, LIDAR_HEIGHT above flat ground) by LIDAR_COLS columns over
-# +-LIDAR_AZIMUTH deg, turning with the whole base. Ranges clipped to LIDAR_RANGE m (no hit reads LIDAR_RANGE), now and
-# LIDAR_LAG steps back; per ray +-LIDAR_NOISE m, LIDAR_DROP no return, LIDAR_STALE a reading 1 to LIDAR_STALE_STEPS
-# steps older (the L1's sparse scan).
+# +-LIDAR_AZIMUTH deg, turning with the whole base. Ranges clipped to LIDAR_RANGE m (no hit reads LIDAR_RANGE), now
+# (and LIDAR_LAG steps back, if above 0); per ray +-LIDAR_NOISE m, and a reading 1 to LIDAR_STALE_STEPS steps older
+# with a probability drawn per episode from 0 to LIDAR_STALE (the L1's sparse scan: a bin keeps its last return). Empty rays used to read
+# LIDAR_RANGE at 15%: a 3 m jump on 0.25-1.5 m ranges, and the policy then could not climb on clean input.
 ACTOR_SCAN = os.environ.get("CLOCK_SCAN_ACTOR_SCAN", "lidar")
 LIDAR_POS = (0.28945, 0.0, -0.046825)
 LIDAR_HEIGHT = _env("LIDAR_HEIGHT", 0.273)
@@ -82,10 +83,9 @@ LIDAR_NEAR = _env("LIDAR_NEAR", 0.07)
 LIDAR_FAR = _env("LIDAR_FAR", 1.3)
 LIDAR_AZIMUTH = _env("LIDAR_AZIMUTH", 60.0)
 LIDAR_RANGE = _env("LIDAR_RANGE", 3.0)
-LIDAR_LAG = int(_env("LIDAR_LAG", 5))
+LIDAR_LAG = int(_env("LIDAR_LAG", 0))
 LIDAR_NOISE = _env("LIDAR_NOISE", 0.02)
-LIDAR_DROP = _env("LIDAR_DROP", 0.15)
-LIDAR_STALE = _env("LIDAR_STALE", 0.15)
+LIDAR_STALE = _env("LIDAR_STALE", 0.3)
 LIDAR_STALE_STEPS = int(_env("LIDAR_STALE_STEPS", 10))
 LIDAR_DEPRESSIONS = tuple(
     round(float(np.degrees(np.arctan2(LIDAR_HEIGHT, d))), 3) for d in np.linspace(LIDAR_NEAR, LIDAR_FAR, LIDAR_ROWS)
@@ -148,6 +148,9 @@ STAGE_TRACK = _env("STAGE_TRACK", 0.65)
 STAGE_HOLD = int(_env("STAGE_HOLD", 3))
 STAGE_BOXES_DIFFICULTY = _env("STAGE_BOXES_DIFFICULTY", 0.4)
 STAGE_STAIRS_DIFFICULTY = _env("STAGE_STAIRS_DIFFICULTY", 0.75)
+# To resume a run: start at terrain stage START_STAGE (0-3), robots at random levels 0 to START_LEVEL.
+START_STAGE = int(_env("START_STAGE", 0))
+START_LEVEL = int(_env("START_LEVEL", 1))
 # Once stairs are in: every env on stairs walks forward only for FORWARD_HOLD_ITERS iterations, then the share
 # falls linearly to FORWARD_END over FORWARD_RAMP_ITERS. Forward only: 0 <= x <= FORWARD_X_MAX, y x FORWARD_Y_SCALE,
 # turning x FORWARD_YAW_SCALE.
@@ -166,7 +169,7 @@ _CLIP_ACTIONS = BasePPORunnerCfg().clip_actions
 LEAVE_DISTANCE = _env("LEAVE_DISTANCE", 0.0)
 STAIRS_LEAVE_DISTANCE = _env("STAIRS_LEAVE_DISTANCE", 2.0)
 # Fall penalty on stair tiles, as a share of W_TERMINATION.
-STAIRS_FALL_SCALE = _env("STAIRS_FALL_SCALE", 0.25)
+STAIRS_FALL_SCALE = _env("STAIRS_FALL_SCALE", 1.0)
 # Going over an edge: the base down faster than FALL_SPEED (m/s) ends the episode, with W_FALL_OFF on top of
 # the fall penalty.
 FALL_SPEED = _env("FALL_SPEED", 3.0)
@@ -225,6 +228,9 @@ TILT_LIMIT = _env("TILT_LIMIT", 0.8)
 HEAD_CLEARANCE = _env("HEAD_CLEARANCE", 0.15)
 W_HEAD = _env("W_HEAD", -20.0)
 W_TERMINATION = _env("W_TERMINATION", -1000.0)
+# Per second alive. With the exploration noise, a step on stairs was worth about 0 without it, so a fall cost
+# only the termination penalty.
+W_ALIVE = _env("W_ALIVE", 1.0)
 W_STUMBLE = _env("W_STUMBLE", -5.0)
 # A foot counts as hitting a vertical face when its sideways force is more than STUMBLE_RATIO x its vertical force.
 STUMBLE_RATIO = _env("STUMBLE_RATIO", 2.0)
@@ -263,6 +269,10 @@ LYING_FRACTION = _env("LYING_FRACTION", 0.2)
 DROP_FRACTION = _env("DROP_FRACTION", 0.2)
 DROP_HEIGHT = _range("DROP_HEIGHT", 0.1, 0.3)
 CONTACT_GRACE = _env("CONTACT_GRACE", STANDBY[1])
+# Base (trunk) contact: W_BASE_CONTACT per step, and the episode ends when it lasts over BASE_CONTACT_TIME (s; 0: any
+# touch ends it).
+BASE_CONTACT_TIME = _env("BASE_CONTACT_TIME", 1.0)
+W_BASE_CONTACT = _env("W_BASE_CONTACT", -20.0)
 LYING_JOINT_POS = {
     ".*L_hip_joint": 0.1,
     ".*R_hip_joint": -0.1,
@@ -272,6 +282,7 @@ LYING_JOINT_POS = {
 
 _FEET_BODIES = SceneEntityCfg("robot", body_names=FEET, preserve_order=True)
 _FEET_CONTACT = SceneEntityCfg("contact_forces", body_names=FEET, preserve_order=True)
+_BASE_CONTACT = SceneEntityCfg("contact_forces", body_names="base")
 _SCAN = SceneEntityCfg("height_scanner")
 _MAP = SceneEntityCfg("map_scanner")
 _HEAD_RAY = SceneEntityCfg("head_ground")
@@ -357,7 +368,7 @@ class RobotSceneCfg(InteractiveSceneCfg):
         prim_path="/World/ground",
         terrain_type="generator",
         terrain_generator=ROUGH_TERRAINS_CFG,
-        max_init_terrain_level=1,
+        max_init_terrain_level=START_LEVEL,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -616,10 +627,9 @@ class ObservationsCfg:
             params={
                 "sensor_cfg": SceneEntityCfg("lidar"),
                 "max_range": LIDAR_RANGE,
-                "lags": (0, LIDAR_LAG),
+                "lags": (0, LIDAR_LAG) if LIDAR_LAG > 0 else (0,),
                 "noise": LIDAR_NOISE,
-                "drop_prob": LIDAR_DROP,
-                "stale_prob": LIDAR_STALE,
+                "stale_max": LIDAR_STALE,
                 "stale_steps": LIDAR_STALE_STEPS,
             },
         )
@@ -654,6 +664,7 @@ class ObservationsCfg:
 @configclass
 class RewardsCfg:
     # -- task
+    alive = RewTerm(func=mdp.is_alive, weight=W_ALIVE)
     track_lin_vel_xy = RewTerm(
         func=mdp.track_lin_vel_xy_exp_scaled,
         weight=1.5,
@@ -764,6 +775,9 @@ class RewardsCfg:
     )
 
     # -- other
+    base_contact = RewTerm(
+        func=mdp.undesired_contacts, weight=W_BASE_CONTACT, params={"threshold": 1.0, "sensor_cfg": _BASE_CONTACT}
+    )
     undesired_contacts = RewTerm(
         func=mdp.terrain_scaled,
         weight=W_CONTACTS,
@@ -781,13 +795,16 @@ class RewardsCfg:
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    base_contact = DoneTerm(
-        func=mdp.illegal_contact_after,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"),
-            "threshold": 1.0,
-            "grace_s": CONTACT_GRACE,
-        },
+    base_contact = (
+        DoneTerm(
+            func=mdp.contact_longer_than,
+            params={"sensor_cfg": _BASE_CONTACT, "max_time": BASE_CONTACT_TIME, "grace_s": CONTACT_GRACE},
+        )
+        if BASE_CONTACT_TIME > 0
+        else DoneTerm(
+            func=mdp.illegal_contact_after,
+            params={"sensor_cfg": _BASE_CONTACT, "threshold": 1.0, "grace_s": CONTACT_GRACE},
+        )
     )
     bad_orientation = (
         DoneTerm(func=mdp.bad_orientation_ground, params={"limit_angle": TILT_LIMIT, "sensor_cfg": _SCAN})
@@ -818,6 +835,7 @@ class CurriculumCfg:
             "forward_end_share": FORWARD_END,
             "leave_distance": LEAVE_DISTANCE,
             "stair_leave_distance": STAIRS_LEAVE_DISTANCE,
+            "start_stage": START_STAGE,
         },
     )
     lin_vel_cmd_levels = CurrTerm(func=mdp.lin_vel_cmd_levels)
@@ -868,6 +886,8 @@ if os.environ.get("CLOCK_SCAN_PLAY_STEP_HEIGHT"):
     PLAY_DIFFICULTY = (stairs_difficulty(_env("PLAY_STEP_HEIGHT", 0.18)),) * 2
 # Tiles in x. Rows run along x, so a robot pinned to walk +x crosses from its tile into the next row's.
 PLAY_ROWS = int(_env("PLAY_ROWS", 2))
+# Narrow stairs: side types as open, balusters, wall shares (e.g. "1,0,0" for open sides).
+PLAY_SIDES = os.environ.get("CLOCK_SCAN_PLAY_SIDES")
 
 
 @configclass
@@ -906,6 +926,8 @@ class ClockScanPlayEnvCfg(ClockScanEnvCfg):
             ),
         }
         terrain = {**gen.sub_terrains, **extra}[PLAY_TERRAIN].replace(proportion=1.0)
+        if PLAY_SIDES and hasattr(terrain, "side_probs"):
+            terrain = terrain.replace(side_probs=tuple(float(v) for v in PLAY_SIDES.split(",")))
         self.scene.terrain.terrain_generator = gen.replace(
             num_rows=PLAY_ROWS, num_cols=1, sub_terrains={PLAY_TERRAIN: terrain}, difficulty_range=PLAY_DIFFICULTY
         )

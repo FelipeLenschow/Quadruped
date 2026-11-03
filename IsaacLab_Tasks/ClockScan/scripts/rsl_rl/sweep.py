@@ -75,7 +75,7 @@ import clock_scan.tasks  # noqa: F401
 from clock_scan.utils.parser_cfg import parse_env_cfg
 
 
-_GAIT_PY = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "Tools", "gait_metrics.py"))
+_GAIT_PY = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "src", "quadruped_drivers", "quadruped_drivers", "gait_metrics.py"))
 _spec = importlib.util.spec_from_file_location("gait_metrics", _GAIT_PY)
 gait_metrics = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gait_metrics)
