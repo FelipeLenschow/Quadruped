@@ -97,6 +97,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.quadruped.console.ui.CameraView
+import com.quadruped.console.ui.ChatTab
 import com.quadruped.console.ui.ConsoleTheme
 import com.quadruped.console.ui.HeartbeatLine
 import com.quadruped.console.ui.Joystick
@@ -143,6 +144,7 @@ private enum class Tab(val label: String, val icon: androidx.compose.ui.graphics
     DRIVE("Drive", Icons.Filled.PlayArrow),
     MAP("Map", Icons.Filled.LocationOn),
     CAMERA("Camera", Icons.Filled.Search),
+    CHAT("Chat", Icons.Filled.Face),
     SHELL("Shell", Icons.AutoMirrored.Filled.KeyboardArrowRight),
     SYSTEM("System", Icons.Filled.Settings),
 }
@@ -198,6 +200,7 @@ fun ConsoleApp() {
                 Tab.CAMERA -> CameraView(
                     s?.robotState?.optJSONObject("heartbeat"), (s?.params ?: SafetyParams()).watchdogTimeout, body,
                 )
+                Tab.CHAT -> ChatTab(body)
                 Tab.SHELL -> Column(body) { ShellTab(Modifier.weight(1f)) }
                 Tab.SYSTEM -> Column(body.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     SystemTab(s, c, info)

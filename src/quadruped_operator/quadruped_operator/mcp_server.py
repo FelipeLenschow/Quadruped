@@ -61,6 +61,19 @@ beside it (nothing is released), wiggle wags the body. To go to something you se
 go_to the x, y that find gives."""
 
 
+def boxed(image_b64, box, label):
+    """The JPEG with the box (thousandths of its width and height) drawn, as an MCP image for the person only
+    (audience user): the app's chat shows it, and llm_host does not give it to the model."""
+    img = cv2.imdecode(np.frombuffer(base64.b64decode(image_b64), np.uint8), cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    x1, y1, x2, y2 = (int(round(v * s / 1000.0)) for v, s in zip(box, (w, h, w, h)))
+    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 220, 255), 2)
+    cv2.putText(img, label, (x1, max(14, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 255), 1, cv2.LINE_AA)
+    data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
+    return {"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg",
+            "annotations": {"audience": ["user"]}}
+
+
 def yaw_of(q):
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
@@ -441,7 +454,9 @@ class Robot(Node):
         out = json.loads(res["content"][0]["text"])
         out["box_thousandths"] = [round(v) for v in box]
         self._add_found(what, out["x"], out["y"])
-        return text(json.dumps(out))
+        res = text(json.dumps(out))
+        res["content"].append(boxed(image, box, self._label(what)))
+        return res
 
     def locate(self, box=None, x=None, y=None, thousandths=False):
         s = self.seen

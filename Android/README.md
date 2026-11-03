@@ -52,6 +52,11 @@ Android, no bridge on the robot.
   "Goal" mode sends a drag as `/goal_pose`. "Save map" sends a name on `/map/save`; the robot's `map_save`
   (started with SLAM) writes `maps/<name>.pgm/.yaml` and answers on `/map/save/result`. These streams are subscribed only while shown,
   best-effort, so they never compete with the heartbeat for retransmits.
+- Chat tab: the LLM agent's chat (launcher [A], `Tools/llm_host.py --app`) over HTTP to `10.42.0.1:8766`, not DDS
+  (the native reader keeps no history), on the robot's Wi-Fi network; `res/xml/network_security_config.xml` allows
+  plain HTTP to that address only. The first message is the task, later ones answer the agent. The agent's
+  text, its tool calls and results, and the photos (`look`'s, and `find`'s with its box drawn) show in the list;
+  a tap shows a photo full size. Stop stops the chat and the robot; New chat also clears it.
 - System tab: "Robot body" card from `/robot_state` (real Go2 only): battery %, volts and amps, and the 12
   motor temperatures by leg and joint. Then the "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
   published once a second by `quadruped_drivers/system_monitor`, which the real launch starts;

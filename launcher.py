@@ -640,7 +640,7 @@ def run_cli_menu():
         print("  [X] RQT Graph (REQUIRES DOCKER OR PY3.10)")
         print("  [X] TF2 Tree (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Discovery Server (REQUIRES DOCKER OR PY3.10)")
-    print("  [A] LLM Agent (Ollama model drives the robot through mcp_server)")
+    print("  [A] LLM Agent (Ollama model drives the robot through mcp_server; tasks from the app's Chat tab)")
 
     action_map = {
         "0": "repeat",
@@ -1245,9 +1245,9 @@ def run_cli_menu():
         url = input("MCP server [http://127.0.0.1:8765/mcp]: ").strip() or "http://127.0.0.1:8765/mcp"
         model = input(f"Ollama model [{model_def}]: ").strip() or model_def
         ctx = input(f"Context tokens [{ctx_def}]: ").strip() or ctx_def
-        task = input("Task (Enter for the cone-visiting loop, or exploring without object detection): ").strip()
-        minutes = input("Minutes to keep going, 0 = until it stops [10]: ").strip() or "10"
-        sweep_opts = {"url": url, "model": model, "ctx": ctx, "keep": keep_def, "task": task, "minutes": minutes}
+        # The tasks come from the app's Chat tab (llm_host --app); the model stays loaded between chats.
+        minutes = input("Minutes for each chat, 0 = no limit [10]: ").strip() or "10"
+        sweep_opts = {"url": url, "model": model, "ctx": ctx, "keep": keep_def, "minutes": minutes}
 
     if action == "lio":
         save = input("Save the 3D map to third_party/point_lio_ros2/PCD/scans.pcd on exit? [y/N]: ").lower().strip() == "y"
@@ -1633,9 +1633,7 @@ def main():
                               map_objects=sweep_opts.get("map_objects", False))
 
         elif action == "llm_agent":
-            cmd = [sys_python, os.path.abspath(os.path.join("Tools", "llm_host.py"))]
-            if sweep_opts.get("task"):
-                cmd.append(sweep_opts["task"])
+            cmd = [sys_python, os.path.abspath(os.path.join("Tools", "llm_host.py")), "--app"]
             cmd += [f"--mcp={sweep_opts.get('url', 'http://127.0.0.1:8765/mcp')}",
                     f"--model={sweep_opts.get('model', 'qwen3.8:27b')}", f"--minutes={sweep_opts.get('minutes', '10')}",
                     f"--ctx={sweep_opts.get('ctx', '8192' if IS_ROBOT else '32768')}",
