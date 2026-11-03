@@ -621,7 +621,7 @@ class Robot(Node):
             short = math.hypot(x - p[0], y - p[1]) if p and obj is None else 0.0
             if short > float(self.cfg.get("arrive_tolerance", 0.3)):
                 return text(f"stopped {short:.2f} m short of {target}: it is in or against an obstacle, the nearest "
-                            f"free spot is as far as Nav2 goes;{where}")
+                            f"free spot is as far as Nav2 goes, and a new goal there stops here again;{where}")
             return text(f"arrived at {target};{where}")
         return text(f"{target}: {NAV_STATUS.get(status, f'status {status}')};{where}", True)
 
@@ -649,16 +649,18 @@ class Robot(Node):
         if res["isError"] or self.stopping.is_set():
             return res
         if gap < nav_gap and self.cfg.get("final_step", True):
-            why = self._final_step(*spot(gap), yaw)
+            why = self._final_step(*spot(gap), yaw, nav_gap - gap)
             if why:
                 return text(f"{why}; no {trick}", True)
         return self._skill(trick, 0.0, obj)
 
-    def _final_step(self, x, y, yaw):
+    def _final_step(self, x, y, yaw, planned):
         p = self.pose()
         if p is None:
             return "lost the robot's position"
-        if math.hypot(x - p[0], y - p[1]) > float(self.cfg.get("final_step_max", 0.6)):
+        # Nav2 succeeds up to its xy_goal_tolerance (0.25 m) from the standoff spot, so the slack must be more.
+        limit = planned + float(self.cfg.get("final_step_slack", 0.35))
+        if math.hypot(x - p[0], y - p[1]) > limit:
             return f"Nav2 stopped {math.hypot(x - p[0], y - p[1]):.2f} m from the trick's spot, too far for the last step"
         vmax = float(self.cfg.get("final_step_speed", 0.15))
         end = time.monotonic() + float(self.cfg.get("final_step_s", 6.0))
