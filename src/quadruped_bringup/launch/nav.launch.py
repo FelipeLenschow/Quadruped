@@ -73,10 +73,12 @@ def setup(context):
         Node(package="quadruped_perception", executable="lidar_filter", output="screen", parameters=[use_sim],
              arguments=[] if sim else [f"--accumulate={REAL_LIDAR_CLOUDS_MERGED}"]),
         Node(package="pointcloud_to_laserscan", executable="pointcloud_to_laserscan_node", output="log",
-             remappings=[("cloud_in", "/lidar/points_filtered"), ("scan", "/scan")],
+             # lidar_filter's cloud less the floor (height above a floor plane fitted in the cloud), so no
+             # min_height cut here: one above base_footprint let floor points in near the robot.
+             remappings=[("cloud_in", "/lidar/points_obstacles"), ("scan", "/scan")],
              parameters=[use_sim, {
                  "target_frame": "base_footprint", "transform_tolerance": 0.05,
-                 "min_height": 0.10, "max_height": 0.60,
+                 "min_height": 0.0, "max_height": 0.60,
                  "angle_min": -math.pi, "angle_max": math.pi, "angle_increment": 0.01745,
                  "scan_time": 0.1, "range_min": 0.2, "range_max": 15.0, "use_inf": True,
              }]),

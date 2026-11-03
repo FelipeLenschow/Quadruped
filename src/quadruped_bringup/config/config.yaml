@@ -48,6 +48,19 @@ lidar_filter:
   # states): a beam clipping a leg's edge returns a point smeared out past the leg. 0 disables.
   leg_radius: 0.045
   max_range: 20.0
+  # /lidar/points_obstacles (Nav2's /scan): the points at least height m above the floor, near_height within
+  # near_m (the L1's floor points 0.4-0.6 m away spread to 7-10 cm). Inside fit_m the floor is a plane fitted to
+  # the cloud's points there within fit_band of base_footprint (z = 0), if fit_points of them and at most
+  # max_tilt_deg; else, and farther out, z = 0. On the 2026-11-03 recording a 10 cm cut above base_footprint let
+  # floor in at the face (100 rays under 0.7 m in 71 s, now 0); a ring to 1.5 m lost real obstacles' feet past it.
+  floor:
+    fit_m: [0.4, 1.0]
+    fit_band: 0.08
+    fit_points: 200
+    max_tilt_deg: 10.0
+    height: 0.10
+    near_m: 0.7
+    near_height: 0.12
 
 # Real Go2 L1 lidar mount on the base (real_sensors). Gazebo uses the URDF's. lidar_level finds roll and
 # pitch from the floor and keeps yaw. The yaw is ~120 deg about the lidar's own axis off the URDF's radar

@@ -11,6 +11,12 @@ on the real Go2 these came off the front-left thigh at 0.10-0.13 m and marked ph
 With --accumulate N the last N clouds are merged, each moved through odom into the newest cloud's base
 frame. The real L1 covers only a patch of its field of view per cloud (~44 of 360 scan beams), so one
 cloud alone leaves most of /scan empty.
+
+/lidar/points_obstacles (for /scan) is the same cloud less the floor: the points at least floor.height above a
+plane fitted to this cloud's own floor near the robot (inside floor.fit_m; farther out, above base_footprint). A fixed height above base_footprint let
+floor points 0.4-0.6 m ahead into /scan as an obstacle at the robot's face: base_footprint's height, the odom
+attitude's lag behind the merged clouds (at a 5 degree pitch, 4 cm at 0.5 m) and the L1's near floor noise (to
+7-10 cm there) added up past the 10 cm margin. Fitted in the same cloud, the first two cancel.
 """
 
 import argparse
@@ -34,6 +40,7 @@ from quadruped_common.kinematics import leg_chain_body
 FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
           for i, n in enumerate(("x", "y", "z", "intensity"))]
 ODOM_FRAME = "odom"
+FOOTPRINT_FRAME = "base_footprint"
 LEGS = ("FL", "FR", "RL", "RR")
 
 
@@ -60,7 +67,16 @@ class LidarFilter(Node):
         self.transforms = {}
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        floor = cfg.get("floor") or {}
+        self.fit_min, self.fit_max = (float(v) for v in floor.get("fit_m", (0.4, 1.0)))
+        self.fit_band = float(floor.get("fit_band", 0.08))
+        self.fit_points = int(floor.get("fit_points", 200))
+        self.max_tilt = np.tan(np.radians(float(floor.get("max_tilt_deg", 10.0))))
+        self.height = float(floor.get("height", 0.10))
+        self.near_m = float(floor.get("near_m", 0.7))
+        self.near_height = float(floor.get("near_height", 0.12))
         self.pub = self.create_publisher(PointCloud2, "/lidar/points_filtered", qos_profile_sensor_data)
+        self.obstacle_pub = self.create_publisher(PointCloud2, "/lidar/points_obstacles", qos_profile_sensor_data)
         self.create_subscription(PointCloud2, "/lidar/points", self._cloud_cb, qos_profile_sensor_data)
         if self.leg_radius > 0:
             self.create_subscription(JointState, "/sensors/joint_states", self._joints_cb, 10)
@@ -106,11 +122,11 @@ class LidarFilter(Node):
                                        np.array([t.translation.x, t.translation.y, t.translation.z]))
         return self.transforms[source]
 
-    def _odom_pose(self, stamp):
-        """odom <- base at the cloud's time, or the latest one if TF has not caught up with it yet."""
+    def _odom_pose(self, stamp, target=ODOM_FRAME):
+        """target (odom) <- base at the cloud's time, or the latest one if TF has not caught up with it yet."""
         for t in (Time.from_msg(stamp), Time()):
             try:
-                tf = self.tf_buffer.lookup_transform(ODOM_FRAME, self.frame, t).transform
+                tf = self.tf_buffer.lookup_transform(target, self.frame, t).transform
             except TransformException:
                 continue
             return rotation(tf.rotation), np.array([tf.translation.x, tf.translation.y, tf.translation.z])
@@ -126,6 +142,45 @@ class LidarFilter(Node):
         pts = np.concatenate([h[0] for h in self.history])
         intensity = np.concatenate([h[1] for h in self.history])
         return np.column_stack([(pts - t) @ R, intensity]).astype(np.float32)
+
+    def _obstacles(self, out, stamp):
+        """The points standing high enough above the floor plane fitted to this cloud (see the module doc). With
+        too few floor points (a wall in front, a stair edge) the plane is base_footprint's own z = 0."""
+        pose = self._odom_pose(stamp, FOOTPRINT_FRAME)
+        if pose is None:
+            return out[:0]
+        R, t = pose
+        p = out[:, :3].astype(np.float64) @ R.T + t
+        d = np.hypot(p[:, 0], p[:, 1])
+        plane = np.zeros(3)
+        sel = (d > self.fit_min) & (d < self.fit_max) & (np.abs(p[:, 2]) < self.fit_band)
+        for band in (self.fit_band, 0.03):  # a fit, then again with its inliers only
+            if sel.sum() < self.fit_points:
+                break
+            A = np.column_stack([np.ones(sel.sum()), p[sel, 0], p[sel, 1]])
+            coef = np.linalg.lstsq(A, p[sel, 2], rcond=None)[0]
+            if np.hypot(coef[1], coef[2]) > self.max_tilt:
+                break
+            plane = coef
+            sel &= np.abs(p[:, 2] - (coef[0] + coef[1] * p[:, 0] + coef[2] * p[:, 1])) < band
+        # Only inside the fitted ring: the L1 sees a patch per cloud, so the floor points often lie on one side and
+        # the tilt toward the other is a guess; farther out it moved real obstacles' feet under the cut. There
+        # the height is above base_footprint, as before.
+        above = p[:, 2] - np.where(d < self.fit_max, plane[0] + plane[1] * p[:, 0] + plane[2] * p[:, 1], 0.0)
+        return out[above >= np.where(d < self.near_m, self.near_height, self.height)]
+
+    def _publish(self, pub, out, stamp):
+        cloud = PointCloud2()
+        cloud.header.stamp = stamp
+        cloud.header.frame_id = self.frame
+        cloud.height, cloud.width = 1, len(out)
+        cloud.fields = FIELDS
+        cloud.point_step, cloud.row_step = 16, 16 * len(out)
+        cloud.is_dense = True
+        data = array.array("B")
+        data.frombytes(out.tobytes())
+        cloud.data = data
+        pub.publish(cloud)
 
     def _cloud_cb(self, msg):
         tf = self._transform(msg.header.frame_id)
@@ -146,18 +201,8 @@ class LidarFilter(Node):
         out = np.column_stack([pts[outside], intensity[outside]]).astype(np.float32)
         if self.history is not None:
             out = self._merge(out, msg.header.stamp)
-
-        cloud = PointCloud2()
-        cloud.header.stamp = msg.header.stamp
-        cloud.header.frame_id = self.frame
-        cloud.height, cloud.width = 1, len(out)
-        cloud.fields = FIELDS
-        cloud.point_step, cloud.row_step = 16, 16 * len(out)
-        cloud.is_dense = True
-        data = array.array("B")
-        data.frombytes(out.tobytes())
-        cloud.data = data
-        self.pub.publish(cloud)
+        self._publish(self.pub, out, msg.header.stamp)
+        self._publish(self.obstacle_pub, self._obstacles(out, msg.header.stamp), msg.header.stamp)
 
 
 def main():
