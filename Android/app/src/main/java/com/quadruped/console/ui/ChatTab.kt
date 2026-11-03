@@ -119,12 +119,15 @@ fun ChatTab(modifier: Modifier) {
     var full by remember { mutableStateOf<ImageBitmap?>(null) }
     val list = rememberLazyListState()
 
-    // Long polls: the robot answers at once when there is something new, else after 20 s.
+    // Long polls: the robot answers at once when there is something new or it is not on the chat shown here (a
+    // restarted agent, or none shown yet), else after 20 s.
     LaunchedEffect(Unit) {
         while (isActive) {
             val after = if (ChatStore.chat < 0) 0 else ChatStore.events.lastOrNull()?.seq ?: 0
             val reply = runCatching {
-                withContext(Dispatchers.IO) { JSONObject(String(httpGet(ctx, "/chat?after=$after&wait=20", 25_000))) }
+                withContext(Dispatchers.IO) {
+                    JSONObject(String(httpGet(ctx, "/chat?after=$after&wait=20&chat=${ChatStore.chat}", 25_000)))
+                }
             }.getOrNull()
             if (reply == null) {
                 ChatStore.online = false

@@ -13,8 +13,9 @@ In the terminal (Enter: it keeps going until --minutes are up; --auto never wait
 
 With --app (launcher [A]), the operator is the phone app's Chat tab: it waits for a task from the app, and
 serves the chat over HTTP on --port (8766), open to anyone on the network, like the MCP server without a token:
-    GET  /chat?after=<seq>&wait=<s>  the chat's events after seq: {"chat", "status", "events": [{"seq", "kind",
-                                     "text", "tool", "image"}]}; waits up to wait s (at most 25) for a new one
+    GET  /chat?after=<seq>&wait=<s>&chat=<id>  the chat's events after seq: {"chat", "status", "events": [{"seq",
+                                     "kind", "text", "tool", "image"}]}; waits up to wait s (at most 25) for a new
+                                     one or a new status, not when chat (the one the app shows) is another
     GET  /image/<n>.jpg              a photo an event names (look's, and find's with its box drawn)
     POST /chat {"text"}              the task when no chat runs, else an answer ("" = keep going)
     POST /chat/stop                  stops the chat and the robot
@@ -189,9 +190,14 @@ class AppChat:
     def __init__(self, stop_robot):
         self.stop_robot = stop_robot
         self.cond = threading.Condition()
-        self.chat = 1
+        # Not 1: the app keeps a chat while the id stays, so a restarted agent's chat 1 showed the old one, and
+        # hid the new events until their numbers passed the old chat's last.
+        self.chat = int(time.time())
         self.events, self.images = [], {}
-        self.seq = self.image_n = 0
+        self.seq = 0
+        # Photo numbers from the clock in ms, as the chat id: the app keeps its photos by path, so a restarted
+        # agent's /image/1.jpg showed the old run's photo. A run never takes a photo a ms, so they never meet.
+        self.image_n = int(time.time() * 1000)
         self.state = "waiting for a task"
         self.running = self.stop_flag = False
         self.inbox = []
@@ -252,10 +258,16 @@ class AppChat:
         self.events.append(e)
         self.cond.notify_all()
 
-    def get(self, after, wait):
+    def get(self, after, wait, chat=None):
         end = time.monotonic() + min(max(wait, 0.0), 25.0)
         with self.cond:
-            while not any(e["seq"] > after for e in self.events) and time.monotonic() < end:
+            if chat is not None and chat != self.chat:
+                end = 0.0  # the app shows another chat (or none yet): the new id at once
+            # A new status also answers at once, not only a new event; so does an `after` this run never gave: an
+            # app still on the chat of an agent that was restarted, which would wait the whole poll to see the new id.
+            state = self.state
+            while not any(e["seq"] > after for e in self.events) and self.state == state and after <= self.seq \
+                    and time.monotonic() < end:
                 self.cond.wait(end - time.monotonic())
             return {"chat": self.chat, "status": self.state,
                     "events": [e for e in self.events if e["seq"] > after]}
@@ -306,9 +318,10 @@ def serve(chat, port):
             if path == "/chat":
                 try:
                     after, wait = int(q.get("after", 0)), float(q.get("wait", 0))
+                    shown = int(q["chat"]) if "chat" in q else None
                 except ValueError:
-                    return self._send(400, b'{"error": "after and wait are numbers"}')
-                self._send(200, json.dumps(chat.get(after, wait)).encode())
+                    return self._send(400, b'{"error": "after, wait and chat are numbers"}')
+                self._send(200, json.dumps(chat.get(after, wait, shown)).encode())
             elif m and int(m.group(1)) in chat.images:
                 self._send(200, base64.b64decode(chat.images[int(m.group(1))]), "image/jpeg")
             else:
