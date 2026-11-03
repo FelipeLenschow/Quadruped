@@ -26,6 +26,7 @@ const char* kRed = "\033[91m";
 const char* kYellow = "\033[93m";
 const char* kBold = "\033[1m";
 const char* kReset = "\033[0m";
+constexpr double kFootRadius = 0.022;  // Go2 foot sphere, m: FK gives its centre
 const char* kGaitNames[9] = {"height", "frequency", "phase", "offset", "bound", "swing", "pitch", "width", "duty"};
 const std::vector<std::pair<std::string, Eigen::Vector3f>> kWtwGaits = {
     {"trot", {0.5f, 0.0f, 0.0f}}, {"pace", {0.0f, 0.0f, 0.5f}}, {"bound", {0.0f, 0.5f, 0.0f}},
@@ -649,6 +650,19 @@ void DriverNode::publish_telemetry(const Snapshot& s) {
     odom_pos_->head<2>() += vw.head<2>() * (s.sim_time - *odom_time_);
   }
   odom_time_ = s.sim_time;
+  // Height: the stance feet's depth under the base (leg FK, turned by the IMU attitude) plus the foot radius, kept
+  // while no foot is in contact. So base_footprint (z = 0) is on the floor under the feet, where /scan's heights
+  // are measured from: the fixed default_height was 1.2 cm above the lidar's floor fit on average, this 0.5 cm.
+  const qc::Mat3 rot = qc::rot_from_quat(q);
+  double depth = 0.0;
+  int stance = 0;
+  for (int leg = 0; leg < 4; ++leg) {
+    if (st.feet_contact[leg] < 0.5) continue;
+    const qc::Vec3 ql(st.q[leg], st.q[leg + 4], st.q[leg + 8]);
+    depth -= (rot * kinematics_.foot_position_body(leg, ql))[2];
+    ++stance;
+  }
+  if (stance > 0) (*odom_pos_)[2] = depth / stance + kFootRadius;
   const Eigen::Vector3d& pos = *odom_pos_;
   const double yaw = std::atan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2] * q[2] + q[3] * q[3]));
   const auto footprint_rot = quat(std::cos(yaw / 2), 0.0, 0.0, std::sin(yaw / 2));
