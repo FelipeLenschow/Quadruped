@@ -30,6 +30,7 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
@@ -105,7 +106,12 @@ class Robot(Node):
         self.create_timer(5.0, self._tf_close_idle)
         # locate: what the last look saw, and object_mapper's lidar settings.
         self.seen = None
-        # What find found, on /objects for the app's map while object_mapper does not publish there.
+        # look's subscriptions, made and destroyed in the HTTP thread while the executor runs. A worker about to read
+        # one as it is destroyed raises before its group's ending_execution: in the node's default (mutually
+        # exclusive) group, that group then stayed busy and no callback of the node ran again (no /robot_state, no
+        # camera; 2026-11-04). A reentrant group keeps no such state. The TF listener has its own reentrant group.
+        self.look_group = ReentrantCallbackGroup()
+        # What find_something found, on /objects for the app's map while object_mapper does not publish there.
         self.found = []
         om = load_config().get("object_mapper") or {}
         self.cloud_topic = om.get("cloud", "/lidar/points_filtered")
@@ -386,9 +392,11 @@ class Robot(Node):
         cam = self.cfg.get("camera") or "front"
         topic = f"/camera/{cam}/detections/image/compressed" if boxes else f"/camera/{cam}/image_raw/compressed"
         got, infos, clouds = [], [], []
-        subs = [self.create_subscription(CompressedImage, topic, got.append, qos_profile_sensor_data),
-                self.create_subscription(CameraInfo, f"/camera/{cam}/camera_info", infos.append, 2),
-                self.create_subscription(PointCloud2, self.cloud_topic, clouds.append, qos_profile_sensor_data)]
+        g = self.look_group
+        subs = [self.create_subscription(CompressedImage, topic, got.append, qos_profile_sensor_data, callback_group=g),
+                self.create_subscription(CameraInfo, f"/camera/{cam}/camera_info", infos.append, 2, callback_group=g),
+                self.create_subscription(PointCloud2, self.cloud_topic, clouds.append, qos_profile_sensor_data,
+                                         callback_group=g)]
         try:
             end = time.monotonic() + 3.0
             while not got and time.monotonic() < end:
@@ -907,7 +915,12 @@ def spin(executor, node):
             executor.spin_once(timeout_sec=0.5)
         except ExternalShutdownException:
             return
-        except Exception:
+        except Exception as e:
+            # look and the TF listener's close destroy subscriptions from the HTTP and timer threads; a worker that
+            # was about to read one raises InvalidHandle. Both are in reentrant groups (see look_group), so only that
+            # message is lost, with its subscription.
+            if type(e).__name__ == "InvalidHandle":
+                continue
             node.get_logger().error("callback failed, still spinning:\n" + traceback.format_exc())
 
 
