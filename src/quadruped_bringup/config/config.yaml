@@ -185,10 +185,16 @@ object_mapper:
 #   objects: the object tools (list_objects, go_to_object, visit by id, look's boxes): true, false, or auto = offered
 #   only while object_mapper publishes /objects ([I] with detection). Off, an on-board LLM is not sent after them;
 #   visit then takes a map point (x, y) only.
-#   find: look, then the vision model (vlm_model on Ollama at ollama) is asked for the thing's box alone, then
-#   locate. vlm_ctx must be the context the agent loads the model with ([A]: 8192), or Ollama reloads it. What it
+#   find_something: look, then the vision model (vlm_model on Ollama at ollama) is asked for the thing's box alone, then
+#   locate. [A] gives its own model and context instead (one model loaded); these are for a server started by
+#   hand, and vlm_ctx must then be the agent's context, or Ollama reloads the model. What it
 #   finds goes on /objects (the app's map) while object_mapper does not publish there. A name already on /objects
 #   (found before, or object_mapper's label) is given from there, with no photo: cleared by the app's "Clear objects".
+#   go_to_place: look, the vision model's point for a place described in words, then go_to: the floor point,
+#   approach m in front of a thing or wall the lidar sees there, or, with neither there, along its direction on /map
+#   (at most map_ray_m) to approach m before the first wall or to the end of the mapped floor (no map: max_move_m that
+#   way). facing: a second point in the same photo, placed the same way, to face on arrival; without it, the most open
+#   way on /map within 90 deg of the way it walked (rays to the first wall, at most open_ray_m; unknown at half).
 #   locate: a box in look's last photo to a map point, from object_mapper's cloud, floor_z, floor_margin and
 #   max_depth_shift (no detector needed). Not listed to the agent (its own boxes are wrong), but callable for tests.
 #   tf_idle_s: TF is listened to only around tool calls and this long after the last (a Python TF listener costs
@@ -203,6 +209,8 @@ mcp:
   approach: 0.6
   visit_radius: 1.0
   max_move_m: 2.0
+  map_ray_m: 15.0
+  open_ray_m: 5.0
   arrive_tolerance: 0.3
   nav_standoff: 0.8
   sniff_distance: 0.5

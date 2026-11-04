@@ -1,4 +1,6 @@
-"""MCP server - the robot's tools for an LLM, over HTTP (MCP's streamable HTTP transport, JSON responses).
+"""MCP server - the robot's tools for an LLM, over HTTP (MCP's streamable HTTP transport: JSON responses, and for
+a tool call from a client that accepts it, an event stream, so go_to_place's photo with its points comes before the
+walk; see NOTES).
 
 An LLM host (Claude Code, an Ollama loop, ...) on another machine connects to http://<robot>:<port>/mcp.
 Only what the tools allow reaches the robot: skills through /skill and Nav2 goals (move too: a short goal from
@@ -47,19 +49,26 @@ from quadruped_perception.camera_lidar_check import pixel_ray, project, xyz
 from quadruped_perception.lidar_filter import rotation
 
 PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+# The running tool call's way to send a notification before its result (notifications/message, its data a text and
+# an image for the person): set by Handler._stream for the thread it runs in, absent with a JSON response.
+NOTES = threading.local()
+DETERMINERS = ("the ", "a ", "an ", "this ", "that ", "these ", "those ", "my ", "your ", "his ", "her ", "its ",
+               "our ", "their ")
 SKILLS = ["walk", "stand", "sit", "lie", "wiggle", "localize"]
 VISIT_SKILLS = ["sniff", "pee_left", "pee_right", "wiggle"]
 SIDE = {"pee_left": 1.0, "pee_right": -1.0}
 NAV_STATUS = {4: "arrived", 5: "canceled", 6: "aborted: no path or stuck"}
 BOX = re.compile(r"\[\s*" + r"\s*,\s*".join([r"(\d+(?:\.\d+)?)"] * 4) + r"\s*\]")  # bbox_2d: [x1, y1, x2, y2]
+POINT = re.compile(r"\[\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\]")  # point_2d: [x, y]
 CLUSTER_M = 0.3  # locate: lidar points this far past the nearest ones still belong to the object (object_mapper's)
 
-INSTRUCTIONS = """You control a Unitree Go2 quadruped. Positions are metres in the map frame; yaw and bearings are
-radians/degrees, counter-clockwise, 0 along the map's x axis. Call skill('walk') before moving. Motions block
-until done and report the result. A human with a joystick or the phone app can always take over.
-The tricks are harmless dog poses for fun: sniff points the nose at an object, pee_left / pee_right lift a hind leg
-beside it (nothing is released), wiggle wags the body. To go to something you see: find it by name, then visit or
-go_to the x, y that find gives."""
+INSTRUCTIONS = """You control a robot dog. Positions are metres in the map frame; yaw and bearings are
+radians/degrees, counter-clockwise, 0 along the map's x axis. Call skill('walk') before moving. Motions block until
+done and report the result. A human with a joystick or the phone app can always take over. The tricks are harmless dog
+poses for fun: sniff points the nose at an object, pee_left / pee_right lift a hind leg beside it (nothing is
+released), wiggle wags the body. To go to something you see: find_something by its name, then visit or go_to the x, y
+that it gives. To go to a place you see that is not a thing: go_to_place, with the place in words. Both take their
+own photo, so call them directly; move is not for going somewhere."""
 
 
 def boxed(image_b64, box, label):
@@ -70,6 +79,27 @@ def boxed(image_b64, box, label):
     x1, y1, x2, y2 = (int(round(v * s / 1000.0)) for v, s in zip(box, (w, h, w, h)))
     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 220, 255), 2)
     cv2.putText(img, label, (x1, max(14, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 255), 1, cv2.LINE_AA)
+    return for_user(img)
+
+
+def pointed(image_b64, marks, arrow=None):
+    """The JPEG with each (point in thousandths, label) of marks marked, and arrow (start and end in thousandths:
+    where it stops and the way it faces there) drawn, for the person only, as boxed."""
+    img = cv2.imdecode(np.frombuffer(base64.b64decode(image_b64), np.uint8), cv2.IMREAD_COLOR)
+    h, w = img.shape[:2]
+    for (px, py), label in marks:
+        x, y = int(round(px * w / 1000.0)), int(round(py * h / 1000.0))
+        cv2.drawMarker(img, (x, y), (0, 220, 255), cv2.MARKER_CROSS, 24, 2)
+        cv2.putText(img, label, (min(x + 10, w - 120), max(14, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 255),
+                    1, cv2.LINE_AA)
+    if arrow:
+        (x1, y1), (x2, y2) = ((int(round(a * w / 1000.0)), int(round(b * h / 1000.0))) for a, b in arrow)
+        cv2.circle(img, (x1, y1), 6, (80, 255, 80), 2)
+        cv2.arrowedLine(img, (x1, y1), (x2, y2), (80, 255, 80), 2, cv2.LINE_AA, tipLength=0.25)
+    return for_user(img)
+
+
+def for_user(img):
     data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
     return {"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg",
             "annotations": {"audience": ["user"]}}
@@ -153,7 +183,7 @@ class Robot(Node):
             self._publish_found()
 
     def mapper_on(self):
-        """object_mapper publishes /objects (this node's own publisher, for find, does not count)."""
+        """object_mapper publishes /objects (this node's own publisher, for find_something, does not count)."""
         return any(i.node_name != self.get_name() for i in self.get_publishers_info_by_topic("/objects"))
 
     def objects_on(self):
@@ -368,14 +398,27 @@ class Robot(Node):
         if id is None:
             if x is None or y is None:
                 return text("give the object's id, or its x and y on the map", True)
-            return self._motion("visit", self._visit, {"x": float(x), "y": float(y)}, trick)
+            x, y = float(x), float(y)
+            # The 2B agent gave its own position after go_to stopped 0.65 m short of the trash can find_something
+            # found, and peed with no object beside it, facing the can (2026-11-04). A known object near x, y is
+            # the one meant; with none there, the robot's own position is no object.
+            near = min(self.objects, key=lambda o: math.hypot(o["x"] - x, o["y"] - y), default=None)
+            radius = float(self.cfg.get("visit_radius", 1.0))
+            if near is not None and math.hypot(near["x"] - x, near["y"] - y) <= radius:
+                return self._motion("visit", self._visit, near, trick)
+            p = self.pose()
+            if p is not None and math.hypot(x - p[0], y - p[1]) < 0.4:
+                return text(f"({x:.2f}, {y:.2f}) is where the robot stands, not an object: give the thing's x, y "
+                            "(find_something gives it)", True)
+            return self._motion("visit", self._visit, {"x": x, "y": y}, trick)
         o = next((o for o in self.objects if o["id"] == int(id)), None)
         if o is None:
             return text(f"no object {id}; call list_objects", True)
         return self._motion("visit", self._visit, o, trick)
 
-    def move(self, forward=0.0, left=0.0, turn_deg=0.0):
-        return self._motion("move", self._move, float(forward or 0.0), float(left or 0.0), float(turn_deg or 0.0))
+    def move(self, forward=0.0, sideways=0.0, turn_left=0.0, turn_right=0.0):
+        turn = float(turn_left or 0.0) - float(turn_right or 0.0)
+        return self._motion("move", self._move, float(forward or 0.0), float(sideways or 0.0), turn)
 
     def stop(self):
         self.stopping.set()
@@ -417,11 +460,12 @@ class Robot(Node):
         data, mime, sent = self._shrink(bytes(image.data), image.format)
         why = self._keep_for_locate(image, infos[-1] if infos else None, clouds, sent)
         size = f"photo {sent[0]} x {sent[1]} px" if sent else "photo"
-        note = f"{size}; find cannot use it: {why}" if why else f"{size}; find takes the name of a thing in it"
+        note = (f"{size}; find_something cannot use it: {why}" if why
+                else f"{size}; find_something takes the name of a thing in it")
         return {"content": [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": mime},
                             {"type": "text", "text": note}], "isError": False}
 
-    def find(self, what):
+    def find_something(self, what):
         """look, the vision model's box for `what` in that photo (asked on its own: inside the agent's context the
         2B model's boxes missed 5 times out of 5, alone 0 out of 5), then locate."""
         what = str(what).strip()
@@ -440,17 +484,10 @@ class Robot(Node):
         if self.seen is None:
             return text(seen["content"][-1]["text"], True)
         image = next(c["data"] for c in seen["content"] if c["type"] == "image")
-        body = {"model": self.cfg.get("vlm_model", "qwen3vl-2b-gpu"), "stream": False,
-                "options": {"num_ctx": int(self.cfg.get("vlm_ctx", 8192)), "temperature": 0, "num_predict": 200},
-                "messages": [{"role": "user", "images": [image],
-                              "content": f"Locate {what} in this image. Output its bbox_2d in JSON format."}]}
-        url = self.cfg.get("ollama", "http://localhost:11434").rstrip("/") + "/api/chat"
         try:
-            req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=120) as r:
-                said = json.load(r)["message"]["content"]
-        except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
-            return text(f"the vision model at {url} did not answer ({e}): is Ollama running?", True)
+            said = self._vision(image, f"Locate {what} in this image. Output its bbox_2d in JSON format.")
+        except RuntimeError as e:
+            return text(str(e), True)
         box = BOX.search(said)
         if box is None:
             return text(f"{what} not found in the photo (the vision model said: {' '.join(said.split())[:150]}); "
@@ -465,6 +502,210 @@ class Robot(Node):
         res = text(json.dumps(out))
         res["content"].append(boxed(image, box, self._label(what)))
         return res
+
+    def go_to_place(self, where, facing=""):
+        """look, the vision model's point for `where` in that photo, then Nav2 there (see _seen_point), arriving
+        turned toward the point for `facing` when given, else toward the most open way there (_open_heading). Each
+        point is asked on its own, as find_something's box: in the agent's own tool call the 2B model's points for
+        "the floor below the flag" landed on the wall above it (2026-11-03), and asked for both in one call, the 2B
+        gave one point for both 6 times in 9 (2026-11-04)."""
+        where, facing = str(where).strip(), str(facing or "").strip()
+        if not where:
+            return text("say where: the place, in words", True)
+        seen = self.look()
+        if seen["isError"]:
+            return seen
+        if self.seen is None:
+            return text(seen["content"][-1]["text"], True)
+        image = next(c["data"] for c in seen["content"] if c["type"] == "image")
+        p = self.pose()
+        try:
+            point, said = self._point(image, where)
+            if point is None:
+                return text(f"{where} not found in the photo (the vision model said: {said}); say it another way, "
+                            "name a thing near it, or turn and try again", True)
+            at, stop = self._seen_point(point, p)
+            gx, gy = at["x"], at["y"]
+            if stop and p is not None:  # a thing or a wall: in front of it, not into it
+                d = math.hypot(gx - p[0], gy - p[1])
+                gx, gy = (gx - stop * (gx - p[0]) / d, gy - stop * (gy - p[1]) / d) if d > stop else (p[0], p[1])
+            at["point_thousandths"] = [round(c) for c in point]
+            marks, yaw_deg, why = [(point, where)], None, ""
+            if facing:
+                face, _ = self._point(image, facing)
+                if face is None:
+                    why = f"{facing} not found in the photo"
+                else:
+                    fat, _ = self._seen_point(face, p)
+                    marks.append((face, f"facing: {facing}"))
+                    if math.hypot(fat["x"] - gx, fat["y"] - gy) < 0.2:
+                        why = f"{facing} is where it stops"
+                    else:
+                        yaw_deg = math.degrees(math.atan2(fat["y"] - gy, fat["x"] - gx))
+                        at["facing"] = {"what": facing, "x": fat["x"], "y": fat["y"], "from": fat["from"]}
+            if yaw_deg is None:
+                # Facing the way it walked, at a corridor's side it faced the wall and move forward went into it
+                # (2026-11-04): "corridor" was the far wall seen through its door ("lidar, 22 points"), so facing
+                # what the point is on failed too. With facing required, the 2B agent called go_to_place first 0
+                # times in 10, against 10 in 10. Things go through find_something, or facing.
+                walked = math.atan2(gy - p[1], gx - p[0]) if p and math.hypot(gx - p[0], gy - p[1]) > 0.2 \
+                    else (p[2] if p else 0.0)
+                yaw = self._open_heading(gx, gy, walked)
+                if yaw is not None:
+                    yaw_deg = math.degrees(yaw)
+                    turn = math.degrees(math.atan2(math.sin(yaw - walked), math.cos(yaw - walked)))
+                    at["facing"] = (f"{why + ': ' if why else ''}the most open way there, {turn:+.0f} deg from the way "
+                                    "it walks")
+        except RuntimeError as e:
+            return text(str(e), True)
+        arrow = self._heading_arrow(gx, gy, math.radians(yaw_deg)) if yaw_deg is not None else None
+        # The photo with its points before the walk: with the result, the app showed where it went only on arrival.
+        shown = self._note(json.dumps(at) + "; walking there", pointed(image, marks, arrow))
+        moved = self._motion("go_to_place", self._go_to, gx, gy, yaw_deg)
+        out = text(json.dumps(at) + "; " + moved["content"][0]["text"], moved["isError"])
+        if not shown:
+            out["content"].append(pointed(image, marks, arrow))
+        return out
+
+    def _heading_arrow(self, x, y, yaw):
+        """Where go_to_place stops and the way it faces there, as an arrow in look's last photo: the floor from
+        (x, y) to 1.5 m along yaw, projected, cut where it leaves the view (thousandths); None when under 2 points
+        are in it. The open way comes from the map, so the photo showed nothing of it (2026-11-04)."""
+        s = self.seen
+        if s is None:
+            return None
+        t = np.linspace(0.0, 1.5, 31)
+        pts = np.stack([x + t * math.cos(yaw), y + t * math.sin(yaw), np.full_like(t, self.floor_z)], axis=1)
+        rot, tr = s["to_cam"]
+        uv = project(s["info"], pts @ rot.T + tr)
+        inside = ~np.isnan(uv[:, 0])
+        if np.count_nonzero(inside) < 2:
+            return None
+        uv = uv[inside]
+        scale = np.array([1000.0 / s["info"].width, 1000.0 / s["info"].height])
+        return [tuple(uv[0] * scale), tuple(uv[-1] * scale)]
+
+    def _note(self, msg, image=None):
+        """A notification to the client before the tool's result, when it gets an event stream; whether it went."""
+        send = getattr(NOTES, "send", None)
+        if send is None:
+            return False
+        try:
+            send({"text": msg, **({"image": image} if image else {})})
+            return True
+        except OSError:
+            return False
+
+    def _point(self, image, what):
+        """(the vision model's point in thousandths for `what` in the photo, a box's centre for a box, or None when it
+        gives neither; what it said)."""
+        # Lower case, with an article: from the lab door, the robot's 2B said "There are none." to "corridor" and to
+        # "Corridor", and pointed into the doorway for "the corridor" (2026-11-04).
+        name = what[:1].lower() + what[1:]
+        if not name.lower().startswith(DETERMINERS):
+            name = "the " + name
+        said = self._vision(image, f"Point to {name} in this image. Output its point_2d in JSON format.")
+        found = POINT.search(said) or BOX.search(said)
+        if found is None:
+            return None, " ".join(said.split())[:150]
+        v = [float(g) for g in found.groups()]
+        return (v if len(v) == 2 else [(v[0] + v[2]) / 2, (v[1] + v[3]) / 2]), said
+
+    def _seen_point(self, point, p):
+        """(map point dict as locate's, metres to stop before it) for a point in look's last photo: locate's (lidar:
+        a thing or wall, stop approach m before it; floor: on it). With neither (above the floor, where the L1 sees
+        little: a whiteboard, the end of a corridor), along its direction on /map to the first wall (stop approach m
+        before it) or to the end of the mapped floor; with no map, max_move_m that way. RuntimeError without a map
+        pose."""
+        res = self.locate(x=point[0], y=point[1], thousandths=True)
+        approach = float(self.cfg.get("approach", 0.6))
+        if not res["isError"]:
+            at = json.loads(res["content"][0]["text"])
+            return at, approach if at["from"].startswith("lidar") else 0.0
+        if p is None or p[3] != "map":
+            raise RuntimeError(f"robot position on the map unknown ({self.map_error}): is navigation running?")
+        info = self.seen["info"]
+        ray = self.seen["cam_rot"] @ pixel_ray(info, point[0] * info.width / 1000, point[1] * info.height / 1000)
+        yaw = math.atan2(ray[1], ray[0])
+        hit = self._map_ray(p[0], p[1], yaw)
+        stop = 0.0
+        if hit is None:
+            # Before 2026-11-04 refused ("above the floor where the lidar sees nothing"): "the end of the corridor".
+            step = float(self.cfg.get("max_move_m", 2.0))
+            x, y = p[0] + step * math.cos(yaw), p[1] + step * math.sin(yaw)
+            source = f"too far for the lidar and no map that way: {step:.1f} m toward it; call again to go on"
+        else:
+            x, y, wall = hit
+            if wall:
+                stop, source = approach, "no lidar there: the first wall that way on the map"
+            else:
+                source = "no lidar there: as far as the map goes that way; call again to go on"
+        at = {"x": round(x, 2), "y": round(y, 2), "from": source}
+        return dict(at, **self._toward(x, y)), stop
+
+    def _open_heading(self, x, y, yaw0):
+        """The heading at (x, y) toward the most open space on /map within 90 deg of yaw0, or None with no map. Each
+        ray scores its length to the first wall (at most open_ray_m), its unknown cells at half: probably open (a
+        corridor not mapped yet), not a wall. Scores are summed over +-15 deg, so a gap narrower than the robot does
+        not win, and a turn costs a little, so of equals the one nearest yaw0 wins."""
+        g = self.grid
+        if g is None:
+            return None
+        w, h, res = g.info.width, g.info.height, g.info.resolution
+        ox, oy = g.info.origin.position.x, g.info.origin.position.y
+        reach = float(self.cfg.get("open_ray_m", 5.0))
+        angles = range(-105, 106, 5)  # past 90: the sum at 90 needs its window too
+        scores = []
+        for a in angles:
+            c, s = math.cos(yaw0 + math.radians(a)), math.sin(yaw0 + math.radians(a))
+            score, d = 0.0, 0.0
+            while d < reach:
+                d += res
+                i, j = int((x + d * c - ox) / res), int((y + d * s - oy) / res)
+                v = g.data[j * w + i] if 0 <= i < w and 0 <= j < h else -1
+                if v >= 65:
+                    break
+                score += res if v >= 0 else res / 2
+            scores.append(score)
+        best = max((k for k in range(len(angles)) if abs(angles[k]) <= 90),
+                   key=lambda k: sum(scores[max(0, k - 3):k + 4]) - 0.002 * abs(angles[k]))
+        return yaw0 + math.radians(angles[best])
+
+    def _map_ray(self, x, y, yaw):
+        """(x, y, wall) where the line from (x, y) along yaw on /map meets the first wall (wall True), or leaves the
+        mapped floor or map_ray_m (False); None with no /map, or when that is under 1 m away (nothing to go by)."""
+        g = self.grid
+        if g is None:
+            return None
+        w, h, res = g.info.width, g.info.height, g.info.resolution
+        ox, oy = g.info.origin.position.x, g.info.origin.position.y
+        c, s = math.cos(yaw), math.sin(yaw)
+        last, d = (x, y), 0.0
+        while d < float(self.cfg.get("map_ray_m", 15.0)):
+            d += res / 2
+            px, py = x + d * c, y + d * s
+            i, j = int((px - ox) / res), int((py - oy) / res)
+            v = g.data[j * w + i] if 0 <= i < w and 0 <= j < h else -1
+            if v >= 65:
+                return px, py, True
+            if v < 0:
+                break
+            last = (px, py)
+        return (*last, False) if math.hypot(last[0] - x, last[1] - y) >= 1.0 else None
+
+    def _vision(self, image, prompt):
+        """The vision model's answer about the photo alone (its own call: in the agent's context its boxes and
+        points miss); RuntimeError when Ollama does not answer."""
+        body = {"model": self.cfg.get("vlm_model", "qwen3vl-2b-gpu"), "stream": False,
+                "options": {"num_ctx": int(self.cfg.get("vlm_ctx", 8192)), "temperature": 0, "num_predict": 200},
+                "messages": [{"role": "user", "images": [image], "content": prompt}]}
+        url = self.cfg.get("ollama", "http://localhost:11434").rstrip("/") + "/api/chat"
+        try:
+            req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.load(r)["message"]["content"]
+        except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+            raise RuntimeError(f"the vision model at {url} did not answer ({e}): is Ollama running?")
 
     def locate(self, box=None, x=None, y=None, thousandths=False):
         s = self.seen
@@ -720,7 +961,7 @@ class Robot(Node):
 
     def _move(self, forward, left, turn_deg):
         if forward == 0.0 and left == 0.0 and turn_deg == 0.0:
-            return text("nothing to do: give forward, left or turn_deg", True)
+            return text("nothing to do: give forward, sideways, turn_left or turn_right", True)
         p = self.pose()
         if p is None or p[3] != "map":
             return text(f"robot position on the map unknown ({self.map_error}): is navigation running?", True)
@@ -776,20 +1017,35 @@ TOOLS = [
      "Needs walk first.",
      schema({"trick": {"type": "string", "enum": VISIT_SKILLS}, "id": {"type": "integer"},
              "x": {"type": "number"}, "y": {"type": "number"}}, ["trick"])),
-    ("move", "Step or turn from where the robot stands, with Nav2 (it goes around obstacles or refuses), e.g. to "
-     "turn and look around. At most 2 m. Blocks until there.",
+    # "Not to go somewhere": with "get out of the lab", the 2B agent called move forward again and again, with no look.
+    ("move", "Turn, or take a short step, from where the robot stands, with Nav2 (it goes around obstacles or "
+     "refuses): to turn and look around, or for a small correction. Not to go somewhere: use go_to_place or "
+     "find_something, which take their own photo. At most 2 m. Blocks until there.",
      schema({"forward": {"type": "number", "description": "metres, - is back"},
-             "left": {"type": "number", "description": "metres, - is right"},
-             "turn_deg": {"type": "number", "description": "degrees to turn, + is left"}})),
+             # Not "left": for "follow the corridor to the left" the 2B agent stepped sideways (left: 1) twice.
+             "sideways": {"type": "number", "description": "metres to step sideways, + is left; to go left, turn_left"},
+             # Not one signed turn_deg: a sign is easy for a small model to get wrong.
+             "turn_left": {"type": "number", "description": "degrees"},
+             "turn_right": {"type": "number", "description": "degrees"}})),
     ("stop", "Cancel navigation and stop moving.", schema()),
     ("look", "A photo from the front camera.",
      schema({"boxes": {"type": "boolean", "description": "with the object detector's boxes drawn"}})),
-    # No example names in find's text or INSTRUCTIONS: the 2B agent called find with the example ("the trash can")
+    # No example names in find_something's text or INSTRUCTIONS: the 2B agent called find with the example ("the
+    # trash can")
     # 18 times in 20, not with the thing in its task.
-    ("find", "Find a thing in the camera's view and where it is on the map, for visit or go_to: takes a photo and "
-     "returns x, y. Name a thing you can see, not a purpose. A thing already on the map comes from there, also out of view. "
-     "Not found: name another thing, or turn and try again.",
+    ("find_something", "Find a thing in the camera's view and where it is on the map, for visit or go_to: takes a "
+     "photo and returns x, y. Name a thing you can see, not a purpose. A thing already on the map comes from there, "
+     "also out of view. Not found: name another thing, or turn and try again.",
      schema({"what": {"type": "string", "description": "the thing's name"}}, ["what"])),
+    ("go_to_place", "Walk to a place you can see that is not a thing to name: takes a photo, finds the place you "
+     "describe in it, and walks there with Nav2 (to a thing or wall in it: stops in front; far away: as far as the "
+     "map goes, then call again), arriving turned toward the most open way there, or toward what you say to face. "
+     "Needs walk first.",
+     # facing not required: required, the 2B agent called go_to_place first 0 times in 10 (10 in 10 without), as it
+     # had seen nothing to face yet (2026-11-04).
+     schema({"where": {"type": "string", "description": "the place, in words"},
+             "facing": {"type": "string", "description": "optional: a thing or place in the same view to face there"}},
+            ["where"])),
     ("locate", "Where something in the last look photo is on the map, for visit or go_to: give its box [x1, y1, x2, "
      "y2] (or a point x, y) in pixels of that photo, or in thousandths of its width and height with thousandths "
      "true (Qwen-VL boxes are in thousandths). Uses the lidar inside the box, or the floor under it.",
@@ -800,7 +1056,7 @@ TOOLS = [
 ]
 OBJECT_TOOLS = {"list_objects", "go_to_object"}
 # Callable, but not listed: with locate offered, the agent sent its own boxes, and inside its context the 2B
-# model's boxes are wrong (find asks for the box alone).
+# model's boxes are wrong (find_something asks for the box alone).
 UNLISTED = {"locate"}
 VISIT_AT_POINT = ("visit", "Walk to a point on the map (an object seen in a photo), take the trick's pose there and do "
                   "the trick: sniff (nose at it), pee_left / pee_right (it beside that hind leg), wiggle (facing "
@@ -863,11 +1119,40 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._send(400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
             return
+        if (isinstance(msg, dict) and msg.get("method") == "tools/call" and "id" in msg
+                and "text/event-stream" in self.headers.get("Accept", "")):
+            self._stream(msg)
+            return
         replies = [r for r in (self._handle(m) for m in (msg if isinstance(msg, list) else [msg])) if r]
         if not replies:
             self._send(202)
         else:
             self._send(200, replies if isinstance(msg, list) else replies[0])
+
+    def _stream(self, m):
+        """The tool call's notifications (NOTES), then its result, as server-sent events; the connection closes
+        after them (no length to give)."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def event(body):
+            self.wfile.write(b"data: " + json.dumps(body).encode() + b"\n\n")
+            self.wfile.flush()
+
+        NOTES.send = lambda data: event({"jsonrpc": "2.0", "method": "notifications/message",
+                                         "params": {"level": "info", "logger": "go2", "data": data}})
+        try:
+            reply = self._handle(m)
+        finally:
+            NOTES.send = None
+        try:
+            event(reply)
+        except OSError:
+            pass  # the client went away; the call is done all the same
 
     def _handle(self, m):
         if "id" not in m:
@@ -877,10 +1162,13 @@ class Handler(BaseHTTPRequestHandler):
             if method == "initialize":
                 asked = params.get("protocolVersion")
                 result = {"protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
-                          "capabilities": {"tools": {"listChanged": False}},
+                          "capabilities": {"tools": {"listChanged": False}, "logging": {}},
                           "serverInfo": {"name": "go2", "version": "0.1.0"},
-                          "instructions": INSTRUCTIONS}
-            elif method == "ping":
+                          "instructions": INSTRUCTIONS,
+                          # For llm_host's run log: which model find_something and go_to_place ask.
+                          "_meta": {"vision_model": self.robot.cfg.get("vlm_model", "qwen3vl-2b-gpu"),
+                                    "vision_ctx": int(self.robot.cfg.get("vlm_ctx", 8192))}}
+            elif method in ("ping", "logging/setLevel"):  # notifications are all info, sent at any level
                 result = {}
             elif method == "tools/list":
                 tools = tools_for(self.robot.objects_on())

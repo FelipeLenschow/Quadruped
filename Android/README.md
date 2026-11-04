@@ -55,7 +55,7 @@ Android, no bridge on the robot.
 - Chat tab: the LLM agent's chat (launcher [A], `Tools/llm_host.py --app`) over HTTP to `10.42.0.1:8766`, not DDS
   (the native reader keeps no history), on the robot's Wi-Fi network; `res/xml/network_security_config.xml` allows
   plain HTTP to that address only. The first message is the task, later ones answer the agent. The agent's
-  text, its tool calls and results, and the photos (`look`'s, and `find`'s with its box drawn) show in the list;
+  text, its tool calls and results, and the photos (`look`'s, `find_something`'s with its box, `go_to_place`'s with its point) show in the list;
   a tap shows a photo full size. Stop stops the chat and the robot; New chat also clears it.
 - System tab: "Robot body" card from `/robot_state` (real Go2 only): battery %, volts and amps, and the 12
   motor temperatures by leg and joint. Then the "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
