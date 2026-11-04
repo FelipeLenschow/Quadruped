@@ -24,7 +24,7 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: True
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.3
+      yaw_goal_tolerance: 0.1   # rad, about 6 deg; was 0.3 (17 deg), too coarse for move turns
     # Omni MPPI. Speeds stay inside what the walking policies trained on.
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
