@@ -183,6 +183,8 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
     def _apply_steer(self, ids: torch.Tensor):
         """On tiles with a heading, sideways speed x steer_y_scale; the turning is set every step by _update_command."""
         self.steer_heading[ids] = tile_heading(self._env, ids) if self.cfg.steer_gain > 0.0 else float("nan")
+        if self.cfg.steer_forward_only:
+            self.steer_heading[ids[~self.forward_only[ids]]] = float("nan")
         steered = ids[~torch.isnan(self.steer_heading[ids])]
         self.vel_command_b[steered, 1] *= self.cfg.steer_y_scale
 
@@ -322,5 +324,7 @@ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
     steer_gain: float = 0.0
     steer_max: float = 0.5
     steer_y_scale: float = 1.0
+    # Steer only the forward_only envs; the others keep their commands, as a careless operator.
+    steer_forward_only: bool = False
     foot_x: float = 0.19
     foot_y: float = 0.14

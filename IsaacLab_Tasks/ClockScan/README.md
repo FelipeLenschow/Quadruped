@@ -11,7 +11,8 @@ Task: `Go2-Clock-Scan`
 - **Terrain stages** (`mdp.terrain_stages`): the grid holds every type from the start; the stage sets the share of
   robots on each.
   1. Simple's ground: 30% flat, 70% smooth (noise to 2 cm).
-  2. 15% flat, 15% smooth, 35% rough (to 4 cm), 35% boxes (2-10 cm).
+  2. 15% flat, 15% smooth, 25% rough (to 4 cm), 25% boxes (2-10 cm), 10% each pyramid slope up and down (to 0.4
+     rise over run, 22 deg; `CLOCK_SCAN_SLOPE`; none up to Lidar2).
   3. 50% square stairs (`CLOCK_SCAN_STAIRS_SHARE`; half down from a platform on top, half up from a pit), the rest
      in stage 2's mix.
   4. Half of the stair robots (`CLOCK_SCAN_NARROW_SHARE`) moved to narrow stairs, half down and half up.
@@ -50,9 +51,11 @@ Task: `Go2-Clock-Scan`
   0.25 m of the base's line and within 0.7 m of their median height. The base height (reward and critic) is that
   plane at the base, and the tilt penalty and reset use its slope. With the whole grid, the floor beside an 0.8 m
   flight put a robot standing 0.28 m above the steps at 0.79 m, and the tilt was off by up to the 35 degree clip.
-- **Stairs:** robots on stairs get forward-only commands: 0 <= x <= 0.6 m/s, sideways kept, turning x0.3
-  (`CLOCK_SCAN_FORWARD_X_MAX`, `_Y_SCALE`, `_YAW_SCALE`), always (`CLOCK_SCAN_FORWARD_END` 1.0; with less, the share falls
-  to it over `_RAMP_ITERS` after `_HOLD_ITERS`). On stair tiles a fall costs the same as elsewhere (`CLOCK_SCAN_STAIRS_FALL_SCALE`, 0.25 up to Lidar1), and every step alive gives 1 per second (`CLOCK_SCAN_W_ALIVE`): with the exploration noise, a step on stairs was worth about 0, so a fall cost only 5; a foot hitting
+- **Stairs:** 70% of the robots on stairs get forward-only commands: 0 <= x <= 0.6 m/s, sideways kept, turning x0.3
+  (`CLOCK_SCAN_FORWARD_X_MAX`, `_Y_SCALE`, `_YAW_SCALE`), and on narrow stairs the heading operator; only these episodes
+  move the stair levels. The others get any command, also over an open edge, so the policy learns not to follow one
+  there (`CLOCK_SCAN_FORWARD_END` 0.7, 1.0 up to Lidar2; at 0.3, the policy stopped before steps it climbed before, after
+  2800 iterations: narrow up 18 cm 98% to 16% across, few falls; the share falls to it over `_RAMP_ITERS` after `_HOLD_ITERS`). On stair tiles a fall costs the same as elsewhere (`CLOCK_SCAN_STAIRS_FALL_SCALE`, 0.25 up to Lidar1), and every step alive gives 1 per second (`CLOCK_SCAN_W_ALIVE`): with the exploration noise, a step on stairs was worth about 0, so a fall cost only 5; a foot hitting
   a vertical face and body contacts cost the same as elsewhere (`CLOCK_SCAN_STAIRS_STUMBLE_SCALE`,
   `_CONTACT_SCALE`, 1.0).
 - **Stumble:** a foot hits a vertical face when its sideways contact force is more than 2x its vertical force
@@ -125,6 +128,8 @@ Task: `Go2-Clock-Scan`
   reading 1-10 steps older (`_STALE_STEPS`) with a probability drawn per episode from 0 to 30% (`_STALE`): an L1 bin
   keeps its last return. Empty rays first read 3 m at 15%; that policy (2026-10-30 run, 21300) climbed 12 cm 94% of
   the time with that noise and 3% without it.
+  Per episode, the mount is moved +-1 cm and turned +-1 deg on each axis (`_MOUNT_POS`, `_MOUNT_ROT`;
+  `mdp.randomize_ray_mount`), as the error of the measured mount; the ranges are from the moved mount.
   `mdp.lidar_ranges`, pattern `mdp.FanPatternCfg`; the mirror swaps the columns. Plan and deploy notes:
   `LIDAR_RANGES_PLAN.md`.
 - **Actor input:** 392 = Simple's 48-wide layout, the clock (8), the lidar ranges (336), in this order (379 with the
@@ -139,13 +144,17 @@ Train from the repo root with `python launcher.py` -> train -> ClockScan, or dir
 
     PYTHONPATH=source/clock_scan python scripts/rsl_rl/train.py --task=Go2-Clock-Scan --headless
 
-Play on one terrain type, `CLOCK_SCAN_PLAY_TERRAIN` (default `boxes`; the stages are off in play; also `hf_pyramid_slope` and
-`hf_pyramid_slope_inv`, which are not in training) at difficulty 0.6-1.0. On stairs the difficulty sets the step count
+Play on one terrain type, `CLOCK_SCAN_PLAY_TERRAIN` (default `boxes`; the stages are off in play) at difficulty 0.6-1.0. On stairs the difficulty sets the step count
 and the height as in training; `CLOCK_SCAN_PLAY_STEP_HEIGHT` (m) gives 6 steps at exactly that height instead.
 
     PYTHONPATH=source/clock_scan python scripts/rsl_rl/play.py --task=Go2-Clock-Scan
 
 ## Runs
+
+A checkpoint does not keep the curriculum. To resume on stairs: `CLOCK_SCAN_START_STAGE=3` (the stage; with a stage
+above 0 the speed range also starts full, as from +-0.1 m/s on hard levels the tracking stayed under the gate and
+the levels only went down), `CLOCK_SCAN_START_LEVEL=15` and `CLOCK_SCAN_START_LEVEL_MIN` (robots at random levels
+between the two; 12 for a run that ended in the top block).
 
 - **`Stairs1/model_60999.pt`**: the last of a chain of resumes from scratch (iterations 0-46000 in runs not kept),
   then 15000 iterations with the tilt reset against the ground plane. On 6 steps at 0.5 m/s straight: up 18 cm
@@ -164,6 +173,14 @@ and the height as in training; `CLOCK_SCAN_PLAY_STEP_HEIGHT` (m) gives 6 steps a
   0.4 m/s: up 18 cm 95% / 2%, down 100% / 0%. At 0.3-0.6 m/s with -0.2 to +0.2 m/s sideways (`wide_34000/`, on
   model_34000): at most 4% fell on the pyramid and 9% on the flight. Turning is slow below 0.5 rad/s (50-65% of the
   command).
+- **`Lidar3/model_46500.pt`**: Lidar2's model_37000, then 7500 iterations with the lidar mount error, pyramid slopes
+  and any command on 30% of the stair robots (no operator for them), then 2000 more from levels 12-15
+  (`START_LEVEL_MIN=12`, full speed range). It dipped for about 3000 iterations, then came back. Stair test: score
+  0.97 (Lidar2 0.98): pyramid 15-22 cm up and down 100% across, at most 1% fell; 0.8 m flight up 18 cm 90% / 4%,
+  down 98% / 0%. Command test (`command_eval.py`, no operator): backward, sideways and turning on stairs at most 3%
+  fell, against up to 25% for Lidar2 at the open edge; it goes down backward and sideways, but stops on the first
+  steps going up backward or sideways (`videos/commands_46500/`). Straight with no operator
+  (`command_eval_straight_*`): the open flight up at 18 cm fell 6% at 0.4 m/s and 15% at 0.6 m/s (Lidar2 4% and 6%).
 
 ## Evaluation and deploy
 
@@ -189,7 +206,7 @@ holding the heading, and across means onto the far floor (5.4 m). Give `--second
 
 ## Video
 
-`CLOCK_SCAN_PLAY_CMD_X` pins every robot to one forward speed from a standing start at heading `CLOCK_SCAN_PLAY_YAW`
+`CLOCK_SCAN_PLAY_CMD_X` (and `_CMD_Y`, sideways) pins every robot to one command from a standing start at heading `CLOCK_SCAN_PLAY_YAW`
 (default 0, +x), with no pushes. Rows run along x, so with `CLOCK_SCAN_PLAY_ROWS=3` a robot that starts on
 one stair pyramid walks down it and up the next:
 

@@ -4,7 +4,7 @@ import torch
 from typing import TYPE_CHECKING
 
 from isaaclab.envs.mdp import reset_root_state_uniform
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 from isaaclab.utils import math as math_utils
 
 from .terrain_info import tile_heading
@@ -169,3 +169,36 @@ class reset_root_state_aligned(reset_root_state_uniform):
         )
         asset.write_root_pose_to_sim_index(root_pose=torch.cat([positions, orientations], dim=-1), env_ids=env_ids)
         asset.write_root_velocity_to_sim_index(root_velocity=velocities, env_ids=env_ids)
+
+
+class randomize_ray_mount(ManagerTermBase):
+    """Per episode, a ray caster's mount moved by +-pos_range (m, each base axis) and turned by +-rot_range (rad,
+    roll, pitch, yaw), as an error in the measured mount pose."""
+
+    def __init__(self, cfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        self._sensor = env.scene.sensors[cfg.params["sensor_cfg"].name]
+        self._starts = None
+
+    def __call__(
+        self,
+        env: ManagerBasedEnv,
+        env_ids: torch.Tensor,
+        sensor_cfg: SceneEntityCfg,
+        pos_range: float = 0.01,
+        rot_range: float = 0.0175,
+    ):
+        starts = self._sensor.ray_starts.torch
+        directions = self._sensor.ray_directions.torch
+        if self._starts is None:
+            self._starts = starts[0].clone()
+            self._directions = directions[0].clone()
+        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+        n = len(ids)
+        shift = math_utils.sample_uniform(-pos_range, pos_range, (n, 1, 3), device=env.device)
+        angles = math_utils.sample_uniform(-rot_range, rot_range, (n, 3), device=env.device)
+        quat = math_utils.quat_from_euler_xyz(angles[:, 0], angles[:, 1], angles[:, 2])
+        rays = self._directions.shape[0]
+        turned = math_utils.quat_apply(quat.unsqueeze(1).expand(-1, rays, -1).reshape(-1, 4), self._directions.repeat(n, 1))
+        starts[ids] = self._starts.unsqueeze(0) + shift
+        directions[ids] = turned.view(n, rays, 3)

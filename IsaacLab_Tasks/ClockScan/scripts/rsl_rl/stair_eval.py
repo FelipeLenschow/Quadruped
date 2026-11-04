@@ -156,6 +156,8 @@ def main():
         policy = runner.get_inference_policy(device="cuda:0")
         for vy in vys:
             cmd.cfg.ranges.lin_vel_y = (vy, vy)
+            # As the forward-only stair episodes of training: with the heading operator on narrow stairs.
+            cmd.forward_only[:] = True
             far, fell = rollout(env, policy, level, col)
             across = (far > args_cli.distance).cpu()
             fell = fell.cpu()

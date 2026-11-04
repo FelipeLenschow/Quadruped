@@ -87,6 +87,10 @@ LIDAR_LAG = int(_env("LIDAR_LAG", 0))
 LIDAR_NOISE = _env("LIDAR_NOISE", 0.02)
 LIDAR_STALE = _env("LIDAR_STALE", 0.3)
 LIDAR_STALE_STEPS = int(_env("LIDAR_STALE_STEPS", 10))
+# Per episode, the lidar mount moved by +-LIDAR_MOUNT_POS m on each axis and turned by +-LIDAR_MOUNT_ROT degrees about
+# each, as the error of the measured mount pose.
+LIDAR_MOUNT_POS = _env("LIDAR_MOUNT_POS", 0.01)
+LIDAR_MOUNT_ROT = _env("LIDAR_MOUNT_ROT", 1.0)
 LIDAR_DEPRESSIONS = tuple(
     round(float(np.degrees(np.arctan2(LIDAR_HEIGHT, d))), 3) for d in np.linspace(LIDAR_NEAR, LIDAR_FAR, LIDAR_ROWS)
 )
@@ -105,6 +109,7 @@ SMOOTH_NOISE = _env("SMOOTH_NOISE", 0.02)
 ROUGH_NOISE = _env("ROUGH_NOISE", 0.04)
 BOX_HEIGHT = _range("BOX", 0.02, 0.10)
 STEP_HEIGHT = _range("STEP", 0.05, 0.22)
+SLOPE = _env("SLOPE", 0.4)
 # Stair levels: STEP_HEIGHTS_PER_COUNT levels per step count, the step height rising over STEP_HEIGHT inside
 # each count and starting low again at the next. A fall lowers the height but never the step count.
 STEP_COUNTS = tuple(int(c) for c in os.environ.get("CLOCK_SCAN_STEP_COUNTS", "1,2,3,6").split(","))
@@ -123,12 +128,12 @@ def stairs_difficulty(height: float) -> float:
     parts = len(STEP_COUNTS)
     sub = min(max((height - STEP_HEIGHT[0]) / (STEP_HEIGHT[1] - STEP_HEIGHT[0]), 0.0), 1.0)
     return min((parts - 1 + sub) / parts, 1.0)
-# Stages of mdp.terrain_stages, as the share of envs on each terrain type. 1: Simple's ground. 2: rough and
-# boxes added. 3: square stairs, STAIRS_SHARE of the envs, the rest kept in stage 2's mix. 4: NARROW_SHARE of the
+# Stages of mdp.terrain_stages, as the share of envs on each terrain type. 1: Simple's ground. 2: rough,
+# boxes and pyramid slopes (up to SLOPE, rise over run) added. 3: square stairs, STAIRS_SHARE of the envs, the rest kept in stage 2's mix. 4: NARROW_SHARE of the
 # stair envs moved to narrow stairs.
 STAIRS_SHARE = _env("STAIRS_SHARE", 0.5)
 NARROW_SHARE = _env("NARROW_SHARE", 0.5)
-_STAGE2 = {"flat": 0.15, "smooth": 0.15, "random_rough": 0.35, "boxes": 0.35}
+_STAGE2 = {"flat": 0.15, "smooth": 0.15, "random_rough": 0.25, "boxes": 0.25, "slope": 0.1, "slope_inv": 0.1}
 TERRAIN_STAGES = [
     {"flat": 0.3, "smooth": 0.7},
     _STAGE2,
@@ -148,15 +153,17 @@ STAGE_TRACK = _env("STAGE_TRACK", 0.65)
 STAGE_HOLD = int(_env("STAGE_HOLD", 3))
 STAGE_BOXES_DIFFICULTY = _env("STAGE_BOXES_DIFFICULTY", 0.4)
 STAGE_STAIRS_DIFFICULTY = _env("STAGE_STAIRS_DIFFICULTY", 0.75)
-# To resume a run: start at terrain stage START_STAGE (0-3), robots at random levels 0 to START_LEVEL.
+# To resume a run: start at terrain stage START_STAGE (0-3), robots at random levels START_LEVEL_MIN to START_LEVEL.
 START_STAGE = int(_env("START_STAGE", 0))
 START_LEVEL = int(_env("START_LEVEL", 1))
+START_LEVEL_MIN = int(_env("START_LEVEL_MIN", 0))
 # Once stairs are in: every env on stairs walks forward only for FORWARD_HOLD_ITERS iterations, then the share
 # falls linearly to FORWARD_END over FORWARD_RAMP_ITERS. Forward only: 0 <= x <= FORWARD_X_MAX, y x FORWARD_Y_SCALE,
-# turning x FORWARD_YAW_SCALE.
+# turning x FORWARD_YAW_SCALE, and on narrow stairs an operator holding the heading. The others get any command (the
+# policy must not follow one over an edge), and their stair levels stay.
 FORWARD_HOLD_ITERS = _env("FORWARD_HOLD_ITERS", 1000)
 FORWARD_RAMP_ITERS = _env("FORWARD_RAMP_ITERS", 3000)
-FORWARD_END = _env("FORWARD_END", 1.0)
+FORWARD_END = _env("FORWARD_END", 0.7)
 FORWARD_X_MAX = _env("FORWARD_X_MAX", 0.6)
 FORWARD_Y_SCALE = _env("FORWARD_Y_SCALE", 1.0)
 FORWARD_YAW_SCALE = _env("FORWARD_YAW_SCALE", 0.3)
@@ -325,7 +332,7 @@ ROUGH_TERRAINS_CFG = terrain_gen.TerrainGeneratorCfg(
     size=(TILE_SIZE, TILE_SIZE),
     border_width=20.0,
     num_rows=NUM_ROWS,
-    num_cols=20,
+    num_cols=24,
     horizontal_scale=0.1,
     vertical_scale=0.005,
     slope_threshold=0.75,
@@ -342,6 +349,12 @@ ROUGH_TERRAINS_CFG = terrain_gen.TerrainGeneratorCfg(
         ),
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
             proportion=0.15, grid_width=0.45, grid_height_range=BOX_HEIGHT, platform_width=2.0
+        ),
+        "slope": terrain_gen.HfPyramidSlopedTerrainCfg(
+            proportion=0.1, slope_range=(0.0, SLOPE), platform_width=2.0, border_width=0.25
+        ),
+        "slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
+            proportion=0.1, slope_range=(0.0, SLOPE), platform_width=2.0, border_width=0.25
         ),
         "pyramid_stairs": mdp.CountedStairsTerrainCfg(
             proportion=0.1, step_counts=STEP_COUNTS, step_height_range=STEP_HEIGHT, step_width=0.3, platform_width=3.0
@@ -479,6 +492,12 @@ class EventCfg:
         },
     )
 
+    lidar_mount = EventTerm(
+        func=mdp.randomize_ray_mount,
+        mode="reset",
+        params={"sensor_cfg": SceneEntityCfg("lidar"), "pos_range": LIDAR_MOUNT_POS, "rot_range": math.radians(LIDAR_MOUNT_ROT)},
+    )
+
     # reset, in this order: reset_start_pose overwrites the envs it picks after the nominal reset
     reset_base = EventTerm(
         func=mdp.reset_root_state_aligned,
@@ -561,6 +580,7 @@ class CommandsCfg:
         steer_gain=STEER_GAIN,
         steer_max=STEER_MAX,
         steer_y_scale=STEER_Y_SCALE,
+        steer_forward_only=True,
     )
     # After base_velocity: the clock reads its command.
     clock = mdp.SpeedClockCommandCfg(
@@ -836,6 +856,8 @@ class CurriculumCfg:
             "leave_distance": LEAVE_DISTANCE,
             "stair_leave_distance": STAIRS_LEAVE_DISTANCE,
             "start_stage": START_STAGE,
+            "start_level_min": START_LEVEL_MIN,
+            "stair_levels_forward_only": True,
         },
     )
     lin_vel_cmd_levels = CurrTerm(func=mdp.lin_vel_cmd_levels)
@@ -867,6 +889,11 @@ class ClockScanEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
         self.scene.map_scanner.update_period = self.decimation * self.sim.dt
         self.scene.lidar.update_period = self.decimation * self.sim.dt
+        if START_STAGE > 0:
+            # A resumed policy starts at the full speed range: from +-0.1 m/s on hard levels, the tracking can stay
+            # under the gate, and the levels then only go down.
+            vel = self.commands.base_velocity
+            vel.ranges = vel.ranges.replace(lin_vel_x=vel.limit_ranges.lin_vel_x, lin_vel_y=vel.limit_ranges.lin_vel_y)
         if ACTOR_SCAN == "lidar":
             self.observations.policy.height_map = None
         elif ACTOR_SCAN == "map":
@@ -878,7 +905,6 @@ class ClockScanEnvCfg(ManagerBasedRLEnvCfg):
 
 
 # Env 0, the one the video camera follows, always gets the first terrain type, so play keeps one type.
-# The slopes are not in training; they are there to see how the policy copes with them.
 PLAY_TERRAIN = os.environ.get("CLOCK_SCAN_PLAY_TERRAIN", "boxes")
 PLAY_DIFFICULTY = _range("PLAY_DIFFICULTY", 0.6, 1.0)
 # On stairs, CLOCK_SCAN_PLAY_STEP_HEIGHT (m) sets the most steps at exactly that height instead.
@@ -902,30 +928,25 @@ class ClockScanPlayEnvCfg(ClockScanEnvCfg):
         if pinned:
             v = float(pinned)
             vel.ranges.lin_vel_x = (v, v)
-            vel.ranges.lin_vel_y = (0.0, 0.0)
+            vy = _env("PLAY_CMD_Y", 0.0)
+            vel.ranges.lin_vel_y = (vy, vy)
             vel.ranges.ang_vel_z = (0.0, 0.0)
             vel.rel_standing_envs = 0.0
             vel.slow_command_fraction = 0.0
             vel.pause_fraction = 0.0
             vel.yaw_only_command_fraction = 0.0
             vel.debug_vis = False
+            # The operator holds the heading on narrow stairs, as for the forward-only stair episodes of training.
+            vel.steer_forward_only = False
             self.events.reset_start_pose = None
             self.events.push_robot = None
             yaw = _env("PLAY_YAW", 0.0)
             self.events.reset_base.params["pose_range"]["yaw"] = (yaw, yaw)
             self.events.reset_base.params["aligned_range"] = (0.0, 0.0, 0.0)
-            print(f"[ClockScan] every env pinned to lin_vel_x = {v} m/s, start yaw {yaw} rad, standing starts, no pushes")
+            print(f"[ClockScan] every env pinned to lin_vel_x = {v}, lin_vel_y = {vy} m/s, start yaw {yaw} rad, standing starts, no pushes")
 
         gen = self.scene.terrain.terrain_generator
-        extra = {
-            "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
-                proportion=1.0, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
-            ),
-            "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
-                proportion=1.0, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
-            ),
-        }
-        terrain = {**gen.sub_terrains, **extra}[PLAY_TERRAIN].replace(proportion=1.0)
+        terrain = gen.sub_terrains[PLAY_TERRAIN].replace(proportion=1.0)
         if PLAY_SIDES and hasattr(terrain, "side_probs"):
             terrain = terrain.replace(side_probs=tuple(float(v) for v in PLAY_SIDES.split(",")))
         self.scene.terrain.terrain_generator = gen.replace(

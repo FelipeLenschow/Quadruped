@@ -1,13 +1,18 @@
-# Next steps (after run Lidar2)
+# Next steps (after run Lidar3)
 
 Status: the lidar actor climbs 15-22 cm pyramid stairs and the 0.8 m narrow flight in simulation, at 0.3-0.6 m/s
-with sideways commands, with at most 9% falls (`Lidar2/wide_34000/`). Best checkpoint: Lidar2/model_37000.
+with sideways commands, with at most 9% falls (`Lidar2/wide_34000/`). Lidar3/model_46500 adds the lidar mount error,
+slopes and any command on 30% of the stair robots, at about the same stair score.
 
 ## 1. Training for the real robot
 
-- Noise on the lidar mount pose in training (about +-1 degree, +-1 cm): the mount angle was measured, not exact.
-- Slopes in the terrain: the robot slides down a 20 degree pyramid slope.
+- Self safety: no heading operator in training. The policy alone must keep off walls, open edges and big steps taken
+  sideways, whatever the command. Lidar3 with no operator: the open flight up at 18 cm fell 6% at 0.4 m/s and 15%
+  at 0.6 m/s.
 - Turning at low rates: it turns only 50-65% of the command up to 0.5 rad/s.
+- Rear rays: the fan looks only ahead (+-60 degrees), so a backward command toward a drop is blind. The L1 sees
+  360 degrees around it; from a recorded real scan, find the ground behind the robot that the body does not hide.
+  If it sees ground behind the rear feet, add rear rays there to the fan.
 
 ## 2. Deploy
 
@@ -21,7 +26,6 @@ with sideways commands, with at most 9% falls (`Lidar2/wide_34000/`). Best check
 - The full deploy pipeline in Gazebo or MuJoCo with a simulated lidar cloud.
 - Real robot: flat ground, then one step, then a full flight, with a person or a harness beside it.
 
-## 4. Housekeeping
+## 4. Evaluation
 
-- Commit the staged work (lidar actor, narrow stairs, trunk contact, alive bonus, resume options, sweep fix).
-- Keep the best checkpoint as a named run, as Stairs1.
+- A command-safety test: sideways, turning and backward commands on the narrow flight and the stairs, falls counted.

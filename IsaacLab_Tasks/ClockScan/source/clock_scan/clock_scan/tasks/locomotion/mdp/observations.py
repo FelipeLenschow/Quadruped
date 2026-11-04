@@ -116,8 +116,6 @@ class lidar_ranges(ManagerTermBase):
         super().__init__(cfg, env)
         p = cfg.params
         self._sensor = env.scene.sensors[p["sensor_cfg"].name]
-        # data.pos_w is the frame the sensor rides on; the rays start at the offset from it.
-        self._offset = torch.tensor(self._sensor.cfg.offset.pos, device=env.device).unsqueeze(0)
         self._lags = torch.tensor(p.get("lags", (0,)), device=env.device)
         self._depth = int(self._lags.max()) + int(p.get("stale_steps", 0)) + 1
         rays = self._sensor.num_rays if hasattr(self._sensor, "num_rays") else self._sensor.ray_directions.shape[1]
@@ -147,7 +145,8 @@ class lidar_ranges(ManagerTermBase):
         data = self._sensor.data
         hits = data.ray_hits_w.torch
         quat = data.quat_w.torch
-        origin = data.pos_w.torch + quat_apply(quat, self._offset.expand(quat.shape[0], -1))
+        # data.pos_w is the frame the sensor rides on; the rays start at ray_starts (with any mount error) from it.
+        origin = data.pos_w.torch + quat_apply(quat, self._sensor.ray_starts.torch[:, 0])
         dist = torch.linalg.norm(hits - origin.unsqueeze(1), dim=-1)
         dist = torch.nan_to_num(dist, nan=max_range, posinf=max_range).clamp(max=max_range)
         if env.common_step_counter != self._step:

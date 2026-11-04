@@ -120,7 +120,9 @@ class terrain_stages(ManagerTermBase):
     narrow_* types), <dir>_height_cm (mean step height, with stair_height_range) and <dir>_top (share in the
     last block).
 
-    start_stage starts at that stage, with the forward-only share already at its end (to resume a run)."""
+    With stair_levels_forward_only, only forward-only episodes move stair levels: the others (any command) keep
+    theirs. start_level_min puts every env at a random level from it to max_init_terrain_level, and start_stage
+    starts at that stage, with the forward-only share already at its end (to resume a run)."""
 
     def __init__(self, cfg: CurriculumTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
@@ -152,6 +154,10 @@ class terrain_stages(ManagerTermBase):
             self.stairs_since = env.common_step_counter - p.get("forward_hold_steps", 0) - p.get("forward_ramp_steps", 0)
         self.kind = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         self.target = self._retarget(self.mixes[self.stage], fresh=True)
+        low = int(p.get("start_level_min", 0))
+        if low > 0:
+            high = max(low, int(terrain.cfg.max_init_terrain_level or 0))
+            terrain.terrain_levels[:] = torch.randint(low, high + 1, (env.num_envs,), device=env.device)
         self._move(torch.arange(env.num_envs, device=env.device), keep_level=True)
         env._terrain_kind = self.kind
         env._terrain_kind_names = self.names
@@ -268,6 +274,8 @@ class terrain_stages(ManagerTermBase):
         leave_distance: float = 0.0,
         stair_leave_distance: float = 0.0,
         start_stage: int = 0,
+        start_level_min: int = 0,
+        stair_levels_forward_only: bool = False,
     ) -> dict:
         ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long).reshape(-1)
         term = env.command_manager.get_term(command_name)
@@ -286,6 +294,10 @@ class terrain_stages(ManagerTermBase):
             move_up &= ~(on_stairs & ~left)
             move_down |= stayed
             move_up &= ~move_down
+        if stair_levels_forward_only:
+            free = on_stairs & ~term.forward_only[ids]
+            move_up &= ~free
+            move_down &= ~free
         moving = self.target[ids] != self.kind[ids]
         top = terrain.terrain_origins.shape[0] - 1
         past_top = on_stairs & move_up & ~moving & (terrain.terrain_levels[ids] == top)
