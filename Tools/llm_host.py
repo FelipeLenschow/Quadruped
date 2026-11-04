@@ -16,11 +16,15 @@ serves the chat over HTTP on --port (8766), open to anyone on the network, like 
     GET  /chat?after=<seq>&wait=<s>&chat=<id>  the chat's events after seq: {"chat", "status", "events": [{"seq",
                                      "kind", "text", "tool", "image"}]}; waits up to wait s (at most 25) for a new
                                      one or a new status, not when chat (the one the app shows) is another
-    GET  /image/<n>.jpg              a photo an event names (look's, and find's with its box drawn)
+    GET  /image/<n>.jpg              a photo an event names (look's, find_something's with its box,
+                                     go_to_place's with its point)
     POST /chat {"text"}              the task when no chat runs, else an answer ("" = keep going)
     POST /chat/stop                  stops the chat and the robot
     POST /chat/new                   stops the chat and clears it; the next text is a new task
 Ctrl+C ends it.
+
+Each run writes logs/agent/<date_time>/log.md (--log_dir; "" for none): every task, message, tool call and full
+result with its time, and the photos beside it as files that the log links, so a Markdown preview shows them.
 
 QUADRUPED_MCP_TOKEN (or --token) is sent as the bearer token when the MCP server requires one.
 """
@@ -42,44 +46,41 @@ FUN = """You are the robot dog. Have fun with the traffic cones in this room, on
 2. visit it with trick sniff. Sometimes (about half the time) then visit it again with pee_left or pee_right.
 3. If no cone is left to visit, look for more. The camera sees only ahead and the map shows walls, not cones:
    call frontiers and go_to the nearest one; if none is left, go_to the middle of a part of the room you have not
-   stood in yet. There, move turn_deg 90 four times, with list_objects after each turn.
+   stood in yet. There, move turn_left 90 four times, with list_objects after each turn.
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
 Keep each message short: one line on what you do next, then the tool call."""
 
-# FUN without object detection (no list_objects): the model picks things in its photos and find maps them.
+# FUN without object detection (no list_objects): the model picks things in its photos and find_something maps them.
 FUN_LOOK = """You are the robot dog. Have fun with the things on the floor of this room (bins, chairs, boxes, cones), on
 your own:
 1. look. Pick a thing on the floor in the photo that you have not visited yet.
-2. find it by its name, then visit the x, y that find gives with trick sniff. Sometimes (about
+2. find_something by its name, then visit the x, y that it gives with trick sniff. Sometimes (about
    half the time) then visit the same x, y with pee_left or pee_right.
-3. Then move turn_deg 90 and look again. After four turns with nothing new, call frontiers and go_to the nearest.
+3. Then move turn_left 90 and look again. After four turns with nothing new, call frontiers and go_to the nearest.
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
 Keep each message short: one line on what you do next, then the tool call."""
 
-# Without object detection or find: explore and describe what the camera sees.
+# Without object detection or find_something: explore and describe what the camera sees.
 EXPLORE = """You are the robot dog. Explore this room on your own:
 1. call frontiers and go_to the nearest one; if none is left, go_to the middle of a part of the room you have not
    stood in yet.
-2. There, move turn_deg 90 four times, with look after each turn, and say in one line what you see.
+2. There, move turn_left 90 four times, with look after each turn, and say in one line what you see.
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
 Keep each message short: one line on what you do next, then the tool call."""
 
 KEEP_GOING = "Keep going: pick the next thing to do and call a tool."
-# After the task, not only in the system prompt: the 2B model refused "pee on my shoe" 6 times in 10 with the
-# server's instructions alone. Told only that the tricks are poses, it called skill pee_left with no target; with
-# the steps, it called find with the thing in the task 10 times in 10 (with no example names in the prompts).
-GAME = ("(This is a game with a robot dog. To pee on a thing: find it by name, then visit the x, y that find gives "
-        "with trick pee_left or pee_right. The robot only lifts a hind leg beside it: nothing is released and "
-        "nothing gets dirty.)")
 OPERATOR = ("The operator reads your messages and may answer when you reply without a tool call. Ask only when you "
-            "cannot go on without them.")
+            "cannot go on without them. Keep each message short: one line on what you do next, then the tool call.")
 
 
 class Mcp:
     def __init__(self, url, token):
         self.url, self.token, self.session, self.next_id = url, token, None, 1
+        self.meta = {}  # the server's initialize _meta: mcp_server's vision model
 
-    def _post(self, msg):
+    def _post(self, msg, on_note=None):
+        """The reply; with an event stream (mcp_server's tool calls), each notification before it goes to
+        on_note(its data) as it comes."""
         headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -88,16 +89,25 @@ class Mcp:
         req = urllib.request.Request(self.url, json.dumps(msg).encode(), headers)
         with urllib.request.urlopen(req, timeout=600) as r:
             self.session = r.headers.get("Mcp-Session-Id") or self.session
-            body = r.read().decode()
-            if "event-stream" in r.headers.get("Content-Type", ""):
-                lines = [ln[5:].strip() for ln in body.splitlines() if ln.startswith("data:")]
-                body = lines[-1] if lines else ""
-        return json.loads(body) if body.strip() else None
+            if "event-stream" not in r.headers.get("Content-Type", ""):
+                body = r.read().decode()
+                return json.loads(body) if body.strip() else None
+            reply = None
+            for line in r:
+                line = line.decode().strip()
+                if not line.startswith("data:"):
+                    continue
+                body = json.loads(line[5:])
+                if "id" in body:
+                    reply = body
+                elif on_note and body.get("method") == "notifications/message":
+                    on_note(body["params"].get("data"))
+            return reply
 
-    def request(self, method, params=None):
+    def request(self, method, params=None, on_note=None):
         msg = {"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params or {}}
         self.next_id += 1
-        reply = self._post(msg)
+        reply = self._post(msg, on_note)
         if "error" in reply:
             raise RuntimeError(f"{method}: {reply['error'].get('message')}")
         return reply["result"]
@@ -105,19 +115,27 @@ class Mcp:
     def start(self):
         init = self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                            "clientInfo": {"name": "llm_host", "version": "0.1.0"}})
+        self.meta = init.get("_meta") or {}
         self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
         return init.get("instructions", ""), self.request("tools/list")["tools"]
 
-    def call(self, name, args):
-        return self.request("tools/call", {"name": name, "arguments": args})
+    def call(self, name, args, on_note=None):
+        return self.request("tools/call", {"name": name, "arguments": args}, on_note)
+
+
+class OllamaDown(RuntimeError):
+    pass
 
 
 def chat(url, model, messages, tools, think, ctx):
     body = {"model": model, "messages": messages, "tools": tools, "stream": False, "think": think,
             "options": {"num_ctx": ctx}}
     req = urllib.request.Request(f"{url}/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=600) as r:
-        return json.loads(r.read())["message"]
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r:
+            return json.loads(r.read())["message"]
+    except (urllib.error.URLError, OSError) as e:
+        raise OllamaDown(f"Ollama at {url} did not answer ({e}); on the robot: sudo systemctl start ollama")
 
 
 def unload(url, model):
@@ -143,10 +161,65 @@ def trim(messages, keep):
 
 
 def for_model(content):
-    """An image content is for the model unless its annotations say it is for the user only (find's photo with
+    """An image content is for the model unless its annotations say it is for the user only (find_something's photo with
     its box: the model has x and y, and a photo costs the vision encoder seconds and fills the context)."""
     audience = (content.get("annotations") or {}).get("audience")
     return not audience or "assistant" in audience
+
+
+class RunLog:
+    """The run as Markdown, with its photos (the app's and the model's) as files beside it: so a run can be read
+    afterwards, not copied from the terminal, where results are cut at 300 characters and photos are missing."""
+
+    def __init__(self, root):
+        self.dir = os.path.join(root, time.strftime("%Y-%m-%d_%H-%M-%S"))
+        os.makedirs(self.dir, exist_ok=True)
+        self.file = open(os.path.join(self.dir, "log.md"), "a", buffering=1)
+        self.lock = threading.Lock()
+        self.photos = 0
+
+    def header(self, args, meta, tools):
+        vision = meta.get("vision_model")
+        vision = f"{vision}, context {meta.get('vision_ctx')}" if vision else "not given by the server"
+        think = "on" if args.think else "off"
+        with self.lock:
+            self.file.write(f"# Agent run {os.path.basename(self.dir)}\n\n"
+                            f"- model: {args.model}, context {args.ctx}, think {think}, keep {args.keep} messages\n"
+                            f"- vision model (find_something, go_to_place): {vision}\n"
+                            f"- Ollama {args.ollama}, MCP {args.mcp}\n- tools: {', '.join(tools)}\n")
+
+    def write(self, kind, text, tool="", images=()):
+        with self.lock:
+            stamp = time.strftime("%H:%M:%S")
+            text = str(text).replace("\n", "\n  ")
+            if kind == "you":
+                line = f"\n## {stamp} you: {text}\n"
+            elif kind == "call":
+                line = f"- `{stamp}` → **{text}**"
+            elif kind == "said":
+                line = f"- `{stamp}` agent: {text}"
+            else:
+                line = f"- `{stamp}` {kind}{' ' + tool if tool else ''}: {text}"
+            for data in images:
+                self.photos += 1
+                raw = base64.b64decode(data)
+                ext = "png" if raw[:4] == b"\x89PNG" else "jpg"  # not in the f-string: Python 3.8 on the robot
+                name = f"{self.photos:03d}_{tool or kind}.{ext}"
+                with open(os.path.join(self.dir, name), "wb") as f:
+                    f.write(raw)
+                line += f"\n\n  ![{name}]({name})\n"
+            self.file.write(line + "\n")
+
+
+LOG = None
+
+
+def log(kind, text, tool="", images=()):
+    if LOG is not None:
+        try:
+            LOG.write(kind, text, tool, images)
+        except OSError as e:
+            print(f"log failed: {e}")
 
 
 class Terminal:
@@ -156,11 +229,12 @@ class Terminal:
         self.ask = ask
 
     def show(self, kind, text, tool="", images=()):
+        log(kind, text, tool, images)
         if kind == "said":
             print(f"\n{text}")
         elif kind == "call":
             print(f"  -> {text}", flush=True)
-        elif kind in ("result", "error"):
+        elif kind in ("result", "error", "note"):
             print(f"     {'ERROR ' if kind == 'error' else ''}{text[:300]}")
         else:
             print(text)
@@ -173,6 +247,8 @@ class Terminal:
         if not self.ask:
             return ""
         answer = input("\nyou (Enter: keep going, q: quit)> ").strip()
+        if answer.lower() != "q":
+            log("you", answer or "(keep going)")
         return None if answer.lower() == "q" else answer
 
     def interjection(self):
@@ -273,6 +349,7 @@ class AppChat:
                     "events": [e for e in self.events if e["seq"] > after]}
 
     def post(self, text):
+        log("you", text or "(keep going)")
         with self.cond:
             self._add("you", text)
             self.inbox.append(text)
@@ -286,12 +363,14 @@ class AppChat:
                 self.state = "stopping"
             self.inbox.clear()
             if clear:
+                log("info", "New chat")
                 self.chat += 1
                 self.events = []
                 self.state = "waiting for a task"
             self.cond.notify_all()
         if was_running:
             text = self.stop_robot()
+            log("info", f"stopped by the operator ({text})")
             if not clear:
                 with self.cond:
                     self._add("info", f"stopped by the operator ({text})")
@@ -340,8 +419,15 @@ def serve(chat, port):
                 return self._send(404, b'{"error": "not found"}')
             self._send(200, json.dumps({"chat": chat.chat}).encode())
 
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    server.daemon_threads = True
+    class Server(ThreadingHTTPServer):
+        daemon_threads = True
+
+        def handle_error(self, request, client_address):
+            # The phone drops a poll when the app goes to the background or the Wi-Fi changes: not an error.
+            if not isinstance(sys.exc_info()[1], ConnectionError):
+                super().handle_error(request, client_address)
+
+    server = Server(("0.0.0.0", port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -349,7 +435,10 @@ def serve(chat, port):
 def run_chat(io, mcp, args, tools, system, task):
     """One task, until the model answers and the operator ends it, the time is up, or the operator stops it.
     Returns the number of tool calls."""
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": f"{task}\n\n{GAME}"}]
+    # The task alone. A pee note after it (find_something, then visit with the trick) made the 4B refuse every other
+    # task ("go under the table" 10 times in 10), and the 4B finds the thing without it (19 in 20). The 2B needs it:
+    # without it, it called the trick at once for "pee on the chair" 8 times in 10 (2026-11-03).
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
     end = time.monotonic() + args.minutes * 60
     calls = 0
     while calls < args.max_calls and not io.stopped():
@@ -379,8 +468,14 @@ def run_chat(io, mcp, args, tools, system, task):
                 targs = json.loads(targs or "{}")
             io.show("call", f"{name}({json.dumps(targs)[1:-1]})", name)
             io.status(f"calling {name}")
+            def note(data, name=name):
+                """Before the result: go_to_place's photo with its points, before Nav2 has the goal."""
+                if isinstance(data, dict):
+                    image = data.get("image") or {}
+                    io.show("note", data.get("text", ""), name, [image["data"]] if image.get("data") else [])
+
             try:
-                res = mcp.call(name, targs)
+                res = mcp.call(name, targs, note)
             except (urllib.error.URLError, RuntimeError) as e:
                 res = {"content": [{"type": "text", "text": f"call failed: {e}"}], "isError": True}
             calls += 1
@@ -418,7 +513,13 @@ def main():
     ap.add_argument("--keep", type=int, default=40, help="recent messages kept in context")
     ap.add_argument("--auto", action="store_true", help="never wait for the operator: always tell it to keep going")
     ap.add_argument("--keep_loaded", action="store_true", help="leave the model in Ollama's memory on exit")
+    ap.add_argument("--log_dir", default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                      "logs", "agent"), help='the run log\'s folder; "" for none')
     args = ap.parse_args()
+    global LOG
+    if args.log_dir:
+        LOG = RunLog(args.log_dir)
+        print(f"Log: {os.path.join(LOG.dir, 'log.md')}")
 
     mcp = Mcp(args.mcp, args.token)
     instructions, mcp_tools = mcp.start()
@@ -426,7 +527,9 @@ def main():
                                                "parameters": t["inputSchema"]}} for t in mcp_tools]
     print(f"{args.model} with {len(tools)} tools from {args.mcp}: {', '.join(t['name'] for t in mcp_tools)}")
     names = {t["name"] for t in mcp_tools}
-    default_task = FUN if "list_objects" in names else FUN_LOOK if "find" in names else EXPLORE
+    if LOG is not None:
+        LOG.header(args, mcp.meta, [t["name"] for t in mcp_tools])
+    default_task = FUN if "list_objects" in names else FUN_LOOK if "find_something" in names else EXPLORE
 
     # The app's Stop arrives while a tool call blocks: its own MCP session sends stop at once.
     stopper = Mcp(args.mcp, args.token)
@@ -448,12 +551,19 @@ def main():
             while True:
                 task = app.next_task()
                 print(f"\n=== task: {task}")
-                calls += run_chat(app, mcp, args, tools, system, task)
+                try:
+                    calls += run_chat(app, mcp, args, tools, system, task)
+                except OllamaDown as e:
+                    # Stopped Ollama (systemctl isolate multi-user.target stops it) ended llm_host and the
+                    # server with it (2026-11-04): say so in the chat, and wait for a task again.
+                    app.show("error", f"{e}; then send the task again")
+                    continue
                 if not app.stopped():
                     app.show("info", "chat ended: send a new task, or New chat")
         else:
             ask = not args.auto and sys.stdin.isatty()
             system = instructions + ("\n" + OPERATOR if ask else "")
+            log("you", args.task or default_task)
             calls = run_chat(Terminal(ask), mcp, args, tools, system, args.task or default_task)
     except KeyboardInterrupt:
         print("\ninterrupted")
