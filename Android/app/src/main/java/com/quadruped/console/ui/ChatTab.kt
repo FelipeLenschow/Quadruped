@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.quadruped.console.RobotNetwork
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -109,7 +110,7 @@ private fun httpPost(ctx: Context, path: String, body: JSONObject = JSONObject()
 /**
  * The LLM agent's chat (launcher [A]). The first message starts a chat with it as the task; later ones answer
  * the agent, or reach it before its next step while it works. Stop stops the chat and the robot; New chat
- * also clears it. Photos (look's, and find's with its box drawn) show in the list; a tap shows one full size.
+ * also clears it. Photos (look's, find_something's with its box, go_to_place's with its point) show in the list; a tap shows one full size.
  */
 @Composable
 fun ChatTab(modifier: Modifier) {
@@ -120,15 +121,24 @@ fun ChatTab(modifier: Modifier) {
     val list = rememberLazyListState()
 
     // Long polls: the robot answers at once when there is something new or it is not on the chat shown here (a
-    // restarted agent, or none shown yet), else after 20 s.
+    // restarted agent, or none shown yet), else after 20 s. The first poll after the tab opens does not wait, so the
+    // status is fresh at once.
     LaunchedEffect(Unit) {
+        var wait = 0
         while (isActive) {
             val after = if (ChatStore.chat < 0) 0 else ChatStore.events.lastOrNull()?.seq ?: 0
-            val reply = runCatching {
+            val reply = try {
                 withContext(Dispatchers.IO) {
-                    JSONObject(String(httpGet(ctx, "/chat?after=$after&wait=20&chat=${ChatStore.chat}", 25_000)))
+                    JSONObject(String(httpGet(ctx, "/chat?after=$after&wait=$wait&chat=${ChatStore.chat}", 25_000)))
                 }
-            }.getOrNull()
+            } catch (e: CancellationException) {
+                // The tab closed during the poll: not the agent gone. Caught as a failure, this set "no agent" up
+                // to 20 s after a tab switch, and the new tab's first poll waited 20 s to clear it.
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            wait = 20
             if (reply == null) {
                 ChatStore.online = false
                 ChatStore.status = "no agent: start launcher [A] on the robot"
