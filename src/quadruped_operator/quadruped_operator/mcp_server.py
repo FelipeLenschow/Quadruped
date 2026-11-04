@@ -918,10 +918,18 @@ def main():
     ap.add_argument("--token", default=os.environ.get("QUADRUPED_MCP_TOKEN", ""))
     ap.add_argument("--objects", choices=["auto", "on", "off"], default="",
                     help="object tools (list_objects, go_to_object, visit); default config.yaml mcp.objects")
+    # Launcher [A] gives its agent's: find_something and go_to_place then run on the same loaded model, not a second
+    # one in the same memory.
+    ap.add_argument("--ollama", default="", help="Ollama for both; default config.yaml mcp.ollama")
+    ap.add_argument("--vlm_model", default="", help="their vision model; default config.yaml mcp.vlm_model")
+    ap.add_argument("--vlm_ctx", type=int, default=0, help="its context; default config.yaml mcp.vlm_ctx")
     args = ap.parse_args(remove_ros_args()[1:])
     cfg = load_config().get("mcp") or {}
     if args.objects:
         cfg["objects"] = {"auto": "auto", "on": True, "off": False}[args.objects]
+    for key in ("ollama", "vlm_model", "vlm_ctx"):
+        if getattr(args, key):
+            cfg[key] = getattr(args, key)
 
     rclpy.init()
     robot = Robot(cfg)
@@ -934,7 +942,8 @@ def main():
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
     robot.get_logger().info(f"MCP on http://{host}:{port}/mcp" + (" (token required)" if args.token else "")
-                            + f", object tools: {cfg.get('objects', 'auto')}")
+                            + f", object tools: {cfg.get('objects', 'auto')}, vision model: "
+                            + f"{cfg.get('vlm_model', 'qwen3vl-2b-gpu')} ({cfg.get('vlm_ctx', 8192)} tokens)")
     try:
         server.serve_forever()
     except (KeyboardInterrupt, ExternalShutdownException):

@@ -6,8 +6,10 @@ import glob
 import subprocess
 import json
 import platform
+import signal
 import socket
 import tempfile
+import urllib.request
 import yaml
 from datetime import datetime
 
@@ -470,6 +472,102 @@ def run_foreground(cmd, env):
             interrupts += 1
             if interrupts >= 3:
                 proc.kill()
+
+
+def alive(pid, name=""):
+    """pid runs (and its command line has name: a reused pid is not it)."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return name.encode() in f.read()
+    except OSError:
+        return False
+
+
+def start_mcp_server(url, env, *args):
+    """[A]'s own mcp_server, when the URL is on this machine and nothing answers there; None when one already
+    runs (another [A], or one started by hand) or the URL is another machine's. So a change for the LLM restarts
+    [A] only, not the deploy. In its own session: the terminal's Ctrl+C reaches llm_host alone, whose last stop
+    call (it cancels a Nav2 goal) still finds the server; stop_mcp_server ends it after.
+
+    Its own session also keeps it alive when [A]'s launcher ends without its finally (the terminal closed): the
+    next [A] then used that old server, with the old code and model (2026-11-04). The pid file names the server's
+    group and its launcher: a server whose launcher is gone is stopped and started again."""
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    if u.hostname not in ("127.0.0.1", "localhost"):
+        return None
+    port = u.port or 80
+
+    def up():
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+            return True
+        except OSError:
+            return False
+
+    pid_file = os.path.join(tempfile.gettempdir(), f"quadruped_mcp_server_{port}.json")
+    try:
+        with open(pid_file) as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        old = None
+    if up() and old and alive(old["pgid"], "mcp_server") and not alive(old["launcher"], "launcher.py"):
+        print(f"[Launcher] Stopping the mcp_server an earlier [A] left on port {port} (its launcher is gone)...")
+        os.killpg(old["pgid"], signal.SIGINT)
+        end = time.monotonic() + 10
+        while up() and time.monotonic() < end:
+            time.sleep(0.5)
+        if up():
+            os.killpg(old["pgid"], signal.SIGKILL)
+            time.sleep(1.0)
+    if up():
+        print(f"[Launcher] Using the MCP server already on port {port}: its find_something keeps the model it started with.")
+        return None
+    print(f"[Launcher] Starting mcp_server on port {port} (it stops with [A])...")
+    proc = subprocess.Popen(ros2_run("quadruped_operator", "mcp_server", f"--port={port}", *args), env=workspace_env(env),
+                            cwd=REPO_DIR, start_new_session=True)
+    with open(pid_file, "w") as f:
+        json.dump({"pgid": proc.pid, "launcher": os.getpid()}, f)
+    end = time.monotonic() + 60
+    while not up():
+        if proc.poll() is not None or time.monotonic() > end:
+            stop_mcp_server(proc)
+            sys.exit("[Launcher] mcp_server did not start: see its output above.")
+        time.sleep(0.5)
+    return proc
+
+
+def ask_ollama_model(default, url="http://localhost:11434"):
+    """The model for [A], by number from the ones this machine's Ollama has, or by name."""
+    try:
+        with urllib.request.urlopen(f"{url}/api/tags", timeout=3) as r:
+            models = json.load(r).get("models", [])
+    except (OSError, ValueError):
+        print(f"[Launcher] Ollama does not answer at {url} (on the robot: sudo systemctl enable --now ollama).")
+        models = None
+    if models == []:
+        # This morning's 404: an `ollama serve` started by hand reads another model folder than the service.
+        print(f"[Launcher] Ollama at {url} has no models: is it a hand-started `ollama serve`, not the service?")
+    for i, m in enumerate(models or [], 1):
+        caps = m.get("capabilities") or []
+        notes = [n for n, on in (("no tools", caps and "tools" not in caps), ("no vision", caps and "vision" not in caps),
+                                 ("thinks: slow", "thinking" in caps)) if on]
+        print(f"  [{i}] {m['name']:32s} {m.get('size', 0) / 1e9:4.1f} GB" + (f"  ({', '.join(notes)})" if notes else ""))
+    answer = input(f"Ollama model, number or name [{default}]: ").strip()
+    if answer.isdigit() and models and 1 <= int(answer) <= len(models):
+        return models[int(answer) - 1]["name"]
+    return answer or default
+
+
+def stop_mcp_server(proc):
+    if proc is None or proc.poll() is not None:
+        return
+    print("[Launcher] Stopping mcp_server...")
+    os.killpg(proc.pid, signal.SIGINT)  # its group: ros2 run and the node under it
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
 
 
 def is_rsl_rl_module(module_path):
@@ -1129,8 +1227,6 @@ def run_cli_menu():
         record_session = input("Record this sweep to MCAP? [Y/n] (default Y): ").lower().strip() != "n"
         if not record_session:
             print("[Launcher] Not recording - Tools/sweep_report.py will have nothing to read.")
-    if action in ("mujoco", "gazebo", "real_deploy"):
-        sweep_opts["mcp"] = input("Start the MCP server for an LLM (mcp_server, [A] connects to it)? [y/N]: ").lower().strip() == "y"
 
     if action == "mcap":
         # MCAP Log & Replay sub-menu
@@ -1261,12 +1357,12 @@ def run_cli_menu():
                       "classes": classes, "map_objects": map_objects}
 
     if action == "llm_agent":
-        print("\nNeeds the robot running with the MCP server on ([4], [5] or [6]), plus [N] for go_to and")
-        print("[I] with detection and the map for the objects. Ollama must serve the model on this machine.")
+        print("\nNeeds the robot running ([4], [5] or [6]), plus [N] for go_to and [I] for the camera. Starts")
+        print("mcp_server for its run if none runs here. Ollama must serve the model on this machine.")
         # On the Jetson the model shares the 7 GB with the stack: a small one, and a context that fits beside it.
         model_def, ctx_def, keep_def = ("qwen3vl-2b-gpu", "8192", "12") if IS_ROBOT else ("qwen3.8:27b", "32768", "40")
         url = input("MCP server [http://127.0.0.1:8765/mcp]: ").strip() or "http://127.0.0.1:8765/mcp"
-        model = input(f"Ollama model [{model_def}]: ").strip() or model_def
+        model = ask_ollama_model(model_def)
         ctx = input(f"Context tokens [{ctx_def}]: ").strip() or ctx_def
         # The tasks come from the app's Chat tab (llm_host --app); the model stays loaded between chats.
         minutes = input("Minutes for each chat, 0 = no limit [10]: ").strip() or "10"
@@ -1563,6 +1659,7 @@ def main():
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable
+        mcp_proc = None
         if action not in ("sweep_report", "discovery_server", "llm_agent"):
             env = workspace_env(env)
 
@@ -1659,6 +1756,11 @@ def main():
                               map_objects=sweep_opts.get("map_objects", False))
 
         elif action == "llm_agent":
+            # find_something and go_to_place on the agent's model and context: one model loaded, not two (on the robot two do not fit).
+            mcp_proc = start_mcp_server(sweep_opts.get('url', 'http://127.0.0.1:8765/mcp'), env,
+                                        "--ollama=http://localhost:11434",
+                                        f"--vlm_model={sweep_opts.get('model', 'qwen3vl-2b-gpu')}",
+                                        f"--vlm_ctx={sweep_opts.get('ctx', '8192' if IS_ROBOT else '32768')}")
             cmd = [sys_python, os.path.abspath(os.path.join("Tools", "llm_host.py")), "--app"]
             cmd += [f"--mcp={sweep_opts.get('url', 'http://127.0.0.1:8765/mcp')}",
                     f"--model={sweep_opts.get('model', 'qwen3.8:27b')}", f"--minutes={sweep_opts.get('minutes', '10')}",
@@ -1685,8 +1787,6 @@ def main():
 
         if action in ("isaac_sim", "mujoco", "gazebo", "mujoco_twin", "real_deploy", "eval_policy") and cmd[:2] == ["ros2", "launch"]:
             cmd.append(f"reward:={str(START_REWARD_ESTIMATOR).lower()}")
-            if sweep_opts.get("mcp"):
-                cmd.append("mcp:=true")
             if START_REWARD_ESTIMATOR and abs_ckpt:
                 ckpt_dir = os.path.dirname(abs_ckpt)
                 config_path = os.path.join(ckpt_dir, "training_phases.yaml")
@@ -1736,6 +1836,7 @@ def main():
         try:
             run_foreground(cmd, env)
         finally:
+            stop_mcp_server(mcp_proc)
             if record_proc is not None:
                 print("\n[Launcher] Stopping background MCAP recorder...")
                 record_proc.terminate()

@@ -170,7 +170,7 @@ object_mapper:
   forget_unseen: {person: 5, backpack: 15}
   forget_range: 4.0
 
-# mcp_server: the robot's tools for an LLM over HTTP, http://<robot>:<port>/mcp (launch arg mcp:=true).
+# mcp_server: the robot's tools for an LLM over HTTP, http://<robot>:<port>/mcp (launcher [A] starts it).
 #   Set QUADRUPED_MCP_TOKEN to require a bearer token. approach: metres go_to_object stops from an object;
 #   visit_radius: a trick done this close to an object is marked done there; move is a Nav2 goal at most
 #   max_move_m away; look's photo is shrunk to image_width px. visit: Nav2 to nav_standoff m from the object

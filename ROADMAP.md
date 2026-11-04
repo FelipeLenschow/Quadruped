@@ -148,7 +148,7 @@ All skills go through `/skill`. Two kinds:
 ## Phase 5: LLM brain over MCP
 
 **To build:**
-- [x] **MCP server:** `mcp_server` in `quadruped_operator` (`mcp:=true` on any driver launch, config.yaml's `mcp:`),
+- [x] **MCP server:** `mcp_server` in `quadruped_operator` (started by launcher [A], config.yaml's `mcp:`),
       MCP's HTTP transport on `http://<robot>:8765/mcp`, Python standard library only (the Jetson's Python 3.8 can't
       run the `mcp` package). `QUADRUPED_MCP_TOKEN` requires a bearer token; browser requests are refused. Tools:
       `get_state`, `list_objects` (distance, bearing, and the tricks already done at each), `go_to(x, y)`,

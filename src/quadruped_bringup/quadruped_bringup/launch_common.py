@@ -38,7 +38,6 @@ def interface_args():
     return [
         arg("mux", "true", "run twist_mux: /cmd_vel/{joy,keyboard,phone,skill,nav,llm} -> /cmd_vel"),
         arg("skills", "true", "run the /skill service"),
-        arg("mcp", "false", "run the MCP server for an LLM (config.yaml mcp:)"),
     ]
 
 
@@ -72,8 +71,6 @@ def interface(context):
                             parameters=[paths.config("twist_mux.yaml")], remappings=[("/cmd_vel_out", "/cmd_vel")]))
     if flag(context, "skills"):
         actions.append(node("quadruped_operator", "skill_server"))
-    if flag(context, "mcp"):
-        actions.append(node("quadruped_operator", "mcp_server"))
     return actions
 
 
