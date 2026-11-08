@@ -1071,7 +1071,10 @@ def run_cli_menu():
         # MuJoCo reads the same QUADRUPED_TERRAIN as training does; "rough"
         # puts it on a randomised heightfield instead of an infinite plane.
         # Amplitude and patch size live under `terrain:` in quadruped_bringup/config/config.yaml.
-        if action in ["isaac_lab", "mujoco"]:
+        if action == "mujoco":
+            terrain_choice = input("Select Terrain [1: flat, 2: rough, 3: stairs, 4: narrow stairs] (default 1): ").strip() or "1"
+            terrain_cfg = {"2": "rough", "3": "stairs", "4": "narrow"}.get(terrain_choice, "flat")
+        elif action == "isaac_lab":
             terrain_choice = input("Select Terrain [1: flat, 2: rough] (default 1): ").strip() or "1"
             terrain_cfg = "rough" if terrain_choice == "2" else "flat"
         elif action == "gazebo":

@@ -25,6 +25,7 @@ from quadruped_control.driver_node import Pipeline
 from quadruped_common.config_loader import load_config
 from quadruped_common import paths
 from quadruped_common.robot_defaults import DEFAULT_STANCE_QPOS
+from quadruped_drivers.lidar_fan import LidarFan
 from quadruped_drivers.motor_model import Go2MotorModel
 from quadruped_drivers.foot_contact_overlay import FootContactOverlay
 from quadruped_drivers.velocity_arrow_overlay import VelocityArrowOverlay
@@ -541,6 +542,15 @@ class Ros2MujocoDriver(Node):
                 
                 # --- Centralized Pipeline (handles inference & telemetry) ---
                 raw_data = self._get_raw_sensor_data()
+                self._lidar_tick = getattr(self, "_lidar_tick", -1) + 1
+                if self._lidar_tick % 20 == 0:
+                    fan = self.pipeline.lidar_fan
+                    if fan is None:
+                        self._lidar = None
+                    else:
+                        if getattr(self, "_lidar", None) is None:
+                            self._lidar = LidarFan(self.model, fan)
+                        raw_data["scan"] = self._lidar.ranges(self.data)
                 self.cmd_vel = self.pipeline.cmd_vel
                 self.current_targets = self.pipeline.step(
                     raw_state_kwargs=raw_data,

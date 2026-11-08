@@ -16,6 +16,10 @@ Amplitude is peak-to-peak in metres and is the knob that matters - it wants to
 be comparable to the swing clearance the policy achieves, not to the robot's
 leg length.
 
+`stairs` puts a wide flight up, a platform and a flight down ahead of the
+robot; `narrow` is ClockScan's narrow tile: a flight with open sides up to an
+upper floor. Both are boxes on the flat plane, sized by the stair_* keys.
+
 Terrain names match the launcher's existing vocabulary ("flat" / "rough") and
 arrive via the QUADRUPED_TERRAIN environment variable.
 """
@@ -27,7 +31,7 @@ import numpy as np
 import mujoco
 
 
-TERRAINS = ("flat", "rough")
+TERRAINS = ("flat", "rough", "stairs", "narrow")
 
 # The line every unitree_* scene.xml uses for its ground plane. Matched
 # verbatim rather than parsed: if upstream changes it, we want a loud failure
@@ -69,6 +73,15 @@ DEFAULTS = {
     # far more than a smooth floor; the menagerie default of 0.02 is a smooth
     # floor value.
     "foot_friction_torsion": 0.05,
+    # stairs / narrow: step height and depth (m), steps per flight, flight width
+    # (m), and the gap from the spawn point to the first riser (m).
+    "stair_height": 0.18,
+    "stair_depth": 0.30,
+    "stair_steps": 6,
+    "stair_width": 3.0,
+    "narrow_steps": 15,
+    "narrow_width": 0.8,
+    "stair_gap": 0.6,
 }
 
 FOOT_GEOMS = ("FL", "FR", "RL", "RR")
@@ -102,6 +115,12 @@ def scene_path(base_scene, terrain, params, tmp_files):
         return base_scene
 
     xml = open(base_scene, encoding="utf-8").read()
+    if terrain in ("stairs", "narrow"):
+        geoms = "".join(
+            '    <geom type="box" pos="%g %g %g" size="%g %g %g" rgba="0.55 0.55 0.6 1"/>\n'
+            % (0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * (z0 + z1), 0.5 * (x1 - x0), 0.5 * (y1 - y0), 0.5 * (z1 - z0))
+            for x0, x1, y0, y1, z0, z1 in stair_boxes(terrain, params))
+        return _write_beside(base_scene, xml.replace("</worldbody>", geoms + "  </worldbody>", 1), tmp_files)
     if _PLANE_GEOM not in xml:
         raise RuntimeError(
             "%s has no recognisable ground plane to replace - upstream may have "
@@ -114,13 +133,41 @@ def scene_path(base_scene, terrain, params, tmp_files):
                  params["extent"], params["extent"], params["amplitude"]))
     xml = xml.replace("</asset>", hfield, 1)
     xml = xml.replace(_PLANE_GEOM, _HFIELD_GEOM, 1)
+    return _write_beside(base_scene, xml, tmp_files)
 
+
+def _write_beside(base_scene, xml, tmp_files):
     fd, path = tempfile.mkstemp(prefix="_terrain_", suffix=".xml",
                                 dir=os.path.dirname(base_scene))
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(xml)
     tmp_files.append(path)
     return path
+
+
+def stair_boxes(terrain, params):
+    """(x0, x1, y0, y1, z0, z1) boxes of a stairs terrain, the robot spawned at the origin facing +x."""
+    h, d, x0 = float(params["stair_height"]), float(params["stair_depth"]), float(params["stair_gap"])
+    if terrain == "narrow":
+        n, w = int(params["narrow_steps"]), float(params["narrow_width"])
+        x1 = x0 + n * d
+        boxes = [(x0 + k * d, x0 + (k + 1) * d, -0.5 * w, 0.5 * w, 0.0, (k + 1) * h) for k in range(n)]
+        return boxes + [(x1, x1 + 4.0, -2.5, 2.5, 0.0, n * h)]
+    n, w = int(params["stair_steps"]), float(params["stair_width"])
+    x1 = x0 + n * d
+    boxes = [(x0 + k * d, x0 + (k + 1) * d, -0.5 * w, 0.5 * w, 0.0, (k + 1) * h) for k in range(n)]
+    boxes.append((x1, x1 + 2.0, -0.5 * w, 0.5 * w, 0.0, n * h))
+    return boxes + [(x1 + 2.0 + k * d, x1 + 2.0 + (k + 1) * d, -0.5 * w, 0.5 * w, 0.0, (n - k) * h) for k in range(n)]
+
+
+def stair_spawns(terrain, params):
+    """{"up", "down"}: (x, y, ground z, yaw) to start a stairs test from, facing the flight."""
+    h, d, x0 = float(params["stair_height"]), float(params["stair_depth"]), float(params["stair_gap"])
+    if terrain == "narrow":
+        n = int(params["narrow_steps"])
+        return {"up": (0.0, 0.0, 0.0, 0.0), "down": (x0 + n * d + x0, 0.0, n * h, np.pi)}
+    n = int(params["stair_steps"])
+    return {"up": (0.0, 0.0, 0.0, 0.0), "down": (x0 + n * d + 1.0, 0.0, n * h, 0.0)}
 
 
 def apply_foot_friction(model, params):
