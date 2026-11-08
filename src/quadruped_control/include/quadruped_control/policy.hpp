@@ -53,6 +53,16 @@ struct SpeedClockConfig {
   double max_foot_speed = 0.0;
 };
 
+// The actor's lidar input (ClockScan): ranges along fixed rays from pos in the base frame, turning with the
+// whole base; rows by depression (deg below the base x-y plane), columns by azimuth (deg, left positive).
+struct LidarFan {
+  Vec3f pos = Vec3f::Zero();
+  std::vector<float> depressions;
+  std::vector<float> azimuths;
+  float max_range = 3.0f;
+  int rays() const { return static_cast<int>(depressions.size() * azimuths.size()); }
+};
+
 struct PolicySpec {
   std::string name;
   std::string source;
@@ -65,6 +75,7 @@ struct PolicySpec {
   Mlp mlp;
   std::optional<WtwConfig> wtw;
   std::optional<SpeedClockConfig> clock;
+  std::optional<LidarFan> lidar;  // ranges appended after the layout's terms
   double trick_clock_hz = 0.0;  // from the run's commands.trick, for policies.json "trick" entries
   int trick_switches = 1;
 
@@ -79,6 +90,7 @@ struct ObsInput {
   Vec3 gyro;
   Vec12 q;
   Vec12 dq;
+  const VecXf* scan = nullptr;  // lidar ranges, for a spec with a lidar
 };
 
 // Runtime half of policy_runner.py: observation, history, gait clocks and the network.

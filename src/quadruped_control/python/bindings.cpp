@@ -54,6 +54,13 @@ PYBIND11_MODULE(_core, m) {
       .def_property_readonly("covariance", &StateEstimator::covariance)
       .def_property_readonly("params", &StateEstimator::params);
 
+  py::class_<LidarFan>(m, "LidarFan")
+      .def_readonly("pos", &LidarFan::pos)
+      .def_readonly("depressions", &LidarFan::depressions)
+      .def_readonly("azimuths", &LidarFan::azimuths)
+      .def_readonly("max_range", &LidarFan::max_range)
+      .def_property_readonly("rays", &LidarFan::rays);
+
   py::class_<PolicySpec>(m, "PolicySpec")
       .def_static("from_file", &PolicySpec::from_file, py::arg("path"))
       .def_readonly("name", &PolicySpec::name)
@@ -63,7 +70,8 @@ PYBIND11_MODULE(_core, m) {
       .def_readonly("obs_dim_single", &PolicySpec::obs_dim_single)
       .def_readonly("history_len", &PolicySpec::history_len)
       .def_readonly("action_scale", &PolicySpec::action_scale)
-      .def_readonly("desired_qpos", &PolicySpec::desired_qpos);
+      .def_readonly("desired_qpos", &PolicySpec::desired_qpos)
+      .def_readonly("lidar", &PolicySpec::lidar);
 
   py::class_<PolicyRunner>(m, "PolicyRunner")
       .def(py::init<PolicySpec>(), py::arg("spec"))
@@ -72,11 +80,11 @@ PYBIND11_MODULE(_core, m) {
       .def(
           "infer",
           [](PolicyRunner& r, const Vec4& quat, const Vec3& lin_vel, const Vec3& gyro, const Vec12& q,
-             const Vec12& dq, const Eigen::VectorXd& commands, double dt) {
-            return r.infer(ObsInput{quat, lin_vel, gyro, q, dq}, commands, dt);
+             const Vec12& dq, const Eigen::VectorXd& commands, double dt, std::optional<VecXf> scan) {
+            return r.infer(ObsInput{quat, lin_vel, gyro, q, dq, scan ? &*scan : nullptr}, commands, dt);
           },
           py::arg("quat_wxyz"), py::arg("lin_vel"), py::arg("gyro"), py::arg("q"), py::arg("dq"),
-          py::arg("commands"), py::arg("dt") = 0.02)
+          py::arg("commands"), py::arg("dt") = 0.02, py::arg("scan") = py::none())
       .def("reset_history", &PolicyRunner::reset_history)
       .def("set_gait_vector", &PolicyRunner::set_gait_vector, py::arg("values"))
       .def(
@@ -246,13 +254,13 @@ PYBIND11_MODULE(_core, m) {
           "step",
           [](Controller& c, const Vec12& q, const Vec12& dq, const Vec4& quat, const Vec3& gyro, std::optional<Vec3> accel,
              std::optional<Vec3> pos, std::optional<Vec3> vel, std::optional<Vec4> contact,
-             std::optional<Eigen::VectorXd> cmd_vel, double sim_time, double now) {
-            RawState raw{q, dq, quat, gyro, accel, pos, vel, contact};
+             std::optional<Eigen::VectorXd> cmd_vel, double sim_time, double now, std::optional<VecXf> scan) {
+            RawState raw{q, dq, quat, gyro, accel, pos, vel, contact, std::move(scan)};
             return c.step(raw, cmd_vel, sim_time, now);
           },
           py::arg("q"), py::arg("dq"), py::arg("quat"), py::arg("gyro"), py::arg("accel") = py::none(),
           py::arg("pos") = py::none(), py::arg("vel") = py::none(), py::arg("contact") = py::none(), py::kw_only(),
-          py::arg("cmd_vel") = py::none(), py::arg("sim_time"), py::arg("now"))
+          py::arg("cmd_vel") = py::none(), py::arg("sim_time"), py::arg("now"), py::arg("scan") = py::none())
       .def("reset", &Controller::reset)
       .def("drain_events", &Controller::drain_events)
       .def_property_readonly("safety", py::overload_cast<>(&Controller::safety), py::return_value_policy::reference_internal)

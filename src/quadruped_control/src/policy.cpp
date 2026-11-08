@@ -222,6 +222,16 @@ PolicySpec PolicySpec::from_file(const std::string& path) {
     c.max_foot_speed = k["max_foot_speed"].as<double>(0.0);
     spec.clock = c;
   }
+
+  if (const YAML::Node l = meta["lidar"]) {
+    LidarFan f;
+    const auto pos = l["pos"].as<std::vector<float>>();
+    f.pos = Vec3f(pos.at(0), pos.at(1), pos.at(2));
+    f.depressions = l["depressions"].as<std::vector<float>>();
+    f.azimuths = l["azimuths"].as<std::vector<float>>();
+    f.max_range = l["max_range"].as<float>(3.0f);
+    spec.lidar = f;
+  }
   return spec;
 }
 
@@ -326,6 +336,14 @@ VecXf PolicyRunner::build_obs(const ObsInput& in, const Eigen::VectorXd& command
       append(obs, speed_clock(velocity, measured));
       break;
     }
+  }
+  if (spec_.lidar) {
+    const int rays = spec_.lidar->rays();
+    if (!in.scan || in.scan->size() != rays) {
+      throw std::invalid_argument("[PolicyRunner] '" + spec_.name + "': needs " + std::to_string(rays) + " lidar ranges, got " +
+                                  std::to_string(in.scan ? in.scan->size() : 0) + ".");
+    }
+    append(obs, VecXf(in.scan->cwiseMax(0.0f).cwiseMin(spec_.lidar->max_range)));
   }
 
   if (static_cast<int>(obs.size()) != spec_.obs_dim_single) {

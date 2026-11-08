@@ -189,6 +189,27 @@ def _clock(checkpoint, env):
     return clock
 
 
+def _lidar(checkpoint, env):
+    term = (((env.get("observations") or {}).get("policy")) or {}).get("lidar_ranges")
+    if not isinstance(term, dict):
+        return None
+    params = term.get("params") or {}
+    if any(int(lag) for lag in params.get("lags") or (0,)):
+        raise ValueError(f"{checkpoint}: lidar_ranges with past frames (lags) is not supported.")
+    sensor = ((env.get("scene") or {}).get((params.get("sensor_cfg") or {}).get("name", "lidar"))) or {}
+    offset = sensor.get("offset") or {}
+    rot = [float(v) for v in offset.get("rot") or (1.0, 0.0, 0.0, 0.0)]
+    if sensor.get("ray_alignment") != "base" or min(abs(abs(rot[0]) - 1.0), abs(abs(rot[-1]) - 1.0)) > 1e-6:
+        raise ValueError(f"{checkpoint}: the lidar must be aligned to the base with no mount rotation.")
+    pattern = sensor.get("pattern_cfg") or {}
+    return {
+        "pos": [float(v) for v in offset.get("pos") or (0.0, 0.0, 0.0)],
+        "depressions": [float(v) for v in pattern["depressions"]],
+        "azimuths": [float(v) for v in pattern["azimuths"]],
+        "max_range": float(params.get("max_range", sensor.get("max_distance", 3.0))),
+    }
+
+
 def read_checkpoint(checkpoint, name=""):
     """(header dict, [(tensor name, float32 array)]) of a training checkpoint."""
     if _is_torchscript(checkpoint):
@@ -240,6 +261,9 @@ def read_checkpoint(checkpoint, name=""):
         meta["wtw"] = wtw
     if clock:
         meta["clock"] = clock
+    lidar = _lidar(checkpoint, env)
+    if lidar:
+        meta["lidar"] = lidar
     # policies.json entries with commands "trick": how many switches, and the clock.
     trick = (env.get("commands") or {}).get("trick") or {}
     meta["trick"] = {"clock_hz": float(trick.get("clock_hz") or 0.0), "switches": int(trick.get("switches") or 1)}

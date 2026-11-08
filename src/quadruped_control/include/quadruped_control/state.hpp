@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "quadruped_control/estimator.hpp"
+#include "quadruped_control/mlp.hpp"
 
 namespace quadruped_control {
 
@@ -18,6 +19,7 @@ struct RawState {
   std::optional<Vec3> pos;      // world position, simulators only
   std::optional<Vec3> vel;      // body-frame ground-truth velocity, simulators only
   std::optional<Vec4> contact;  // FL, FR, RL, RR
+  std::optional<VecXf> scan;    // lidar ranges; absent keeps the last ones
 };
 
 // StandardState.
@@ -33,6 +35,7 @@ struct State {
   Vec3 base_lin_vel = Vec3::Zero();
   Vec3 base_lin_vel_sim = Vec3::Zero();
   Vec3 base_lin_vel_est = Vec3::Zero();
+  VecXf scan;
 };
 
 enum class LogLevel { Info, Warn, Error };

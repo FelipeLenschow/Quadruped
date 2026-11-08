@@ -310,13 +310,14 @@ void Controller::process_state(const RawState& raw, bool update_estimator) {
   s.base_lin_vel_est = update_estimator ? estimator_.update(s.quat_wxyz, s.accel, s.feet_contact, s.q, s.dq, s.gyro)
                                         : estimator_.velocity();
   s.base_lin_vel = cfg_.use_estimator ? s.base_lin_vel_est : s.base_lin_vel_sim;
+  s.scan = raw.scan ? *raw.scan : state_.scan;
   state_ = s;
 }
 
 Vec12 Controller::step_policy(const std::string& name, const Eigen::VectorXd& commands) {
   Loaded* p = find(name);
   const Eigen::VectorXd cmd = p->entry.commands == CommandMode::Zero ? Eigen::VectorXd::Zero(commands.size()) : commands;
-  const VecXf raw = p->runner.infer(ObsInput{state_.quat_wxyz, state_.base_lin_vel, state_.gyro, state_.q, state_.dq},
+  const VecXf raw = p->runner.infer(ObsInput{state_.quat_wxyz, state_.base_lin_vel, state_.gyro, state_.q, state_.dq, &state_.scan},
                                     cmd, cfg_.policy_dt);
   const PolicySpec& spec = p->runner.spec();
   Vec12 targets;

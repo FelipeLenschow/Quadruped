@@ -728,8 +728,18 @@ class Pipeline:
         with self._lock:
             self.core.reset()
 
+    @property
+    def lidar_fan(self):
+        """The lidar fan (quadruped_control.LidarFan) of a loaded policy that reads one, or None."""
+        with self._lock:
+            for name in self.core.loaded:
+                runner = self.core.runner(name)
+                if runner is not None and runner.spec.lidar is not None:
+                    return runner.spec.lidar
+        return None
+
     def step(self, raw_state_kwargs, cmd_vel, sim_time, send_cb=None):
-        """One control step. raw_state_kwargs: q, dq, quat, gyro and optionally accel, pos, vel, contact; cmd_vel
+        """One control step. raw_state_kwargs: q, dq, quat, gyro and optionally accel, pos, vel, contact, scan; cmd_vel
         overrides /cmd_vel when given; send_cb(targets) sends to the robot. Returns the latest targets."""
         r = raw_state_kwargs
         start = time.perf_counter()
@@ -737,7 +747,7 @@ class Pipeline:
             self._take_loaded()
             res = self.core.step(r["q"], r["dq"], r["quat"], r["gyro"], r.get("accel"), r.get("pos"), r.get("vel"),
                                  r.get("contact"), cmd_vel=None if cmd_vel is None else np.asarray(cmd_vel, dtype=np.float64),
-                                 sim_time=float(sim_time), now=time.monotonic())
+                                 sim_time=float(sim_time), now=time.monotonic(), scan=r.get("scan"))
         self._flush()
         if not res.policy_step:
             return res.targets
