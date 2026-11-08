@@ -161,6 +161,7 @@ class terrain_stages(ManagerTermBase):
         self._move(torch.arange(env.num_envs, device=env.device), keep_level=True)
         env._terrain_kind = self.kind
         env._terrain_kind_names = self.names
+        env._terrain_stages = self
         self._check = {"step": env.common_step_counter, "sum": 0.0, "n": 0, "passed": 0}
         self._stair_means = {}
 
@@ -323,6 +324,8 @@ class terrain_stages(ManagerTermBase):
             t = env.common_step_counter - self.stairs_since - forward_hold_steps
             ramp = 1.0 if t <= 0 else max(0.0, 1.0 - t / max(forward_ramp_steps, 1))
             share = forward_end_share + (1.0 - forward_end_share) * ramp
+            if getattr(env, "_forward_share", None) is not None:
+                share = env._forward_share
         on_stairs = torch.isin(self.kind[ids], self.stair_types)
         term.forward_only[ids] = on_stairs & (torch.rand(len(ids), device=env.device) < share)
 
@@ -339,4 +342,110 @@ class terrain_stages(ManagerTermBase):
             "level": float(terrain.terrain_levels.float().mean()),
             "forward_only_share": share,
             "stairs_left": stairs_left,
+        }
+
+
+class safety_phases(ManagerTermBase):
+    """The safety costs raised in phases once the robot climbs, so that it does not learn to stop at the stairs
+    first. Put it before terrain_stages: it reads the forward-only flags of the episodes that end.
+
+    `phases` is a list of knob sets: fall (the fall penalty's scale on stair_types), alive (the alive weight),
+    contact_time (s of trunk contact before the episode ends; 0: any touch), w_contact (the trunk contact weight),
+    mount (share of the lidar mount error `mount`, (m, rad)), forward (the forward-only share on stairs) and
+    steer (the operator's gain). Phase 0 keeps its set until, at terrain_stages' last stage, the robots on
+    learn_types (default up_types) are at a mean level of at least learn_level with at most stuck_ok stuck, for
+    `hold` checks in a row (one per episode length).
+    Each later phase moves the knobs from the last set to its own, step_share of the way per check while at most
+    stuck_ok of the forward-only episodes on up_types got stuck (commanded more than twice report_distance and
+    never that far out), back by step_share over stuck_bad, else it holds. The next phase starts after `hold`
+    checks at the end with at most stuck_ok stuck."""
+
+    def __init__(self, cfg: CurriculumTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        p = cfg.params
+        self.phase = min(int(p.get("start_phase", 0)), len(p["phases"]) - 1)
+        self.progress = float(p.get("start_progress", 1.0)) if self.phase > 0 else 0.0
+        self.passed = 0
+        self.check_step = env.common_step_counter
+        self.stuck = 0
+        self.count = 0
+        self.stuck_share = 0.0
+        self.up_level = 0.0
+
+    def _knobs(self, phases: list) -> dict:
+        if self.phase == 0:
+            return dict(phases[0])
+        a, b = phases[self.phase - 1], phases[self.phase]
+        return {k: a[k] + (b[k] - a[k]) * self.progress for k in b}
+
+    def _apply(self, env, knobs: dict, stair_types: tuple, mount: tuple, command_name: str):
+        names = env._terrain_kind_names
+        scales = [knobs["fall"] if n in stair_types else 1.0 for n in names]
+        env._fall_scale_table = torch.tensor(scales, device=env.device)
+        env.reward_manager.get_term_cfg("alive").weight = knobs["alive"]
+        env.reward_manager.get_term_cfg("base_contact").weight = knobs["w_contact"]
+        env.termination_manager.get_term_cfg("base_contact").params["max_time"] = knobs["contact_time"]
+        params = env.event_manager.get_term_cfg("lidar_mount").params
+        params["pos_range"], params["rot_range"] = mount[0] * knobs["mount"], mount[1] * knobs["mount"]
+        env._forward_share = knobs["forward"]
+        env.command_manager.get_term(command_name).cfg.steer_gain = knobs["steer"]
+        env._safety_values = (knobs["fall"], knobs["alive"], knobs["steer"])
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        env_ids: Sequence[int],
+        phases: list,
+        mount: tuple,
+        up_types: tuple,
+        stair_types: tuple,
+        learn_level: float,
+        learn_types: tuple = (),
+        stuck_ok: float = 0.06,
+        stuck_bad: float = 0.12,
+        step_share: float = 0.02,
+        hold: int = 3,
+        report_distance: float = 2.0,
+        command_name: str = "base_velocity",
+        start_phase: int = 0,
+        start_progress: float = 1.0,
+    ) -> dict:
+        stages = env._terrain_stages
+        ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long).reshape(-1)
+        term = env.command_manager.get_term(command_name)
+        up = torch.tensor([stages.names.index(n) for n in up_types if n in stages.names], device=env.device)
+        sel = ids[torch.isin(stages.kind[ids], up) & term.forward_only[ids]]
+        self.count += sel.numel()
+        stuck = (term.commanded_path[sel] > 2.0 * report_distance) & (term.max_distance[sel] <= report_distance)
+        self.stuck += int(stuck.sum())
+        if env.common_step_counter - self.check_step >= env.max_episode_length:
+            self.check_step = env.common_step_counter
+            self.stuck_share = self.stuck / max(self.count, 1)
+            self.stuck, self.count = 0, 0
+            ok = self.stuck_share <= stuck_ok
+            learn = torch.tensor([stages.names.index(n) for n in learn_types if n in stages.names], device=env.device)
+            on = torch.isin(stages.kind, learn if len(learn_types) else up)
+            self.up_level = float(env.scene.terrain.terrain_levels[on].float().mean()) if bool(on.any()) else 0.0
+            if self.phase == 0:
+                ready = ok and stages.stage == len(stages.mixes) - 1 and self.up_level >= learn_level
+            else:
+                if ok:
+                    self.progress = min(1.0, self.progress + step_share)
+                elif self.stuck_share > stuck_bad:
+                    self.progress = max(0.0, self.progress - step_share)
+                ready = ok and self.progress >= 1.0
+            self.passed = self.passed + 1 if ready else 0
+            if self.passed >= hold and self.phase < len(phases) - 1:
+                self.phase += 1
+                self.progress = 0.0
+                self.passed = 0
+                print(f"[safety_phases] phase {self.phase}: towards {phases[self.phase]}")
+        knobs = self._knobs(phases)
+        self._apply(env, knobs, stair_types, mount, command_name)
+        return {
+            "phase": float(self.phase),
+            "progress": self.progress,
+            "up_fwd_stuck": self.stuck_share,
+            "up_level": self.up_level,
+            **knobs,
         }

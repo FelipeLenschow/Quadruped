@@ -83,6 +83,14 @@ class biased_height_scan(ManagerTermBase):
         return height_scan(env, sensor_cfg, offset) + self._bias
 
 
+def safety_knobs(env: ManagerBasedRLEnv, default: tuple, command_name: str = "base_velocity") -> torch.Tensor:
+    """mdp.safety_phases' stair fall scale, alive weight and operator gain (default without it), and the env's
+    forward-only flag: the critic's view of the reward it is under."""
+    values = torch.tensor(getattr(env, "_safety_values", default), device=env.device).expand(env.num_envs, -1)
+    forward = env.command_manager.get_term(command_name).forward_only.float().unsqueeze(1)
+    return torch.cat([values, forward], dim=1)
+
+
 def leash_error(env: ManagerBasedRLEnv, command_name: str = "base_velocity") -> torch.Tensor:
     """Leash reference minus base: position in the base's yaw frame (2, m) and heading (1, rad)."""
     from isaaclab.utils.math import euler_xyz_from_quat

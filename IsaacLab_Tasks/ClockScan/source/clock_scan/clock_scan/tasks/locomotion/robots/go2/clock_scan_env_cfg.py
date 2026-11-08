@@ -69,19 +69,21 @@ MAP_Y = _axis(-MAP_SIDE, MAP_SIDE, -MAP_FINE_SIDE, MAP_FINE_SIDE)
 # Actor scan (ACTOR_SCAN): "lidar", the ranges along a fan of rays from the L1's place on the base (LIDAR_POS,
 # config.yaml's real_lidar), as the lidar measures them, so what a riser hides stays hidden; or "map", the height map
 # above. The critic always gets the height map and the grid below. The fan: LIDAR_ROWS rows aimed at the ground
-# LIDAR_NEAR to LIDAR_FAR m ahead of the lidar (standing, LIDAR_HEIGHT above flat ground) by LIDAR_COLS columns over
-# +-LIDAR_AZIMUTH deg, turning with the whole base. Ranges clipped to LIDAR_RANGE m (no hit reads LIDAR_RANGE), now
-# (and LIDAR_LAG steps back, if above 0); per ray +-LIDAR_NOISE m, and a reading 1 to LIDAR_STALE_STEPS steps older
-# with a probability drawn per episode from 0 to LIDAR_STALE (the L1's sparse scan: a bin keeps its last return). Empty rays used to read
-# LIDAR_RANGE at 15%: a 3 m jump on 0.25-1.5 m ranges, and the policy then could not climb on clean input.
+# LIDAR_NEAR to LIDAR_FAR m from the lidar (standing, LIDAR_HEIGHT above flat ground) by LIDAR_COLS columns over
+# +-LIDAR_AZIMUTH deg (180: all around, -170 to 180 at 360/LIDAR_COLS), turning with the whole base. The rays hit only
+# the ground: the robot's own body does not hide any (the real L1 sees the floor all around, Mcap/Recordings/lio_bag).
+# Ranges clipped to LIDAR_RANGE m (no hit reads LIDAR_RANGE), now (and LIDAR_LAG steps back, if above 0); per ray
+# +-LIDAR_NOISE m, and a reading 1 to LIDAR_STALE_STEPS steps older with a probability drawn per episode from 0 to
+# LIDAR_STALE (the L1's sparse scan: a bin keeps its last return). Empty rays used to read LIDAR_RANGE at 15%: a 3 m
+# jump on 0.25-1.5 m ranges, and the policy then could not climb on clean input.
 ACTOR_SCAN = os.environ.get("CLOCK_SCAN_ACTOR_SCAN", "lidar")
 LIDAR_POS = (0.28945, 0.0, -0.046825)
 LIDAR_HEIGHT = _env("LIDAR_HEIGHT", 0.273)
 LIDAR_ROWS = int(_env("LIDAR_ROWS", 16))
-LIDAR_COLS = int(_env("LIDAR_COLS", 21))
+LIDAR_COLS = int(_env("LIDAR_COLS", 36))
 LIDAR_NEAR = _env("LIDAR_NEAR", 0.07)
 LIDAR_FAR = _env("LIDAR_FAR", 1.3)
-LIDAR_AZIMUTH = _env("LIDAR_AZIMUTH", 60.0)
+LIDAR_AZIMUTH = _env("LIDAR_AZIMUTH", 180.0)
 LIDAR_RANGE = _env("LIDAR_RANGE", 3.0)
 LIDAR_LAG = int(_env("LIDAR_LAG", 0))
 LIDAR_NOISE = _env("LIDAR_NOISE", 0.02)
@@ -94,7 +96,14 @@ LIDAR_MOUNT_ROT = _env("LIDAR_MOUNT_ROT", 1.0)
 LIDAR_DEPRESSIONS = tuple(
     round(float(np.degrees(np.arctan2(LIDAR_HEIGHT, d))), 3) for d in np.linspace(LIDAR_NEAR, LIDAR_FAR, LIDAR_ROWS)
 )
-LIDAR_AZIMUTHS = tuple(round(float(a), 3) for a in np.linspace(-LIDAR_AZIMUTH, LIDAR_AZIMUTH, LIDAR_COLS))
+LIDAR_AZIMUTHS = tuple(
+    round(float(a), 3)
+    for a in (
+        np.linspace(-180.0, 180.0, LIDAR_COLS + 1)[1:]
+        if LIDAR_AZIMUTH >= 180.0
+        else np.linspace(-LIDAR_AZIMUTH, LIDAR_AZIMUTH, LIDAR_COLS)
+    )
+)
 # Height grid, critic only: 1.6 x 1.0 m at 0.1 m (187 rays) under the base, turned with its yaw. Base height
 # for the reward and the critic is taken from it.
 SCAN_SIZE = (_env("SCAN_LENGTH", 1.6), _env("SCAN_WIDTH", 1.0))
@@ -159,8 +168,8 @@ START_LEVEL = int(_env("START_LEVEL", 1))
 START_LEVEL_MIN = int(_env("START_LEVEL_MIN", 0))
 # Once stairs are in: every env on stairs walks forward only for FORWARD_HOLD_ITERS iterations, then the share
 # falls linearly to FORWARD_END over FORWARD_RAMP_ITERS. Forward only: 0 <= x <= FORWARD_X_MAX, y x FORWARD_Y_SCALE,
-# turning x FORWARD_YAW_SCALE, and on narrow stairs an operator holding the heading. The others get any command (the
-# policy must not follow one over an edge), and their stair levels stay.
+# turning x FORWARD_YAW_SCALE. The others get any command (the policy must not follow one over an edge), and their
+# stair levels stay.
 FORWARD_HOLD_ITERS = _env("FORWARD_HOLD_ITERS", 1000)
 FORWARD_RAMP_ITERS = _env("FORWARD_RAMP_ITERS", 3000)
 FORWARD_END = _env("FORWARD_END", 0.7)
@@ -184,6 +193,25 @@ W_FALL_OFF = _env("W_FALL_OFF", -750.0)
 # Feet hitting a vertical face (feet_stumble) and body contacts on stair tiles, as a share of their weights.
 STAIRS_STUMBLE_SCALE = _env("STAIRS_STUMBLE_SCALE", 1.0)
 STAIRS_CONTACT_SCALE = _env("STAIRS_CONTACT_SCALE", 1.0)
+# Safety phases (mdp.safety_phases; SAFETY=0: off, the settings above apply from the start). 0, learn: Lidar1's
+# settings (stair falls at LEARN_FALL_SCALE, no alive bonus, any trunk touch ends the episode, no mount error, all
+# forward-only, the operator at LEARN_STEER_GAIN) until the robots in the stair pit (pyramid up) reach a mean level of
+# SAFETY_LEARN_LEVEL at the last stage, with at most SAFETY_STUCK_OK stuck. The narrow flight is not in this gate: in
+# phase 0 it narrowed by about 3 cm per 1000 iterations, as in Lidar1. 1, safe: falls at
+# STAIRS_FALL_SCALE, W_ALIVE, BASE_CONTACT_TIME and W_BASE_CONTACT. 2, robust: the mount error and FORWARD_END.
+# 3, self: the operator to STEER_GAIN (none). Each over SAFETY_RAMP_ITERS while at most SAFETY_STUCK_OK of the
+# forward-only up episodes got stuck, back over SAFETY_STUCK_BAD. Without this, the full fall cost from the start
+# taught the robot to stop before the high steps (30% stuck). To resume a run in a later phase:
+# SAFETY_START_PHASE and SAFETY_START_PROGRESS (the logged Curriculum/safety/phase and progress).
+SAFETY = _env("SAFETY", 1.0) > 0.5
+LEARN_FALL_SCALE = _env("LEARN_FALL_SCALE", 0.25)
+LEARN_STEER_GAIN = _env("LEARN_STEER_GAIN", 1.0)
+SAFETY_LEARN_LEVEL = _env("SAFETY_LEARN_LEVEL", 12.5)
+SAFETY_RAMP_ITERS = _env("SAFETY_RAMP_ITERS", 3000)
+SAFETY_STUCK_OK = _env("SAFETY_STUCK_OK", 0.06)
+SAFETY_STUCK_BAD = _env("SAFETY_STUCK_BAD", 0.12)
+SAFETY_START_PHASE = int(_env("SAFETY_START_PHASE", 0))
+SAFETY_START_PROGRESS = _env("SAFETY_START_PROGRESS", 1.0)
 
 # ── Commands ───────────────────────────────────────────────────────────────────────────────
 MAX_SPEED = _env("MAX_SPEED", 1.0)
@@ -195,12 +223,25 @@ SLOW_RANGE = _range("SLOW", 0.05, 0.3)
 YAW_ONLY = _env("YAW_ONLY", 0.15)
 STANDBY = _range("STANDBY", 1.0, 3.0)
 # On narrow stairs the robot starts at the tile's heading +- ALIGNED_YAW (rad) and within +-ALIGNED_X, +-ALIGNED_Y
-# (m) of its origin, and an operator holds that heading: turning STEER_GAIN x the heading error within +-STEER_MAX,
-# sideways speed x STEER_Y_SCALE. The policy is never told where the stairs go.
+# (m) of its origin. No operator (STEER_GAIN 0): the policy itself must keep off walls and edges, whatever the
+# command; with STEER_GAIN > 0 one holds that heading on forward-only episodes (as up to Lidar3): turning STEER_GAIN
+# x the heading error within +-STEER_MAX, sideways speed x STEER_Y_SCALE. The policy is never told where the stairs go.
 ALIGNED_RANGE = (_env("ALIGNED_X", 0.3), _env("ALIGNED_Y", 0.15), _env("ALIGNED_YAW", 0.3))
-STEER_GAIN = _env("STEER_GAIN", 1.0)
+STEER_GAIN = _env("STEER_GAIN", 0.0)
 STEER_MAX = _env("STEER_MAX", 0.5)
 STEER_Y_SCALE = _env("STEER_Y_SCALE", 0.5)
+# What the tracking rewards and the leash ask for (the command term's reward_command); the policy still sees the
+# command. On narrow tiles an episode counts as out (curriculum) only HEADING_CLIMB m along the flight, the base
+# that far up or down: walking beside the flight on a floor does not count. FLIGHT_AXIS_ONLY: on the narrow flight
+# only the motion along it, never back down a flight going up, and no turning (sideways and turning there fell
+# 15-40% at model_24000). TRACK_HEADING: the velocity measured in the commanded heading, not the base's, so turning
+# off the line costs. On steps (STEPS_RELIEF m off the fitted ground plane, about 11 cm steps; slopes do not count)
+# at most STEPS_BACK_MAX m/s backward (backward up the pyramid or down the flight fell 20-30% at model_28000).
+HEADING_CLIMB = _env("HEADING_CLIMB", 0.15)
+FLIGHT_AXIS_ONLY = _env("FLIGHT_AXIS_ONLY", 1.0) > 0.5
+TRACK_HEADING = _env("TRACK_HEADING", 1.0) > 0.5
+STEPS_BACK_MAX = _env("STEPS_BACK_MAX", 0.15)
+STEPS_RELIEF = _env("STEPS_RELIEF", 0.04)
 
 # ── Trot clock ─────────────────────────────────────────────────────────────────────────────
 FEET = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
@@ -578,6 +619,11 @@ class CommandsCfg:
         forward_only_y_scale=FORWARD_Y_SCALE,
         forward_only_yaw_scale=FORWARD_YAW_SCALE,
         steer_gain=STEER_GAIN,
+        heading_climb=HEADING_CLIMB,
+        flight_axis_only=FLIGHT_AXIS_ONLY,
+        track_heading=TRACK_HEADING,
+        steps_back_max=STEPS_BACK_MAX,
+        steps_relief=STEPS_RELIEF,
         steer_max=STEER_MAX,
         steer_y_scale=STEER_Y_SCALE,
         steer_forward_only=True,
@@ -676,6 +722,7 @@ class ObservationsCfg:
         height_map = ObsTerm(func=mdp.height_scan, params={"sensor_cfg": _MAP}, clip=(-1.0, 1.0))
         leash_error = ObsTerm(func=mdp.leash_error)
         head_clearance = ObsTerm(func=mdp.head_clearance, params={"sensor_cfg": _HEAD_RAY, "asset_cfg": _HEAD})
+        safety_knobs = ObsTerm(func=mdp.safety_knobs, params={"default": (STAIRS_FALL_SCALE, W_ALIVE, STEER_GAIN)})
 
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
@@ -815,16 +862,9 @@ class RewardsCfg:
 @configclass
 class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    base_contact = (
-        DoneTerm(
-            func=mdp.contact_longer_than,
-            params={"sensor_cfg": _BASE_CONTACT, "max_time": BASE_CONTACT_TIME, "grace_s": CONTACT_GRACE},
-        )
-        if BASE_CONTACT_TIME > 0
-        else DoneTerm(
-            func=mdp.illegal_contact_after,
-            params={"sensor_cfg": _BASE_CONTACT, "threshold": 1.0, "grace_s": CONTACT_GRACE},
-        )
+    base_contact = DoneTerm(
+        func=mdp.contact_longer_than,
+        params={"sensor_cfg": _BASE_CONTACT, "max_time": BASE_CONTACT_TIME, "grace_s": CONTACT_GRACE},
     )
     bad_orientation = (
         DoneTerm(func=mdp.bad_orientation_ground, params={"limit_angle": TILT_LIMIT, "sensor_cfg": _SCAN})
@@ -835,8 +875,37 @@ class TerminationsCfg:
     falling = DoneTerm(func=mdp.falling, params={"max_down_speed": FALL_SPEED})
 
 
+_LEARN = {
+    "fall": LEARN_FALL_SCALE, "alive": 0.0, "contact_time": 0.0, "w_contact": 0.0, "mount": 0.0, "forward": 1.0,
+    "steer": LEARN_STEER_GAIN,
+}
+_SAFE = {
+    **_LEARN, "fall": STAIRS_FALL_SCALE, "alive": W_ALIVE, "contact_time": BASE_CONTACT_TIME, "w_contact": W_BASE_CONTACT
+}
+_ROBUST = {**_SAFE, "mount": 1.0, "forward": FORWARD_END}
+_SELF = {**_ROBUST, "steer": STEER_GAIN}
+
+
 @configclass
 class CurriculumCfg:
+    # Before terrain_levels, which sets the forward-only flags of the next episodes.
+    safety = CurrTerm(
+        func=mdp.safety_phases,
+        params={
+            "phases": [_LEARN, _SAFE, _ROBUST, _SELF],
+            "mount": (LIDAR_MOUNT_POS, math.radians(LIDAR_MOUNT_ROT)),
+            "up_types": ("pyramid_stairs_inv", "narrow_stairs_inv"),
+            "stair_types": STAIR_TYPES,
+            "learn_level": SAFETY_LEARN_LEVEL,
+            "learn_types": ("pyramid_stairs_inv",),
+            "stuck_ok": SAFETY_STUCK_OK,
+            "stuck_bad": SAFETY_STUCK_BAD,
+            "step_share": 1000.0 / _STEPS_PER_ITER / SAFETY_RAMP_ITERS,
+            "report_distance": STAIRS_LEAVE_DISTANCE,
+            "start_phase": SAFETY_START_PHASE,
+            "start_progress": SAFETY_START_PROGRESS,
+        },
+    ) if SAFETY else None
     terrain_levels = CurrTerm(
         func=mdp.terrain_stages,
         params={
@@ -922,6 +991,10 @@ class ClockScanPlayEnvCfg(ClockScanEnvCfg):
         super().__post_init__()
         self.scene.num_envs = 32
         self.curriculum.terrain_levels = None
+        self.curriculum.safety = None
+        # CLOCK_SCAN_PLAY_LIDAR_VIS=1 draws the lidar hits in the scene (and in videos).
+        if os.environ.get("CLOCK_SCAN_PLAY_LIDAR_VIS"):
+            self.scene.lidar.debug_vis = True
         vel = self.commands.base_velocity
         vel.ranges = vel.limit_ranges
         pinned = os.environ.get("CLOCK_SCAN_PLAY_CMD_X")
@@ -936,7 +1009,7 @@ class ClockScanPlayEnvCfg(ClockScanEnvCfg):
             vel.pause_fraction = 0.0
             vel.yaw_only_command_fraction = 0.0
             vel.debug_vis = False
-            # The operator holds the heading on narrow stairs, as for the forward-only stair episodes of training.
+            # With STEER_GAIN > 0, the operator holds the heading on narrow stairs, as in the forward-only episodes.
             vel.steer_forward_only = False
             self.events.reset_start_pose = None
             self.events.push_robot = None

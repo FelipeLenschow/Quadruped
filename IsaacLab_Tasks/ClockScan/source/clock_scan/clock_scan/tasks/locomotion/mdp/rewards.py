@@ -61,9 +61,9 @@ def track_lin_vel_xy_exp_scaled(
     that is the value the Direct-env implementation this mirrors uses; the two must agree for
     their numbers to be comparable.
     """
-    asset: RigidObject = env.scene[asset_cfg.name]
-    command = env.command_manager.get_command(command_name)
-    lin_vel_error = torch.sum(torch.square(command[:, :2] - asset.data.root_lin_vel_b.torch[:, :2]), dim=1)
+    term = env.command_manager.get_term(command_name)
+    command = term.reward_command
+    lin_vel_error = torch.sum(torch.square(command[:, :2] - term.tracked_lin_vel_b), dim=1)
     command_speed = torch.norm(command[:, :2], dim=1)
     denominator = torch.clamp(std**2 * command_speed**sigma_exp, min=0.005)
     if grace_s > 0.0:
@@ -87,7 +87,7 @@ def track_ang_vel_z_exp_scaled(
     standing and moving, fading back over grace_s, so a start or stop may take a step instead of the
     robot braking hard to match a zero command at once."""
     asset: RigidObject = env.scene[asset_cfg.name]
-    command = env.command_manager.get_command(command_name)
+    command = env.command_manager.get_term(command_name).reward_command
     ang_vel_error = torch.square(command[:, 2] - asset.data.root_ang_vel_b.torch[:, 2])
     command_rate = torch.abs(command[:, 2])
     denominator = torch.clamp(std**2 * command_rate**sigma_exp, min=0.005)
@@ -285,7 +285,15 @@ def ground_plane(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, half_width:
     z = torch.where(keep, z, torch.zeros_like(z))
     lhs = torch.einsum("rk,nr,rl->nkl", design, w, design) + 1e-6 * torch.eye(3, device=env.device)
     rhs = torch.einsum("rk,nr->nk", design, w * z)
-    return torch.linalg.solve(lhs, rhs), w.sum(dim=1) >= 4
+    coef = torch.linalg.solve(lhs, rhs)
+    env._ground_plane_residual = ((z - coef @ design.T).abs() * w).amax(dim=1)
+    return coef, w.sum(dim=1) >= 4
+
+
+def ground_relief(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Farthest ray of ground_plane's fit from the plane, m: about half the step height on stairs, near 0 on slopes."""
+    ground_plane(env, sensor_cfg)
+    return env._ground_plane_residual
 
 
 def ground_height(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:

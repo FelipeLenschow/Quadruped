@@ -1,11 +1,13 @@
 """Command safety test on stairs, measured in Isaac Sim.
 
 Every robot gets a tile at one of --heights: pyramid stairs down (platform on top), up (pit), or the narrow flight
-(--flight_width m, open sides) from the upper floor (down) or the lower floor (up), starting as in training. Each
-command of --commands is held for --seconds with no operator and no forward-only limit, as the free-command stair
-episodes of training. Only the first episode counts. Per terrain, height and command it records the share that
-fell (any termination but the time limit) and how much of the command the robot followed (actual velocity along
-the command over the command, while the command is on; 1 = followed, 0 = stood still).
+(--flight_width m, open sides) from the upper floor (down) or the lower floor (up), starting as in training. It
+first walks forward at --approach m/s (with the operator, if the config has one), and at a random time from 0 to
+--switch_max s gets the test command: on the platform, on the steps or at the top. Each command of --commands is
+then held for --seconds with no operator and no forward-only limit. Only the first episode counts. Per terrain,
+height and command it records the share that fell after the switch (any termination but the time limit) and how
+much of the command the robot followed after it (actual velocity along the command over the command; 1 =
+followed, 0 = stood still), and the share that fell before it (approach).
 
 Writes command_eval_<checkpoint>.json and .md next to the checkpoint (or --out):
 
@@ -31,7 +33,11 @@ parser.add_argument(
 parser.add_argument("--heights", type=str, default="15,18", help="Comma-separated step heights, cm.")
 parser.add_argument("--rows", type=int, default=4, help="Tiles per terrain and height.")
 parser.add_argument("--per_tile", type=int, default=8, help="Robots per tile.")
-parser.add_argument("--seconds", type=float, default=10.0)
+parser.add_argument("--seconds", type=float, default=15.0, help="Test command time after the switch, s.")
+parser.add_argument("--approach", type=float, default=0.4, help="Forward speed before the switch, m/s.")
+parser.add_argument(
+    "--switch_max", type=float, default=10.0, help="Latest switch time, s (0: test command from the start)."
+)
 parser.add_argument("--flight_width", type=float, default=0.8, help="Narrow flight width, m.")
 parser.add_argument("--out", type=str, default=None, help="Output path without extension.")
 cli_args.add_rsl_rl_args(parser)
@@ -76,9 +82,9 @@ def parse_command(text: str) -> tuple[float, float, float]:
 
 
 @torch.inference_mode()
-def rollout(env, policy, level, col):
-    """One run of every robot: whether its first episode ended by a fall, and the sums for the share of the
-    command it followed."""
+def rollout(env, policy, level, col, test_cmd):
+    """One run of every robot: whether it fell before and after its switch, and the sums for the share of the
+    test command it followed."""
     base = env.unwrapped
     robot = base.scene["robot"]
     terrain = base.scene.terrain
@@ -86,25 +92,45 @@ def rollout(env, policy, level, col):
     terrain.terrain_levels[:] = level
     terrain.terrain_types[:] = col
     terrain.env_origins[:] = terrain.terrain_origins[level, col]
-    cmd.forward_only[:] = False
+    cmd.cfg.ranges.lin_vel_x = (args_cli.approach, args_cli.approach)
+    cmd.cfg.ranges.lin_vel_y = (0.0, 0.0)
+    cmd.cfg.ranges.ang_vel_z = (0.0, 0.0)
+    cmd.forward_only[:] = True
     base.reset()
     obs = env.get_observations()
     obs = obs[0] if isinstance(obs, tuple) else obs
     n = base.num_envs
-    active = torch.ones(n, dtype=torch.bool, device=base.device)
-    fell = torch.zeros(n, dtype=torch.bool, device=base.device)
-    along = torch.zeros(n, device=base.device)
-    asked = torch.zeros(n, device=base.device)
-    for _ in range(int(args_cli.seconds / base.step_dt)):
+    dev = base.device
+    switch = torch.rand(n, device=dev) * args_cli.switch_max
+    switched = torch.zeros(n, dtype=torch.bool, device=dev)
+    target = torch.tensor(test_cmd, device=dev)
+    active = torch.ones(n, dtype=torch.bool, device=dev)
+    fell = torch.zeros(n, dtype=torch.bool, device=dev)
+    fell_before = torch.zeros(n, dtype=torch.bool, device=dev)
+    along = torch.zeros(n, device=dev)
+    asked = torch.zeros(n, device=dev)
+    steps = int((args_cli.switch_max + args_cli.seconds) / base.step_dt)
+    for _ in range(steps):
+        t = base.episode_length_buf * base.step_dt
+        now = active & ~switched & (t >= switch)
+        if bool(now.any()):
+            cmd.vel_command_b[now] = target
+            cmd.forward_only[now] = False
+            cmd.steer_heading[now] = float("nan")
+            switched |= now
+        done = switched & (t >= switch + args_cli.seconds)
+        active &= ~done
         c = cmd.command
         v = torch.cat([robot.data.root_lin_vel_b.torch[:, :2], robot.data.root_ang_vel_b.torch[:, 2:3]], dim=1)
-        on = active & (c.abs().sum(dim=1) > 0)
+        on = active & switched & (c.abs().sum(dim=1) > 0)
         along += torch.where(on, (v * c).sum(dim=1), torch.zeros_like(along))
         asked += torch.where(on, (c * c).sum(dim=1), torch.zeros_like(asked))
         obs, _, _, _ = env.step(policy(obs))
-        fell |= base.termination_manager.terminated & active
+        ended = base.termination_manager.terminated & active
+        fell |= ended & switched
+        fell_before |= ended & ~switched
         active &= ~(base.termination_manager.terminated | base.termination_manager.time_outs)
-    return fell, along, asked
+    return fell, fell_before, along, asked
 
 
 def main():
@@ -127,7 +153,8 @@ def main():
         num_rows=rows, num_cols=cols, sub_terrains=subs, difficulty_range=(0.0, 1.0), curriculum=True
     )
     cfg.scene.terrain.max_init_terrain_level = None
-    cfg.episode_length_s = max(cfg.episode_length_s, args_cli.seconds + 1.0)
+    cfg.episode_length_s = max(cfg.episode_length_s, args_cli.switch_max + args_cli.seconds + 1.0)
+    cfg.commands.base_velocity.resampling_time_range = (1e6, 1e6)
     agent = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     env = RslRlVecEnvWrapper(gym.make(args_cli.task, cfg=cfg), clip_actions=agent.clip_actions)
     agent = cli_args.migrate_rsl_rl_cfg(agent)
@@ -146,17 +173,14 @@ def main():
 
     results = []
     for text in commands:
-        x, y, yaw = parse_command(text)
-        cmd.cfg.ranges.lin_vel_x = (x, x)
-        cmd.cfg.ranges.lin_vel_y = (y, y)
-        cmd.cfg.ranges.ang_vel_z = (yaw, yaw)
-        fell, along, asked = (t.cpu() for t in rollout(env, policy, level, col))
+        fell, fell_before, along, asked = (t.cpu() for t in rollout(env, policy, level, col, parse_command(text)))
         for name in names:
             sel = torch.tensor([e == name for e in env_name])
             tag, h = name.rsplit("_", 1)
             results.append({
                 "command": text, "terrain": tag, "height_cm": float(h), "robots": int(sel.sum()),
                 "fell": round(float(fell[sel].float().mean()), 3),
+                "fell_before": round(float(fell_before[sel].float().mean()), 3),
                 "followed": round(float(along[sel].sum() / asked[sel].sum().clamp(min=1e-9)), 3),
             })
         print(f"[command_eval] {text}: fell {float(fell.float().mean()):.2f}")
@@ -166,11 +190,15 @@ def main():
         "command_eval_" + os.path.splitext(os.path.basename(args_cli.checkpoint))[0],
     )
     with open(out + ".json", "w") as f:
-        json.dump({"checkpoint": args_cli.checkpoint, "seconds": args_cli.seconds, "flight_width": args_cli.flight_width,
+        json.dump({"checkpoint": args_cli.checkpoint, "seconds": args_cli.seconds, "approach": args_cli.approach,
+                   "switch_max": args_cli.switch_max, "flight_width": args_cli.flight_width,
                    "results": results}, f, indent=1)
     cells = [(tag, h) for tag in TYPES for h in heights]
-    lines = [f"Fell / followed, {args_cli.checkpoint}, {args_cli.seconds:g} s, {rows * args_cli.per_tile} robots per cell,"
-             f" narrow {args_cli.flight_width:g} m with open sides, no operator.", "",
+    before = max(r["fell_before"] for r in results)
+    lines = [f"Fell / followed after the switch, {args_cli.checkpoint}: forward at {args_cli.approach:g} m/s, the"
+             f" command at 0-{args_cli.switch_max:g} s, held {args_cli.seconds:g} s with no operator;"
+             f" {rows * args_cli.per_tile} robots per cell; narrow {args_cli.flight_width:g} m with open sides."
+             f" Fell before the switch: at most {before:.2f}.", "",
              "| command | " + " | ".join(f"{t} {h:g}" for t, h in cells) + " |", "|" + "---|" * (len(cells) + 1)]
     for text in commands:
         row = {(r["terrain"], r["height_cm"]): r for r in results if r["command"] == text}

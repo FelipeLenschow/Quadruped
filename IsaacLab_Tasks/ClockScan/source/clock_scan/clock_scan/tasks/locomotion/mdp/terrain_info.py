@@ -6,7 +6,7 @@ import math
 import numpy as np
 import torch
 
-from .stairs_terrain import start_heading
+from .stairs_terrain import NarrowStairsTerrainCfg, start_heading
 
 
 def _column_cfgs(env) -> list:
@@ -31,4 +31,22 @@ def tile_heading(env, ids: torch.Tensor) -> torch.Tensor:
         values = [start_heading(c) for c in _column_cfgs(env)]
         table = torch.tensor([math.nan if v is None else v for v in values], device=env.device)
         env._column_heading = table
+    return table[terrain.terrain_types[ids]]
+
+
+def flight_span(env, ids: torch.Tensor) -> torch.Tensor:
+    """Where the narrow flight starts and ends (2), m along the tile heading from the env origin, NaN elsewhere."""
+    terrain = env.scene.terrain
+    if terrain.cfg.terrain_generator is None or getattr(terrain, "terrain_types", None) is None:
+        return torch.full((len(ids), 2), math.nan, device=env.device)
+    table = getattr(env, "_column_flight", None)
+    if table is None:
+        rows = []
+        for c in _column_cfgs(env):
+            if isinstance(c, NarrowStairsTerrainCfg):
+                rows.append((c.start_gap, c.start_gap + c.num_steps * c.step_width))
+            else:
+                rows.append((math.nan, math.nan))
+        table = torch.tensor(rows, device=env.device)
+        env._column_flight = table
     return table[terrain.terrain_types[ids]]

@@ -158,15 +158,28 @@ def main():
     if version("rsl-rl-lib").startswith("2.3."):
         obs, _ = env.get_observations()
     timestep = 0
+    # CLOCK_SCAN_PLAY_SWITCH_S and _SWITCH_CMD ("x,y,yaw"): each episode, that command from that time on, as in
+    # command_eval.
+    switch_s = float(os.environ.get("CLOCK_SCAN_PLAY_SWITCH_S", "-1"))
+    switch_values = [float(v) for v in os.environ.get("CLOCK_SCAN_PLAY_SWITCH_CMD", "0,0,0").split(",")]
+    switch_cmd = torch.tensor(switch_values, device=env.unwrapped.device)
+    cmd_term = env.unwrapped.command_manager.get_term("base_velocity")
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
+            if switch_s >= 0:
+                now = env.unwrapped.episode_length_buf * dt >= switch_s
+                cmd_term.vel_command_b[now] = switch_cmd
+                cmd_term.forward_only[now] = False
+                cmd_term.steer_heading[now] = float("nan")
             # agent stepping
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
+            if switch_s >= 0 and bool(env.unwrapped.termination_manager.terminated[0]):
+                print(f"[play] env 0 fell at {timestep * dt:.1f} s of the video")
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video

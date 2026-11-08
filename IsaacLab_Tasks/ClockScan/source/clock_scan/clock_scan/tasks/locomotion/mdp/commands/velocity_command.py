@@ -5,10 +5,12 @@ from collections.abc import Sequence
 from dataclasses import MISSING
 
 from isaaclab.envs.mdp import UniformVelocityCommand, UniformVelocityCommandCfg
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import wrap_to_pi
 
-from ..terrain_info import tile_heading
+from ..rewards import ground_relief
+from ..terrain_info import flight_span, tile_heading
 
 
 def foot_sweep_speed(velocity: torch.Tensor, foot_x: float, foot_y: float) -> torch.Tensor:
@@ -57,6 +59,12 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         self.commanded_path = torch.zeros(self.num_envs, device=self.device)
         self.tracked_path = torch.zeros(self.num_envs, device=self.device)
         self.metrics["max_distance"] = torch.zeros(self.num_envs, device=self.device)
+        self._start_z = torch.full((self.num_envs,), float("nan"), device=self.device)
+        self._all_ids = torch.arange(self.num_envs, device=self.device)
+        # Heading the tracking rewards measure velocity in: the robot's yaw at each resample, turned by the
+        # reward command's yaw rate (track_heading).
+        self.track_yaw = torch.zeros(self.num_envs, device=self.device)
+        self.track_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         # Set per env by mdp.terrain_stages at reset.
         self.forward_only = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         # Heading an operator holds on tiles that have one (mdp.tile_heading), NaN elsewhere.
@@ -85,8 +93,54 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         return self.vel_command_b * active.unsqueeze(1).float()
 
     @property
+    def reward_command(self) -> torch.Tensor:
+        """The command the tracking rewards and the leash use. With flight_axis_only, on a narrow flight (and on
+        the upper floor after a flight going up): only the motion along the flight, never back down a flight going
+        up, and no turning, so ignoring the rest is not a loss. With steps_back_max, on steps (ground_relief of
+        relief_sensor over steps_relief): backward at most steps_back_max."""
+        command = self._axis_command(self.command)
+        if self.cfg.steps_back_max < 0.0:
+            return command
+        steps = ground_relief(self._env, SceneEntityCfg(self.cfg.relief_sensor)) > self.cfg.steps_relief
+        x = torch.where(steps, command[:, 0].clamp(min=-self.cfg.steps_back_max), command[:, 0])
+        return torch.cat([x.unsqueeze(1), command[:, 1:]], dim=1)
+
+    def _axis_command(self, command: torch.Tensor) -> torch.Tensor:
+        if not self.cfg.flight_axis_only:
+            return command
+        heading = tile_heading(self._env, self._all_ids)
+        span = flight_span(self._env, self._all_ids)
+        u = torch.stack([torch.cos(heading), torch.sin(heading)], dim=1)
+        offset = self.robot.data.root_pos_w.torch[:, :2] - self._env.scene.env_origins[:, :2]
+        along = torch.sum(offset * u, dim=1)
+        up = u[:, 0] > 0.0
+        margin = self.cfg.flight_margin
+        zone = (along > span[:, 0] - margin) & ((along < span[:, 1] + margin) | up)
+        if not bool(zone.any()):
+            return command
+        yaw = torch.where(self.track_valid, self.track_yaw, self.robot.data.heading_w.torch)
+        c, s = torch.cos(yaw), torch.sin(yaw)
+        v_w = torch.stack([command[:, 0] * c - command[:, 1] * s, command[:, 0] * s + command[:, 1] * c], dim=1)
+        speed = torch.sum(v_w * u, dim=1)
+        speed = torch.where(up, speed.clamp(min=0.0), speed)
+        v_w = speed.unsqueeze(1) * u
+        axis = torch.stack([v_w[:, 0] * c + v_w[:, 1] * s, -v_w[:, 0] * s + v_w[:, 1] * c, torch.zeros_like(c)], dim=1)
+        return torch.where(zone.unsqueeze(1), axis, command)
+
+    @property
+    def tracked_lin_vel_b(self) -> torch.Tensor:
+        """Base xy velocity the tracking reward compares with the command: with track_heading, in the track_yaw
+        frame, so a robot that turns off the commanded line and walks on is not paid in full."""
+        if not self.cfg.track_heading:
+            return self.robot.data.root_lin_vel_b.torch[:, :2]
+        v = self.robot.data.root_lin_vel_w.torch[:, :2]
+        yaw = torch.where(self.track_valid, self.track_yaw, self.robot.data.heading_w.torch)
+        c, s = torch.cos(yaw), torch.sin(yaw)
+        return torch.stack([c * v[:, 0] + s * v[:, 1], -s * v[:, 0] + c * v[:, 1]], dim=1)
+
+    @property
     def max_distance(self) -> torch.Tensor:
-        """Furthest the base has been from the env origin this episode, m."""
+        """Furthest the base has been from the env origin this episode, m (see heading_climb)."""
         return self.metrics["max_distance"]
 
     @property
@@ -104,6 +158,8 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         self.leash_pos_error_w[ids] = 0.0
         self.leash_yaw_error[ids] = 0.0
         self._leash_steps[ids] = 0.0
+        self._start_z[ids] = float("nan")
+        self.track_valid[ids] = False
         extras = super().reset(env_ids)
         low, high = self.cfg.standby_duration_range
         if high > 0.0:
@@ -131,8 +187,23 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         self.commanded_path += speed * self._env.step_dt
         self.tracked_path += torch.minimum(along.clamp(min=0.0), speed) * self._env.step_dt
         offset = self.robot.data.root_pos_w.torch[:, :2] - self._env.scene.env_origins[:, :2]
-        self.metrics["max_distance"] = torch.maximum(self.metrics["max_distance"], torch.linalg.norm(offset, dim=1))
-        self._update_leash(command)
+        distance = torch.linalg.norm(offset, dim=1)
+        if self.cfg.heading_climb > 0.0:
+            z = self.robot.data.root_pos_w.torch[:, 2]
+            start = torch.isnan(self._start_z) & (self._env.episode_length_buf >= 1)
+            self._start_z = torch.where(start, z, self._start_z)
+            heading = tile_heading(self._env, self._all_ids)
+            c, s = torch.cos(heading), torch.sin(heading)
+            climbed = c * (z - self._start_z) > self.cfg.heading_climb
+            along = torch.where(climbed, offset[:, 0] * c + offset[:, 1] * s, 0.0)
+            distance = torch.where(torch.isnan(heading), distance, along)
+        self.metrics["max_distance"] = torch.maximum(self.metrics["max_distance"], distance)
+        target = self.reward_command
+        start = ~self.track_valid & (self._env.episode_length_buf >= 1)
+        turned = self.track_yaw + target[:, 2] * self._env.step_dt
+        self.track_yaw = torch.where(start, self.robot.data.heading_w.torch, turned)
+        self.track_valid |= start
+        self._update_leash(target)
 
     def _update_leash(self, command: torch.Tensor):
         """Walk's leash without its cap: the reference turns at the commanded yaw rate and moves at the commanded
@@ -163,6 +234,7 @@ class UniformLevelVelocityCommand(UniformVelocityCommand):
         ids = torch.as_tensor(env_ids, device=self.device).reshape(-1)
         if ids.numel() == 0:
             return
+        self.track_valid[ids] = False
         self._apply_forward_only(ids)
         self._apply_steer(ids)
         self._apply_axis_only(ids)
@@ -326,5 +398,18 @@ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
     steer_y_scale: float = 1.0
     # Steer only the forward_only envs; the others keep their commands, as a careless operator.
     steer_forward_only: bool = False
+    # On tiles with a heading, max_distance is the distance along it, counted only once the base is this far
+    # up (heading 0) or down (heading pi) from where it started, so walking beside the flight does not count.
+    # 0: any direction.
+    heading_climb: float = 0.0
+    # reward_command keeps only the motion along a narrow flight, from flight_margin m before its first edge.
+    flight_axis_only: bool = False
+    flight_margin: float = 0.3
+    # Tracking rewards measure the base velocity in the track_yaw frame, not the base frame.
+    track_heading: bool = False
+    # reward_command's backward speed limit on steps, m/s. Negative disables.
+    steps_back_max: float = -1.0
+    steps_relief: float = 0.04
+    relief_sensor: str = "height_scanner"
     foot_x: float = 0.19
     foot_y: float = 0.14

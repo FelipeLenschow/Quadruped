@@ -21,7 +21,7 @@ _SIGNS = {
 _JOINT_TERMS = ("joint_pos_rel", "joint_vel_rel", "joint_effort", "last_action")
 _FEET_SWAP = [1, 0, 3, 2]  # FL FR RL RR -> FR FL RR RL
 _SCAN_TERMS = ("height_scan", "height_map")
-_KEEP = ("base_height", "head_clearance")
+_KEEP = ("base_height", "head_clearance", "safety_knobs")
 
 
 def _swap_name(name: str) -> str:
