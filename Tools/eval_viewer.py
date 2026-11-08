@@ -27,6 +27,7 @@ LIVE_WINDOW_S = 180           # a run whose tfevents was touched this recently c
 _scalar_cache = {}            # events_path -> (mtime, size, {tag: [[step, wall, value], ...]})
 _cache_lock = threading.Lock()
 _parse_locks = {}
+_accumulators = {}            # events_path -> EventAccumulator of a live run
 
 
 class _LooseLoader(yaml.SafeLoader if yaml else object):
@@ -45,15 +46,24 @@ if yaml:
     _LooseLoader.add_multi_constructor("!python/", _py_tag)
 
 
+_yaml_cache = {}              # path -> (mtime, parsed); a run's params never change, and parsing them all took 6 s
+
+
 def _load_yaml(path):
     if not yaml or not os.path.exists(path):
         return {}
+    mtime = os.path.getmtime(path)
+    hit = _yaml_cache.get(path)
+    if hit and hit[0] == mtime:
+        return hit[1]
     try:
         with open(path) as f:
-            return yaml.load(f, Loader=_LooseLoader) or {}
+            data = yaml.load(f, Loader=_LooseLoader) or {}
     except Exception as e:
         print(f"[viewer] could not parse {path}: {e}")
-        return {}
+        data = {}
+    _yaml_cache[path] = (mtime, data)
+    return data
 
 
 # rsl_rl (Simple, WalkTheseWays) logs under its own names. Map them onto what Walk's skrl runs log, so
@@ -240,8 +250,13 @@ def _read_scalars_locked(events_path, key):
         if not HAS_TB:
             return {}
         try:
-            ea = EventAccumulator(events_path, size_guidance={"scalars": 0})
+            # Kept for live runs: Reload() then reads only the events written since, not the whole file again.
+            ea = _accumulators.get(events_path) or EventAccumulator(events_path, size_guidance={"scalars": 0})
             ea.Reload()
+            if time.time() - key[0] < LIVE_WINDOW_S:
+                _accumulators[events_path] = ea
+            else:
+                _accumulators.pop(events_path, None)
             raw = {_canon_tag(t): [[e.step, e.wall_time, float(e.value)] for e in ea.Scalars(t)]
                    for t in ea.Tags()["scalars"]}
         except Exception as e:

@@ -133,9 +133,10 @@ th{color:var(--text-muted);font-weight:500;font-size:.72rem;text-transform:upper
 </div>
 <div class="main">
   <div class="toolbar">
-    <div class="grp"><label data-tip="__raw" data-tip-html="&lt;b&gt;X axis&lt;/b&gt;&lt;code&gt;Timesteps&lt;/code&gt; is one vectorised env step. &lt;code&gt;Samples&lt;/code&gt; multiplies by num_envs.&lt;span class=&quot;note&quot;&gt;A 2000-env run and a 6000-env run collect 3&times; different experience per timestep. Compare on Samples whenever num_envs differs.&lt;/span&gt;">X axis</label>
+    <div class="grp"><label data-tip="__raw" data-tip-html="&lt;b&gt;X axis&lt;/b&gt;&lt;code&gt;Timesteps&lt;/code&gt; is one vectorised env step. &lt;code&gt;Iterations&lt;/code&gt; is PPO updates (timesteps / rollouts), the N of model_N.pt. &lt;code&gt;Samples&lt;/code&gt; multiplies by num_envs.&lt;span class=&quot;note&quot;&gt;A 2000-env run and a 6000-env run collect 3&times; different experience per timestep. Compare on Samples whenever num_envs differs.&lt;/span&gt;">X axis</label>
       <div class="seg" id="xseg">
         <button data-x="step" class="on">Timesteps</button>
+        <button data-x="iter">Iterations</button>
         <button data-x="samples">Samples</button>
         <button data-x="hours">Wall-clock</button>
       </div>
@@ -687,16 +688,16 @@ function allTags(){
 }
 // x-axis conversion is the whole point: a "step" is num_envs samples, and that differs per run.
 function toXY(series,id,tag){
-  const ne=data[id]?.num_envs||1, t0=series.length?series[0][1]:0;
+  const ne=data[id]?.num_envs||1, ri=data[id]?.config?.['ppo.rollouts']||1, t0=series.length?series[0][1]:0;
   let k=1;
   if(norm&&tag){ const sc=scaleFor(tag,id); if(sc!==null&&Math.abs(sc)>1e-12) k=1/sc; }
   return series.map(([st,w,v])=>({
-    x: xmode==='step'?st : xmode==='samples'?st*ne : (w-t0)/3600, y:v*k }));
+    x: xmode==='step'?st : xmode==='iter'?st/ri : xmode==='samples'?st*ne : (w-t0)/3600, y:v*k }));
 }
 function ema(pts,a){ if(a<=0)return pts; let acc=null;
   return pts.map(p=>{acc=acc===null?p.y:acc*a+p.y*(1-a); return {x:p.x,y:acc};}); }
 
-const xLabel=()=>xmode==='step'?'Timesteps':xmode==='samples'?'Environment samples':'Hours';
+const xLabel=()=>xmode==='step'?'Timesteps':xmode==='iter'?'Iterations':xmode==='samples'?'Environment samples':'Hours';
 // The scale caveat under a chart title: same term, different rew_scale, different curve height.
 function metricNote(tag){
   const uniq=[...new Set(sel.map(id=>scaleFor(tag,id)).filter(v=>v!==null))];
