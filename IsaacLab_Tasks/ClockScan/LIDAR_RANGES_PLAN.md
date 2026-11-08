@@ -1,6 +1,7 @@
 # Plan: lidar ranges in place of the height map (actor)
 
-Status: the Isaac Lab side is done (2026-10-30; README, Lidar ranges): 16 x 21 rays, the current frame only (2 frames 5 steps apart with CLOCK_SCAN_LIDAR_LAG=5), noise,
+Status: the Isaac Lab side is done (2026-10-30; README, Lidar ranges): 16 x 36 rays all around the L1 (16 x 21 over
++-60 degrees up to Lidar3), the current frame only (2 frames 5 steps apart with CLOCK_SCAN_LIDAR_LAG=5), noise,
 and bins that keep their last reading (no 3 m empty bins: the policy came to depend on them). Not done: mount pose noise, the robot-side node, the C++ runner and `.qpol` export, the tests on
 the real robot.
 

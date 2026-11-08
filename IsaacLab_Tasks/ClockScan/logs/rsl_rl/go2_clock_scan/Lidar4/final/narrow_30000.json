@@ -1,0 +1,78 @@
+{
+ "narrow_width": 0.8,
+ "speed": 0.4,
+ "seconds": 20.0,
+ "distance": 5.4,
+ "per_tile": 16,
+ "results": [
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/2026-11-07_20-26-12/model_30000.pt",
+   "vy": 0.0,
+   "speed": 0.4,
+   "down": [
+    {
+     "height_cm": 12.0,
+     "robots": 256,
+     "across": 0.977,
+     "fell": 0.004
+    },
+    {
+     "height_cm": 15.0,
+     "robots": 256,
+     "across": 0.949,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 256,
+     "across": 0.934,
+     "fell": 0.004
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 256,
+     "across": 0.918,
+     "fell": 0.012
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 256,
+     "across": 0.879,
+     "fell": 0.035
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 12.0,
+     "robots": 256,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 15.0,
+     "robots": 256,
+     "across": 0.992,
+     "fell": 0.008
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 256,
+     "across": 1.0,
+     "fell": 0.0
+    },
+    {
+     "height_cm": 20.0,
+     "robots": 256,
+     "across": 0.969,
+     "fell": 0.012
+    },
+    {
+     "height_cm": 22.0,
+     "robots": 256,
+     "across": 0.859,
+     "fell": 0.008
+    }
+   ]
+  }
+ ]
+}

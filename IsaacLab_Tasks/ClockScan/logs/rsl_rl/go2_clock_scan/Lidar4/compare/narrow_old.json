@@ -1,0 +1,54 @@
+{
+ "narrow_width": 0.8,
+ "speed": 0.4,
+ "seconds": 20.0,
+ "distance": 5.4,
+ "per_tile": 8,
+ "results": [
+  {
+   "checkpoint": "logs/rsl_rl/go2_clock_scan/Lidar3/model_46500.pt",
+   "vy": 0.0,
+   "speed": 0.4,
+   "down": [
+    {
+     "height_cm": 12.0,
+     "robots": 128,
+     "across": 0.945,
+     "fell": 0.016
+    },
+    {
+     "height_cm": 15.0,
+     "robots": 128,
+     "across": 0.922,
+     "fell": 0.039
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 128,
+     "across": 0.953,
+     "fell": 0.016
+    }
+   ],
+   "up": [
+    {
+     "height_cm": 12.0,
+     "robots": 128,
+     "across": 0.992,
+     "fell": 0.008
+    },
+    {
+     "height_cm": 15.0,
+     "robots": 128,
+     "across": 0.953,
+     "fell": 0.031
+    },
+    {
+     "height_cm": 18.0,
+     "robots": 128,
+     "across": 0.898,
+     "fell": 0.047
+    }
+   ]
+  }
+ ]
+}
