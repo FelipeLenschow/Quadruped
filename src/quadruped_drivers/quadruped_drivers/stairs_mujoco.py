@@ -1,10 +1,13 @@
 """Sim2sim stairs test for a lidar policy (ClockScan): MuJoCo physics, the C++ policy runner, the lidar fan.
 
-No ROS: each trial puts the robot at the start of a stairs terrain (terrain.py's stairs or narrow), stands it for
+No ROS: each trial puts the robot at the start of a stairs terrain (terrain.py's stairs, narrow or spikes), stands it for
 --stand s, then commands --speed forward for --seconds and records whether it got across or fell. The .qpol beside
 the checkpoint is exported when missing or older than the .pt.
 
     python3 -m quadruped_drivers.stairs_mujoco --checkpoint <run>/model_N.pt --terrain narrow --start up
+    python3 -m quadruped_drivers.stairs_mujoco --checkpoint <run>/model_N.pt --terrain spikes --tops 0.18,0.14,0.10
+
+On spikes, --tops sweeps the post top size in place of --heights (the post height is --spike_height).
 
 --video writes every trial to one .mp4 from a camera that follows the robot (MUJOCO_GL=osmesa without a display).
 """
@@ -144,6 +147,9 @@ class StairsSim:
 def goal(terrain, start, params):
     """Test passed when the base is past x_goal (in the walking direction) and within dz of z_goal."""
     h, d, x0 = params["stair_height"], params["stair_depth"], params["stair_gap"]
+    if terrain == "spikes":
+        h = params["spike_height"]
+        return (terrain_mod.spike_end(params) + 0.5, h, +1) if start == "up" else (x0 - 0.3, h, -1)
     if terrain == "narrow":
         n = int(params["narrow_steps"])
         x1 = x0 + n * d
@@ -210,9 +216,11 @@ def run_trial(sim, args, rng, viewer=None, video=None):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--checkpoint", required=True, help=".pt (exported to .qpol beside it) or .qpol")
-    p.add_argument("--terrain", choices=("stairs", "narrow"), default="narrow")
+    p.add_argument("--terrain", choices=("stairs", "narrow", "spikes"), default="narrow")
     p.add_argument("--start", choices=("up", "down"), default="up")
     p.add_argument("--heights", default="0.18", help="comma-separated step heights, m")
+    p.add_argument("--tops", default="0.14", help="spikes: comma-separated post top sizes, m")
+    p.add_argument("--spike_height", type=float, default=None, help="spikes: post height over the pit, m")
     p.add_argument("--speed", type=float, default=0.4)
     p.add_argument("--stand", type=float, default=1.0)
     p.add_argument("--seconds", type=float, default=20.0)
@@ -236,9 +244,13 @@ def main():
     rng = np.random.default_rng(args.seed)
     report = {"checkpoint": args.checkpoint, "terrain": args.terrain, "start": args.start, "speed": args.speed,
               "results": []}
-    for h in (float(v) for v in args.heights.split(",")):
+    spikes = args.terrain == "spikes"
+    sweep = args.tops if spikes else args.heights
+    for h in (float(v) for v in sweep.split(",")):
         params = terrain_mod.resolve(cfg)
-        params["stair_height"] = h
+        params["spike_top" if spikes else "stair_height"] = h
+        if spikes and args.spike_height is not None:
+            params["spike_height"] = args.spike_height
         estimator = None
         if args.estimator:
             est_cfg = qc.ControllerConfig.from_yaml(paths.config("config.yaml"),
@@ -257,7 +269,7 @@ def main():
         else:
             video = None
             if args.video:
-                path = args.video if "," not in args.heights else args.video.replace(".mp4", f"_{100 * h:.0f}.mp4")
+                path = args.video if "," not in sweep else args.video.replace(".mp4", f"_{100 * h:.0f}.mp4")
                 video = Video(sim, path)
             for _ in range(args.trials):
                 trials.append(run_trial(sim, args, rng, video=video))
@@ -265,9 +277,10 @@ def main():
                 video.close()
         across = sum(r["across"] for r in trials) / len(trials)
         fell = sum(r["fell"] for r in trials) / len(trials)
-        print(f"{args.terrain} {args.start} {100 * h:.0f} cm: across {across:.2f}, fell {fell:.2f} "
+        label = "top" if spikes else "step"
+        print(f"{args.terrain} {args.start} {label} {100 * h:.0f} cm: across {across:.2f}, fell {fell:.2f} "
               f"({len(trials)} trials)", flush=True)
-        report["results"].append({"height_cm": round(100 * h, 1), "across": across, "fell": fell, "trials": trials})
+        report["results"].append({("top_cm" if spikes else "height_cm"): round(100 * h, 1), "across": across, "fell": fell, "trials": trials})
     if args.out:
         with open(args.out, "w") as f:
             json.dump(report, f, indent=1)

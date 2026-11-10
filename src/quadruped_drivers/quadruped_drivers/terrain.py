@@ -19,6 +19,9 @@ leg length.
 `stairs` puts a wide flight up, a platform and a flight down ahead of the
 robot; `narrow` is ClockScan's narrow tile: a flight with open sides up to an
 upper floor. Both are boxes on the flat plane, sized by the stair_* keys.
+`spikes` is a path of stepping-stone posts over a pit, from a start platform
+to an end platform, sized by the spike_* keys: a foot that misses a post top
+drops into a gap, so the policy has to place each foot.
 
 Terrain names match the launcher's existing vocabulary ("flat" / "rough") and
 arrive via the QUADRUPED_TERRAIN environment variable.
@@ -31,7 +34,8 @@ import numpy as np
 import mujoco
 
 
-TERRAINS = ("flat", "rough", "stairs", "narrow")
+TERRAINS = ("flat", "rough", "stairs", "narrow", "spikes")
+BOX_TERRAINS = ("stairs", "narrow", "spikes")
 
 # The line every unitree_* scene.xml uses for its ground plane. Matched
 # verbatim rather than parsed: if upstream changes it, we want a loud failure
@@ -82,6 +86,15 @@ DEFAULTS = {
     "narrow_steps": 15,
     "narrow_width": 0.8,
     "stair_gap": 0.6,
+    # spikes: post height over the pit, top side, centre-to-centre pitch, length and width of the path (m),
+    # random post height (+-) and shift of each post (+-, m; seeded by `seed`).
+    "spike_height": 0.40,
+    "spike_top": 0.14,
+    "spike_pitch": 0.24,
+    "spike_length": 3.0,
+    "spike_width": 1.0,
+    "spike_jitter": 0.02,
+    "spike_shift": 0.02,
 }
 
 FOOT_GEOMS = ("FL", "FR", "RL", "RR")
@@ -115,7 +128,7 @@ def scene_path(base_scene, terrain, params, tmp_files):
         return base_scene
 
     xml = open(base_scene, encoding="utf-8").read()
-    if terrain in ("stairs", "narrow"):
+    if terrain in BOX_TERRAINS:
         geoms = "".join(
             '    <geom type="box" pos="%g %g %g" size="%g %g %g" rgba="0.55 0.55 0.6 1"/>\n'
             % (0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * (z0 + z1), 0.5 * (x1 - x0), 0.5 * (y1 - y0), 0.5 * (z1 - z0))
@@ -147,6 +160,8 @@ def _write_beside(base_scene, xml, tmp_files):
 
 def stair_boxes(terrain, params):
     """(x0, x1, y0, y1, z0, z1) boxes of a stairs terrain, the robot spawned at the origin facing +x."""
+    if terrain == "spikes":
+        return spike_boxes(params)
     h, d, x0 = float(params["stair_height"]), float(params["stair_depth"]), float(params["stair_gap"])
     if terrain == "narrow":
         n, w = int(params["narrow_steps"]), float(params["narrow_width"])
@@ -160,8 +175,40 @@ def stair_boxes(terrain, params):
     return boxes + [(x1 + 2.0 + k * d, x1 + 2.0 + (k + 1) * d, -0.5 * w, 0.5 * w, 0.0, (n - k) * h) for k in range(n)]
 
 
+def spike_boxes(params):
+    """Start platform, the posts, end platform. The robot spawns on the start platform at the origin facing +x."""
+    h, top, pitch = float(params["spike_height"]), float(params["spike_top"]), float(params["spike_pitch"])
+    x0, length, w = float(params["stair_gap"]), float(params["spike_length"]), float(params["spike_width"])
+    jitter, shift = float(params["spike_jitter"]), float(params["spike_shift"])
+    rng = np.random.default_rng(params["seed"])
+    nx, ny = max(1, int(round(length / pitch))), max(1, int(round(w / pitch)))
+    x1 = x0 + nx * pitch
+    boxes = [(-1.0, x0, -0.5 * w - 0.5, 0.5 * w + 0.5, 0.0, h)]
+    for i in range(nx):
+        for j in range(ny):
+            cx = x0 + (i + 0.5) * pitch + rng.uniform(-shift, shift)
+            cy = (j - 0.5 * (ny - 1)) * pitch + rng.uniform(-shift, shift)
+            boxes.append((cx - 0.5 * top, cx + 0.5 * top, cy - 0.5 * top, cy + 0.5 * top,
+                          0.0, h + rng.uniform(-jitter, jitter)))
+    return boxes + [(x1, x1 + 2.0, -0.5 * w - 0.5, 0.5 * w + 0.5, 0.0, h)]
+
+
+def spike_end(params):
+    """x where the posts end and the end platform starts."""
+    pitch = float(params["spike_pitch"])
+    return float(params["stair_gap"]) + max(1, int(round(float(params["spike_length"]) / pitch))) * pitch
+
+
+def spawn_ground(terrain, params):
+    """Ground height at the origin, where the driver spawns the robot."""
+    return float(params["spike_height"]) if terrain == "spikes" else 0.0
+
+
 def stair_spawns(terrain, params):
     """{"up", "down"}: (x, y, ground z, yaw) to start a stairs test from, facing the flight."""
+    if terrain == "spikes":
+        h = float(params["spike_height"])
+        return {"up": (0.0, 0.0, h, 0.0), "down": (spike_end(params) + float(params["stair_gap"]), 0.0, h, np.pi)}
     h, d, x0 = float(params["stair_height"]), float(params["stair_depth"]), float(params["stair_gap"])
     if terrain == "narrow":
         n = int(params["narrow_steps"])

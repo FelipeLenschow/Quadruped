@@ -226,7 +226,11 @@ terrain only), and `terrain.py` has `stairs` (6 steps up, a 2 m platform, 6 step
     cd src/quadruped_drivers && python3 -m quadruped_drivers.stairs_mujoco \
         --checkpoint <run>/model_<n>.pt --terrain narrow --start up --heights 0.15,0.18,0.22 --trials 20
 
-`mujoco_driver` (launcher MuJoCo, terrain 3 or 4) also gives the policy the fan, so it runs with the console.
+`--terrain spikes` is a path of square posts (stepping stones) over a 40 cm pit, 3 m long and 1 m wide, between
+two platforms; a foot that misses a post top goes into a gap. `--tops 0.18,0.14,0.10` sweeps the top size (pitch
+0.24 m), `--spike_height` sets the pit depth, and the `spike_*` keys under `terrain:` in config.yaml set the rest.
+Lidar4 model_30000 was not trained on gaps: it got 1 to 3 m in and fell in all trials at 10, 14, 18 and 22 cm tops.
+`mujoco_driver` (launcher MuJoCo, terrain 3, 4 or 5) also gives the policy the fan, so it runs with the console.
 `eval_mujoco` has no scan. Results, Lidar4, model_30000 and model_32000, 0.4 m/s, 20 trials per
 height, start up to 0.3 m back, +-0.1 m, +-0.2 rad: across 1.00 and fell 0.00 on both terrains, up and down, at
 12, 15, 18, 20 and 22 cm; the same with the estimator (narrow, 18 and 22 cm). With flat-ground ranges in place of

@@ -430,7 +430,7 @@ class Ros2MujocoDriver(Node):
         mujoco.mj_resetData(self.model, self.data)
         for i, addr in enumerate(self.isaac_qpos_addr):
             self.data.qpos[addr] = self.desired_qpos[i]
-        self.data.qpos[2] = 0.50
+        self.data.qpos[2] = 0.50 + terrain_mod.spawn_ground(self.terrain, self.terrain_params)
         self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
         mujoco.mj_forward(self.model, self.data)
         print("[MujocoDriver] Robot reset to standing pose.")
