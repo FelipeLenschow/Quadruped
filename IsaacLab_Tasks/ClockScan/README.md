@@ -213,7 +213,15 @@ between the two; 12 for a run that ended in the top block).
   and turning commands (followed 0.13-0.39) and goes backward slowly on steps (0.14-0.45). Final tests (`final/`,
   256 robots per height, 128 per command cell), model_30000 / 30500 / 32000: pyramid 15-22 cm up and down 100%
   across, at most 1% fell; 0.8 m flight at 22 cm up 86 / 86 / 77% across, down 88 / 85 / 90%; worst command cell
-  5.5 / 11.7 / 8.6% fell. model_30000 is the pick.
+  5.5 / 11.7 / 8.6% fell. model_30000 was the pick until Scan.
+- **`Scan/model_35000.pt`** (the pick): the final config in one run from scratch, 0-39999, with no `START_*` or
+  `SAFETY_START_*`. Last stage at 10000, safety phase 1 at about 10000, 2 at 12000, 3 at 16000, all done at 18000
+  (Lidar4's resumes needed about 28000); stuck forward-only robots 1-2% before the operator went off, 8-10% after
+  (Lidar4 7-10%). Final tests (`final/`, 256 robots per height, 128 per command cell), model_25500 / 31800 / 35000 /
+  38000 / 39999: pyramid 15-22 cm up and down at least 99% across, at most 3% fell; 0.8 m flight at 18 cm up 99 /
+  94 / 100 / 99 / 99%, down 86 / 93 / 99 / 92 / 100%; at 22 cm up 89 / 47 / 91 / 90 / 84%, down 65 / 82 / 91 / 81 /
+  94%; worst command cell 6.2 / 4.7 / 3.9 / 7.0 / 10.9% fell (Lidar4 model_30000 5.5%). The narrow flight up and
+  down changed in opposite directions between checkpoints; 35000 is the best on both and on the commands.
 
 ## Evaluation and deploy
 
@@ -234,7 +242,9 @@ Lidar4 model_30000 was not trained on gaps: it got 1 to 3 m in and fell in all t
 `eval_mujoco` has no scan. Results, Lidar4, model_30000 and model_32000, 0.4 m/s, 20 trials per
 height, start up to 0.3 m back, +-0.1 m, +-0.2 rad: across 1.00 and fell 0.00 on both terrains, up and down, at
 12, 15, 18, 20 and 22 cm; the same with the estimator (narrow, 18 and 22 cm). With flat-ground ranges in place of
-the real ones it got across 0 of 5 times on the narrow flight, so it uses the scan.
+the real ones it got across 0 of 5 times on the narrow flight, so it uses the scan. Scan (`mujoco/`), the same
+test: model_38000 all across, none fell; model_35000 and 39999 the same except the narrow flight down at 22 cm (2
+and 1 of 20 fell); model_31800 stopped on the narrow flight up at 22 cm (5 of 20 across, none fell).
 
 The Isaac velocity sweep:
 

@@ -1,0 +1,1043 @@
+{
+ "checkpoint": "/app/IsaacLab_Tasks/ClockScan/logs/rsl_rl/go2_clock_scan/2026-11-08_06-36-23/model_38000.pt",
+ "terrain": "narrow",
+ "start": "up",
+ "speed": 0.4,
+ "results": [
+  {
+   "height_cm": 12.0,
+   "across": 1.0,
+   "fell": 0.0,
+   "trials": [
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.38,
+     "end": [
+      5.6,
+      0.04,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.82,
+     "end": [
+      5.6,
+      -0.04,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.18,
+     "end": [
+      5.6,
+      0.07,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.7,
+     "end": [
+      5.61,
+      -0.07,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.44,
+     "end": [
+      5.6,
+      -0.04,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.78,
+     "end": [
+      5.6,
+      -0.04,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.94,
+     "end": [
+      5.61,
+      -0.04,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.78,
+     "end": [
+      5.6,
+      -0.03,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.2,
+     "end": [
+      5.6,
+      0.07,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.46,
+     "end": [
+      5.6,
+      -0.04,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.38,
+     "end": [
+      5.6,
+      0.05,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.2,
+     "end": [
+      5.6,
+      0.07,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.2,
+     "end": [
+      5.6,
+      0.07,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.92,
+     "end": [
+      5.61,
+      -0.04,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.16,
+     "end": [
+      5.6,
+      0.07,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.46,
+     "end": [
+      5.6,
+      -0.04,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.82,
+     "end": [
+      5.6,
+      -0.05,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.82,
+     "end": [
+      5.6,
+      -0.04,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.94,
+     "end": [
+      5.6,
+      -0.01,
+      2.14
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.46,
+     "end": [
+      5.6,
+      -0.05,
+      2.14
+     ]
+    }
+   ]
+  },
+  {
+   "height_cm": 15.0,
+   "across": 1.0,
+   "fell": 0.0,
+   "trials": [
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.4,
+     "end": [
+      5.6,
+      -0.07,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.8,
+     "end": [
+      5.6,
+      0.03,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.14,
+     "end": [
+      5.6,
+      0.03,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.16,
+     "end": [
+      5.61,
+      0.01,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.48,
+     "end": [
+      5.6,
+      -0.06,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.42,
+     "end": [
+      5.6,
+      -0.05,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.76,
+     "end": [
+      5.6,
+      0.03,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.78,
+     "end": [
+      5.6,
+      0.01,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.1,
+     "end": [
+      5.6,
+      0.03,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.78,
+     "end": [
+      5.6,
+      0.02,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.1,
+     "end": [
+      5.6,
+      -0.05,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.14,
+     "end": [
+      5.61,
+      -0.06,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.18,
+     "end": [
+      5.6,
+      -0.03,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.76,
+     "end": [
+      5.6,
+      0.02,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.82,
+     "end": [
+      5.61,
+      -0.02,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.78,
+     "end": [
+      5.6,
+      0.02,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.12,
+     "end": [
+      5.6,
+      0.04,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.1,
+     "end": [
+      5.6,
+      0.03,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.76,
+     "end": [
+      5.61,
+      0.03,
+      2.59
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.12,
+     "end": [
+      5.6,
+      0.03,
+      2.59
+     ]
+    }
+   ]
+  },
+  {
+   "height_cm": 18.0,
+   "across": 1.0,
+   "fell": 0.0,
+   "trials": [
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.54,
+     "end": [
+      5.6,
+      0.05,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.88,
+     "end": [
+      5.6,
+      -0.06,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.18,
+     "end": [
+      5.6,
+      0.06,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.54,
+     "end": [
+      5.61,
+      0.05,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.88,
+     "end": [
+      5.6,
+      -0.06,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.52,
+     "end": [
+      5.6,
+      0.06,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.2,
+     "end": [
+      5.6,
+      0.04,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.86,
+     "end": [
+      5.6,
+      -0.06,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.54,
+     "end": [
+      5.6,
+      0.05,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.2,
+     "end": [
+      5.61,
+      0.06,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.22,
+     "end": [
+      5.6,
+      -0.07,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.88,
+     "end": [
+      5.6,
+      -0.05,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.18,
+     "end": [
+      5.6,
+      0.05,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.24,
+     "end": [
+      5.61,
+      -0.06,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.88,
+     "end": [
+      5.61,
+      -0.05,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.56,
+     "end": [
+      5.61,
+      0.05,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.2,
+     "end": [
+      5.61,
+      0.06,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.52,
+     "end": [
+      5.61,
+      -0.06,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.18,
+     "end": [
+      5.6,
+      0.05,
+      3.04
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.22,
+     "end": [
+      5.6,
+      0.03,
+      3.04
+     ]
+    }
+   ]
+  },
+  {
+   "height_cm": 20.0,
+   "across": 1.0,
+   "fell": 0.0,
+   "trials": [
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.6,
+     "end": [
+      5.6,
+      -0.06,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.16,
+     "end": [
+      5.6,
+      -0.04,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.94,
+     "end": [
+      5.6,
+      0.03,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.16,
+     "end": [
+      5.6,
+      -0.04,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.16,
+     "end": [
+      5.6,
+      -0.04,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.16,
+     "end": [
+      5.61,
+      -0.05,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.6,
+     "end": [
+      5.6,
+      0.05,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.92,
+     "end": [
+      5.6,
+      0.04,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.58,
+     "end": [
+      5.6,
+      0.04,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.54,
+     "end": [
+      5.6,
+      -0.01,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.94,
+     "end": [
+      5.61,
+      0.04,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.12,
+     "end": [
+      5.6,
+      -0.07,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.58,
+     "end": [
+      5.61,
+      0.03,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.2,
+     "end": [
+      5.61,
+      -0.03,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.52,
+     "end": [
+      5.6,
+      -0.03,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.18,
+     "end": [
+      5.61,
+      -0.04,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.16,
+     "end": [
+      5.6,
+      -0.04,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.9,
+     "end": [
+      5.61,
+      -0.02,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.54,
+     "end": [
+      5.6,
+      -0.03,
+      3.34
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.62,
+     "end": [
+      5.61,
+      0.05,
+      3.34
+     ]
+    }
+   ]
+  },
+  {
+   "height_cm": 22.0,
+   "across": 1.0,
+   "fell": 0.0,
+   "trials": [
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.36,
+     "end": [
+      5.61,
+      -0.12,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.38,
+     "end": [
+      5.6,
+      -0.13,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.36,
+     "end": [
+      5.6,
+      -0.06,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.34,
+     "end": [
+      5.6,
+      -0.09,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.0,
+     "end": [
+      5.61,
+      -0.12,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.04,
+     "end": [
+      5.6,
+      0.14,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.04,
+     "end": [
+      5.6,
+      -0.14,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.36,
+     "end": [
+      5.6,
+      -0.13,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.36,
+     "end": [
+      5.6,
+      -0.14,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.36,
+     "end": [
+      5.6,
+      -0.08,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.4,
+     "end": [
+      5.61,
+      -0.06,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.36,
+     "end": [
+      5.61,
+      0.12,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.04,
+     "end": [
+      5.61,
+      -0.13,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.04,
+     "end": [
+      5.61,
+      -0.14,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 16.0,
+     "end": [
+      5.61,
+      -0.07,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.36,
+     "end": [
+      5.61,
+      -0.07,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.32,
+     "end": [
+      5.61,
+      -0.08,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 14.7,
+     "end": [
+      5.6,
+      -0.11,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.34,
+     "end": [
+      5.61,
+      -0.07,
+      3.64
+     ]
+    },
+    {
+     "across": true,
+     "fell": false,
+     "time": 15.66,
+     "end": [
+      5.6,
+      0.06,
+      3.64
+     ]
+    }
+   ]
+  }
+ ]
+}

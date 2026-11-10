@@ -1,16 +1,16 @@
-# Next steps (after the safety-phase runs, 2026-11-08)
+# Next steps (after the safety-phase runs, 2026-11-10)
 
 Status: the 360 degree lidar actor, trained with the safety phases and no operator at the end, climbs 15-22 cm
 pyramid stairs and the 0.8 m open narrow flight up and down (stair score 0.99), and with any command switched in
-on the platform, the steps or the top it falls at most 5-6% in any cell (Lidar4, model_30000;
-README, Runs). On the narrow flight it ignores sideways and turning commands, and it goes backward
+on the platform, the steps or the top it falls at most 4% in any cell (Scan, model_35000, one run from
+scratch; README, Runs). On the narrow flight it ignores sideways and turning commands, and it goes backward
 slowly on steps.
 
 ## 1. Final policy
 
-- Done: model_30000 of Lidar4 (final tests with 256 robots per height and 128 per command cell, README, Runs).
-- Running (`2026-11-08_06-36-23`): one run from scratch with the final config (`SAFETY` on, no `START_*` or
-  `SAFETY_START_*`), to check that the curriculum gets there in one run. The runs above were resumed four times with config changes between them.
+- Done: one run from scratch with the final config (Scan, all safety phases done at 18000); model_35000 is the
+  pick (final tests with 256 robots per height and 128 per command cell, and MuJoCo; README, Runs). It is better
+  than Lidar4's model_30000 on the narrow flight and the command test.
 - Open, smaller: turning at low rates (50-65% of the command up to 0.5 rad/s); forward at 0.6 m/s on the narrow
   flight still falls up to 6%; robots on the upper floor of a flight going down are not stopped at the stairwell edge
   by the reward command (only by the fall cost).
