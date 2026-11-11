@@ -2,8 +2,8 @@
 
 Status: the 360 degree lidar actor, trained with the safety phases and no operator at the end, climbs 15-22 cm
 pyramid stairs and the 0.8 m open narrow flight up and down (stair score 0.99), and with any command switched in
-on the platform, the steps or the top it falls at most 4% in any cell (Scan, model_35000, one run from
-scratch; README, Runs). On the narrow flight it ignores sideways and turning commands, and it goes backward
+on the platform, the steps or the top it falls at most 4% in any cell (ScanImp, model_40000: Scan's
+run from scratch with a stronger hip penalty, so the HAA wobble is about 3 times smaller; README, Runs). On the narrow flight it ignores sideways and turning commands, and it goes backward
 slowly on steps.
 
 ## 1. Final policy
@@ -11,6 +11,9 @@ slowly on steps.
 - Done: one run from scratch with the final config (Scan, all safety phases done at 18000); model_35000 is the
   pick (final tests with 256 robots per height and 128 per command cell, and MuJoCo; README, Runs). It is better
   than Lidar4's model_30000 on the narrow flight and the command test.
+- Done: ScanImp, model_40000 (Scan's model_35000 and 5000 iterations with `W_HIP_DEV` -1.0): the same stairs and
+  commands, HAA wobble about 3 times smaller.
+- Open: the nose is up 2-3 deg on flat ground, with the rear legs bent more than the front.
 - Open, smaller: turning at low rates (50-65% of the command up to 0.5 rad/s); forward at 0.6 m/s on the narrow
   flight still falls up to 6%; robots on the upper floor of a flight going down are not stopped at the stairwell edge
   by the reward command (only by the fall cost).

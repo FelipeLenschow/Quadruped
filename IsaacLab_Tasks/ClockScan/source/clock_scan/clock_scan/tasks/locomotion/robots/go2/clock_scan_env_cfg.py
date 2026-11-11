@@ -283,7 +283,7 @@ W_STUMBLE = _env("W_STUMBLE", -5.0)
 # A foot counts as hitting a vertical face when its sideways force is more than STUMBLE_RATIO x its vertical force.
 STUMBLE_RATIO = _env("STUMBLE_RATIO", 2.0)
 W_CONTACTS = _env("W_CONTACTS", -2.0)
-W_HIP_DEV = _env("W_HIP_DEV", -0.2)
+W_HIP_DEV = _env("W_HIP_DEV", -1.0)
 # Walk's leash without its cap: per m from, and per rad of heading to, a reference moved by the command.
 W_LEASH_POS = _env("W_LEASH_POS", -2.0)
 W_LEASH_YAW = _env("W_LEASH_YAW", -0.5)
