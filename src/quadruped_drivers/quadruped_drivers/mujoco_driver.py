@@ -26,6 +26,8 @@ from quadruped_common.config_loader import load_config
 from quadruped_common import paths
 from quadruped_common.robot_defaults import DEFAULT_STANCE_QPOS
 from quadruped_drivers.lidar_fan import LidarFan
+from quadruped_drivers.l1_lidar import L1Fan
+from quadruped_drivers.fan_overlay import FanOverlay
 from quadruped_drivers.motor_model import Go2MotorModel
 from quadruped_drivers.foot_contact_overlay import FootContactOverlay
 from quadruped_drivers.velocity_arrow_overlay import VelocityArrowOverlay
@@ -56,6 +58,11 @@ class Ros2MujocoDriver(Node):
             use_estimator = True
             self.get_logger().warn(
                 "[MujocoDriver] --no_ground_truth forces the state estimator on.")
+
+        self.use_estimator = use_estimator
+        self.lidar_mode = os.environ.get("QUADRUPED_LIDAR", "l1").strip() or "l1"
+        self._lidar = self._l1 = None
+        self.fan_overlay = FanOverlay()
 
         self.ctrl_cfg = self.config.get("control", {})
         self.motor_cfg = self.config.get("motor", {})
@@ -546,11 +553,27 @@ class Ros2MujocoDriver(Node):
                 if self._lidar_tick % 20 == 0:
                     fan = self.pipeline.lidar_fan
                     if fan is None:
-                        self._lidar = None
+                        self._lidar = self._l1 = None
                     else:
-                        if getattr(self, "_lidar", None) is None:
+                        if self._lidar is None:
                             self._lidar = LidarFan(self.model, fan)
-                        raw_data["scan"] = self._lidar.ranges(self.data)
+                            if self.lidar_mode == "l1":
+                                self._l1 = L1Fan(self.model, fan, self.config["real_lidar"],
+                                                 self.config.get("lidar_fan") or {})
+                                self._l1.reset(self.data.time)
+                            print(f"[MujocoDriver] Lidar policy: {'L1 pattern through lidar_fan' if self._l1 else 'exact fan rays'}")
+                        exact = self._lidar.ranges(self.data)
+                        scan = exact
+                        if self._l1 is not None:
+                            vel = (np.asarray(self.pipeline.telemetry.estimator.velocity, dtype=np.float64)
+                                   if self.use_estimator else self.base_lin_vel_b)
+                            scan = self._l1.ranges(self.data, vel, self.isaac_names,
+                                                   self.data.qpos[self.isaac_qpos_addr])
+                        raw_data["scan"] = scan
+                        if not headless:
+                            rot = self.data.xmat[self._lidar.body].reshape(3, 3)
+                            self.fan_overlay.update(self._lidar.origin, self._lidar.dirs @ rot.T, scan, exact,
+                                                    self._l1.filled if self._l1 else None)
                 self.cmd_vel = self.pipeline.cmd_vel
                 self.current_targets = self.pipeline.step(
                     raw_state_kwargs=raw_data,
@@ -566,6 +589,8 @@ class Ros2MujocoDriver(Node):
                 # --- Physics steps ---
                 for _ in range(self.PD_DECIMATION):
                     mujoco.mj_step(self.model, self.data)
+                if self._l1 is not None and self.step_counter % 5 == 0:
+                    self._l1.cast(self.data)
 
                 # --- Freeze Base (override free-joint after every step) ---
                 if self._freeze_base_active and self._freeze_base_pose is not None:
@@ -587,6 +612,7 @@ class Ros2MujocoDriver(Node):
                             self.velocity_overlay.draw(
                                 viewer.user_scn, self.data,
                                 self.cmd_vel, self.base_lin_vel_b, reset=False)
+                            self.fan_overlay.draw(viewer.user_scn)
                     viewer.sync()
 
                 self.step_counter += 1

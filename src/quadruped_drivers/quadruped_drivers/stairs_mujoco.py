@@ -9,6 +9,10 @@ the checkpoint is exported when missing or older than the .pt.
 
 On spikes, --tops sweeps the post top size in place of --heights (the post height is --spike_height).
 
+--lidar l1 feeds the policy as on the robot: the L1's own scan pattern (l1_lidar), real_sensors' correction and
+lidar_fan's binning (FanInput, moved by the base's velocity: the estimator's with --estimator), in place of the exact
+fan.
+
 --video writes every trial to one .mp4 from a camera that follows the robot (MUJOCO_GL=osmesa without a display).
 """
 
@@ -24,6 +28,7 @@ from quadruped_common import paths
 from quadruped_common.config_loader import load_config
 from quadruped_control.export import export_checkpoint
 from quadruped_drivers import terrain as terrain_mod
+from quadruped_drivers.l1_lidar import L1Fan
 from quadruped_drivers.lidar_fan import LidarFan
 from quadruped_drivers.motor_model import Go2MotorModel
 
@@ -50,7 +55,7 @@ def yaw_quat(yaw):
 
 
 class StairsSim:
-    def __init__(self, spec, terrain, params, kp, kd, estimator=None, contact_force=13.0):
+    def __init__(self, spec, terrain, params, kp, kd, estimator=None, contact_force=13.0, l1_cfg=None):
         self.terrain, self.params = terrain, params
         tmp = []
         scene = terrain_mod.scene_path(paths.description("mujoco_menagerie", "unitree_go2", "scene.xml"), terrain, params, tmp)
@@ -79,6 +84,9 @@ class StairsSim:
         self.spec = spec
         self.runner = qc.PolicyRunner(spec)
         self.fan = LidarFan(self.model, spec.lidar) if spec.lidar else None
+        self.l1 = self.fan_in = None
+        if self.fan and l1_cfg is not None:
+            self.l1 = L1Fan(self.model, self.spec.lidar, *l1_cfg)
         self.qpos0 = np.asarray(spec.desired_qpos, dtype=np.float64)
         self.estimator = estimator
         self.contact_force = contact_force
@@ -102,6 +110,9 @@ class StairsSim:
         if self.estimator is not None:
             self.estimator.reset()
         self.targets = self.qpos0.copy()
+        if self.l1:
+            self.l1.reset(self.data.time)
+            self.fan_in = self.l1.input
 
     def foot_contact(self):
         force = np.zeros(4)
@@ -121,7 +132,11 @@ class StairsSim:
         if self.estimator is not None:
             vel_b = self.estimator.update(quat, d.sensor("accelerometer").data.copy(), self.foot_contact(),
                                           d.qpos[self.qadr].copy(), d.qvel[self.vadr].copy(), gyro)
-        scan = self.fan.ranges(d) if self.fan else None
+        scan = None
+        if self.l1:
+            scan = self.l1.ranges(d, vel_b, JOINTS, d.qpos[self.qadr])
+        elif self.fan:
+            scan = self.fan.ranges(d)
         actions = self.runner.infer(quat, vel_b, gyro, d.qpos[self.qadr].copy(), d.qvel[self.vadr].copy(),
                                     np.asarray(command, dtype=np.float64), DECIMATION * SIM_DT, scan=scan)
         self.targets = actions * self.spec.action_scale + self.qpos0
@@ -132,6 +147,8 @@ class StairsSim:
         tau = self.kp * (self.targets - d.qpos[self.qadr]) - self.kd * v
         d.ctrl[self.ctrl] = self.motor.clip(tau, v)
         mujoco.mj_step(self.model, d)
+        if self.l1 and round(d.time / SIM_DT) % 5 == 0:
+            self.l1.cast(d)
 
     def trunk_contact(self):
         for c in self.data.contact[: self.data.ncon]:
@@ -229,6 +246,8 @@ def main():
     p.add_argument("--y_noise", type=float, default=0.1)
     p.add_argument("--yaw_noise", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--lidar", choices=("fan", "l1"), default="fan",
+                   help="fan: the policy's exact rays; l1: the L1's pattern through lidar_fan, as on the robot")
     p.add_argument("--estimator", action="store_true", help="base velocity from the C++ state estimator, as on the robot")
     p.add_argument("--viewer", action="store_true", help="watch in MuJoCo's viewer")
     p.add_argument("--slowdown", type=float, default=1.0, help="viewer: wall time per sim time")
@@ -243,6 +262,7 @@ def main():
     kp, kd = float(cfg["control"]["kp"]), float(cfg["control"]["kd"])
     rng = np.random.default_rng(args.seed)
     report = {"checkpoint": args.checkpoint, "terrain": args.terrain, "start": args.start, "speed": args.speed,
+              "lidar": args.lidar,
               "results": []}
     spikes = args.terrain == "spikes"
     sweep = args.tops if spikes else args.heights
@@ -258,7 +278,8 @@ def main():
             estimator = qc.StateEstimator(qc.Kinematics(est_cfg.geometry), est_cfg.estimator)
         est = cfg.get("state_estimator", {})
         force = float(est.get("contact_threshold", 5.0)) * float(est.get("fsr_scale", 2.66))
-        sim = StairsSim(spec, args.terrain, params, kp, kd, estimator, force)
+        l1_cfg = (cfg["real_lidar"], cfg.get("lidar_fan") or {}) if args.lidar == "l1" else None
+        sim = StairsSim(spec, args.terrain, params, kp, kd, estimator, force, l1_cfg)
         trials = []
         if args.viewer:
             from mujoco import viewer as mj_viewer
