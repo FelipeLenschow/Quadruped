@@ -118,7 +118,14 @@ class lidar_ranges(ManagerTermBase):
     reads max_range), as the L1 measures it, for the frames lags steps back (0 is now), oldest last. Each ray of
     each frame keeps an older reading (1 to stale_steps more steps back) with a probability drawn per episode from
     0 to stale_max, as a bin of the sparse, non-repeating L1 scan keeps its last return; plus uniform noise of
-    +-noise m."""
+    +-noise m.
+
+    With hide_map (a .npy of one probability per ray: how often the real L1 has no point for it, as deploy's
+    lidar_fan measured it in MuJoCo, mostly behind the robot where the body hides the floor), each ray is hidden or
+    seen in a state that lasts hide_tau s on average, hidden with that probability times a factor drawn per episode
+    from hide_scale. A hidden ray reads what lidar_fan gives it: the 4 nearest seen rays (grid distance, weight
+    1 / distance^2), their points' mean depth below the lidar, as level ground met by this ray, or max_range if
+    the ray does not go down."""
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
@@ -131,11 +138,32 @@ class lidar_ranges(ManagerTermBase):
         self._fresh = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
         self._stale = torch.rand(env.num_envs, device=env.device) * float(p.get("stale_max", 0.0))
         self._step = -1
+        self._hide = None
+        if p.get("hide_map"):
+            import numpy as np
+
+            self._hide = torch.tensor(np.load(p["hide_map"]), dtype=torch.float32, device=env.device)
+            if len(self._hide) != rays:
+                raise ValueError(f"hide_map has {len(self._hide)} rays, the lidar {rays}")
+            rows, cols = p["fan_shape"]
+            r, c = torch.arange(rays, device=env.device).div(cols, rounding_mode="floor"), torch.arange(rays, device=env.device) % cols
+            dc = (c.view(-1, 1) - c.view(1, -1)).abs()
+            d2 = (r.view(-1, 1) - r.view(1, -1)) ** 2 + torch.minimum(dc, cols - dc) ** 2
+            d2.fill_diagonal_(10**6)
+            self._nbr_d2, self._nbr = torch.sort(d2.float(), dim=1)
+            self._nbr_d2, self._nbr = self._nbr_d2[:, :48], self._nbr[:, :48]
+            self._hscale = torch.ones(env.num_envs, 1, device=env.device)
+            self._hidden = torch.zeros(env.num_envs, rays, dtype=torch.bool, device=env.device)
 
     def reset(self, env_ids: torch.Tensor | None = None) -> dict:
         ids = slice(None) if env_ids is None else env_ids
         self._fresh[ids] = True
         self._stale[ids] = torch.rand_like(self._stale[ids]) * float(self.cfg.params.get("stale_max", 0.0))
+        if self._hide is not None:
+            lo, hi = self.cfg.params.get("hide_scale", (1.0, 1.0))
+            self._hscale[ids] = torch.empty_like(self._hscale[ids]).uniform_(lo, hi)
+            q = (self._hide * self._hscale[ids]).clamp(max=0.95)
+            self._hidden[ids] = torch.rand_like(q) < q
         return {}
 
     def __call__(
@@ -147,6 +175,10 @@ class lidar_ranges(ManagerTermBase):
         noise: float = 0.0,
         stale_max: float = 0.0,
         stale_steps: int = 0,
+        hide_map: str | None = None,
+        fan_shape: tuple[int, int] | None = None,
+        hide_tau: float = 0.5,
+        hide_scale: tuple[float, float] = (1.0, 1.0),
     ) -> torch.Tensor:
         from isaaclab.utils.math import quat_apply
 
@@ -160,6 +192,11 @@ class lidar_ranges(ManagerTermBase):
         if env.common_step_counter != self._step:
             self._step = env.common_step_counter
             self._buf = torch.roll(self._buf, 1, dims=1)
+            if self._hide is not None:
+                a = min(1.0, env.step_dt / hide_tau)
+                q = (self._hide * self._hscale).clamp(max=0.95)
+                flip = torch.rand_like(q) < torch.where(self._hidden, torch.full_like(q, a), a * q / (1.0 - q))
+                self._hidden ^= flip
         self._buf[:, 0] = dist
         fresh = self._fresh
         self._buf[fresh] = dist[fresh].unsqueeze(1).expand(-1, self._depth, -1)
@@ -170,6 +207,20 @@ class lidar_ranges(ManagerTermBase):
             extra = torch.randint(1, stale_steps + 1, lag.shape, device=env.device)
             lag = lag + extra * (torch.rand(lag.shape, device=env.device) < self._stale.view(-1, 1, 1))
         out = torch.gather(self._buf, 1, lag)
+        if self._hide is not None and self._hidden.any():
+            dirs = quat_apply(quat.unsqueeze(1).expand(-1, rays, -1).reshape(-1, 4), self._sensor.ray_directions.torch.reshape(-1, 3))
+            down = -dirs.view(n, rays, 3)[..., 2]
+            depth = down * dist
+            e, k = self._hidden.nonzero(as_tuple=True)
+            nbr = self._nbr[k]
+            take = ~self._hidden[e.unsqueeze(1), nbr]
+            take &= take.cumsum(1) <= 4
+            w = take / self._nbr_d2[k].clamp(min=1.0)
+            ws = w.sum(1)
+            h = (w * depth[e.unsqueeze(1), nbr]).sum(1) / ws.clamp(min=1e-9)
+            dk = down[e, k]
+            fill = torch.where((h > 0.0) & (dk > 1e-3), (h / dk.clamp(min=1e-3)).clamp(max=max_range), max_range)
+            out[e, :, k] = torch.where(ws > 0, fill, out[e, 0, k]).unsqueeze(1).expand(-1, out.shape[1])
         if noise > 0.0:
             out = out + torch.empty_like(out).uniform_(-noise, noise)
         return out.clamp(0.0, max_range).reshape(n, -1)

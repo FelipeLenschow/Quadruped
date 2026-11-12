@@ -71,7 +71,10 @@ MAP_Y = _axis(-MAP_SIDE, MAP_SIDE, -MAP_FINE_SIDE, MAP_FINE_SIDE)
 # above. The critic always gets the height map and the grid below. The fan: LIDAR_ROWS rows aimed at the ground
 # LIDAR_NEAR to LIDAR_FAR m from the lidar (standing, LIDAR_HEIGHT above flat ground) by LIDAR_COLS columns over
 # +-LIDAR_AZIMUTH deg (180: all around, -170 to 180 at 360/LIDAR_COLS), turning with the whole base. The rays hit only
-# the ground: the robot's own body does not hide any (the real L1 sees the floor all around, Mcap/Recordings/lio_bag).
+# the ground. LIDAR_HIDE (1, 0 off) hides rays as the real L1 misses them (mdp/l1_hidden.npy: how often lidar_fan had
+# no point per ray in MuJoCo with the L1's own pattern, mostly behind the robot where the body hides the floor),
+# for LIDAR_HIDE_TAU s on average, at that rate times a factor per episode in LIDAR_HIDE_SCALE, filled as lidar_fan
+# fills them.
 # Ranges clipped to LIDAR_RANGE m (no hit reads LIDAR_RANGE), now (and LIDAR_LAG steps back, if above 0); per ray
 # +-LIDAR_NOISE m, and a reading 1 to LIDAR_STALE_STEPS steps older with a probability drawn per episode from 0 to
 # LIDAR_STALE (the L1's sparse scan: a bin keeps its last return). Empty rays used to read LIDAR_RANGE at 15%: a 3 m
@@ -89,6 +92,9 @@ LIDAR_LAG = int(_env("LIDAR_LAG", 0))
 LIDAR_NOISE = _env("LIDAR_NOISE", 0.02)
 LIDAR_STALE = _env("LIDAR_STALE", 0.3)
 LIDAR_STALE_STEPS = int(_env("LIDAR_STALE_STEPS", 10))
+LIDAR_HIDE = bool(_env("LIDAR_HIDE", 1))
+LIDAR_HIDE_TAU = _env("LIDAR_HIDE_TAU", 0.5)
+LIDAR_HIDE_SCALE = _range("LIDAR_HIDE_SCALE", 0.5, 1.5)
 # Per episode, the lidar mount moved by +-LIDAR_MOUNT_POS m on each axis and turned by +-LIDAR_MOUNT_ROT degrees about
 # each, as the error of the measured mount pose.
 LIDAR_MOUNT_POS = _env("LIDAR_MOUNT_POS", 0.01)
@@ -697,6 +703,10 @@ class ObservationsCfg:
                 "noise": LIDAR_NOISE,
                 "stale_max": LIDAR_STALE,
                 "stale_steps": LIDAR_STALE_STEPS,
+                "hide_map": os.path.join(os.path.dirname(mdp.__file__), "l1_hidden.npy") if LIDAR_HIDE else None,
+                "fan_shape": (LIDAR_ROWS, LIDAR_COLS),
+                "hide_tau": LIDAR_HIDE_TAU,
+                "hide_scale": LIDAR_HIDE_SCALE,
             },
         )
 
