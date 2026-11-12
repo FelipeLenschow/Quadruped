@@ -123,6 +123,7 @@ ControllerConfig ControllerConfig::from_yaml(const std::string& config_path, con
   c.yaw_accel = get<double>(slew, "yaw_accel", 0.0);
   c.yaw_decel = get<double>(slew, "yaw_decel", 0.0);
   c.cmd_timeout = get<double>(root["cmd_vel"], "timeout", 0.5);
+  c.scan_timeout = get<double>(root["lidar_fan"], "timeout_s", 0.5);
 
   c.use_estimator = use_estimator;
   c.safety_switch = safety_switch;

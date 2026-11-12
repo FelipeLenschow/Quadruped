@@ -136,7 +136,8 @@ bool SafetyProcessor::heartbeat_ok(double now) const {
   return has_heartbeat_ && (now - last_heartbeat_) <= watchdog_timeout_;
 }
 
-std::pair<bool, std::string> SafetyProcessor::evaluate(const State& state, uint8_t protections, double now) const {
+std::pair<bool, std::string> SafetyProcessor::evaluate(const State& state, uint8_t protections, double now,
+                                                      double tilt_limit, double pitch_limit) const {
   if (!external_fault_.empty()) return {false, external_fault_};
   if (protections & kHeartbeat) {
     if (!has_heartbeat_) return {false, "No supervisor heartbeat received yet"};
@@ -147,14 +148,16 @@ std::pair<bool, std::string> SafetyProcessor::evaluate(const State& state, uint8
 
   const Vec3 g = projected_gravity_b(state.quat_wxyz);
   const double tilt_cos = -g[2] / 9.81;
-  if ((protections & kTilt) && tilt_cos < tilt_thresh_) {
+  const double tilt_lim = tilt_limit > 0.0 ? tilt_limit : base_tilt_limit_;
+  if ((protections & kTilt) && tilt_cos < (tilt_limit > 0.0 ? std::cos(tilt_limit / kRadToDeg) : tilt_thresh_)) {
     const double tilt_deg = std::acos(std::clamp(tilt_cos, -1.0, 1.0)) * kRadToDeg;
-    return {false, format("Base tilt %.1f° exceeds limit %.1f°", tilt_deg, base_tilt_limit_)};
+    return {false, format("Base tilt %.1f° exceeds limit %.1f°", tilt_deg, tilt_lim)};
   }
 
   const double pitch_deg = std::atan2(g[0], -g[2]) * kRadToDeg;
-  if ((protections & kPitch) && pitch_deg > forward_tilt_limit_) {
-    return {false, format("Forward pitch %.1f° exceeds limit %.1f°", pitch_deg, forward_tilt_limit_)};
+  const double pitch_lim = pitch_limit > 0.0 ? pitch_limit : forward_tilt_limit_;
+  if ((protections & kPitch) && pitch_deg > pitch_lim) {
+    return {false, format("Forward pitch %.1f° exceeds limit %.1f°", pitch_deg, pitch_lim)};
   }
 
   if (protections & kRom) {
@@ -171,7 +174,8 @@ std::pair<bool, std::string> SafetyProcessor::evaluate(const State& state, uint8
 Vec12 SafetyProcessor::clip_soft(const Vec12& t) const { return t.cwiseMax(soft_min_).cwiseMin(soft_max_); }
 
 std::pair<Vec12, double> SafetyProcessor::process(const std::optional<Vec12>& main, const std::optional<Vec12>& safety,
-                                                  const State& state, uint8_t protections, double now) {
+                                                  const State& state, uint8_t protections, double now,
+                                                  double tilt_limit, double pitch_limit) {
   // The e-stop outranks everything, the safety policy included.
   if (estop_ || numb_) {
     active_max_torque_ = 0.0;
@@ -189,7 +193,7 @@ std::pair<Vec12, double> SafetyProcessor::process(const std::optional<Vec12>& ma
 
   if (policy_blocked_) return blocked();
 
-  const auto [safe, reason] = evaluate(state, protections, now);
+  const auto [safe, reason] = evaluate(state, protections, now, tilt_limit, pitch_limit);
   if (safe) {
     active_max_torque_ = global_max_torque_;
     return {clip_soft(main.value_or(desired_qpos_)), active_max_torque_};

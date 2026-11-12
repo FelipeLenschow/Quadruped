@@ -23,7 +23,9 @@ def read_catalog(policies, warn=print):
         if commands not in (True, False, "trick"):
             warn(f"[Policies] Policy '{name}': commands {commands!r} is not true, false or \"trick\". Using true.")
             commands = True
-        out[name] = {"path": spec.get("path", ""), "protections": protections, "commands": commands}
+        out[name] = {"path": spec.get("path", ""), "protections": protections, "commands": commands,
+                     "tilt_limit_deg": float(spec.get("tilt_limit_deg", 0.0)),
+                     "pitch_limit_deg": float(spec.get("pitch_limit_deg", 0.0))}
     return out
 
 
@@ -36,7 +38,8 @@ def entry_for(spec, checkpoint=None):
         clock_hz = float(trick.get("clock_hz") or 0.0)
         switches = int(trick.get("switches") or 1)
     return PolicyEntry(protections=list(spec["protections"]), commands=spec["commands"], clock_hz=clock_hz,
-                       switches=switches)
+                       switches=switches, tilt_limit_deg=spec.get("tilt_limit_deg", 0.0),
+                       pitch_limit_deg=spec.get("pitch_limit_deg", 0.0))
 
 
 def load_spec(checkpoint, name=""):

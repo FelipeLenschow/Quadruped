@@ -136,6 +136,7 @@ PYBIND11_MODULE(_core, m) {
       .def_readwrite("poses", &ControllerConfig::poses)
       .def_readwrite("pose_interp_duration", &ControllerConfig::pose_interp_duration)
       .def_readwrite("policy_switch_blend", &ControllerConfig::policy_switch_blend)
+      .def_readwrite("scan_timeout", &ControllerConfig::scan_timeout)
       .def_readwrite("mode_transition_duration", &ControllerConfig::mode_transition_duration)
       .def_readwrite("lin_accel", &ControllerConfig::lin_accel)
       .def_readwrite("lin_decel", &ControllerConfig::lin_decel)
@@ -149,7 +150,7 @@ PYBIND11_MODULE(_core, m) {
 
   py::class_<PolicyEntry>(m, "PolicyEntry")
       .def(py::init([](std::optional<std::vector<std::string>> protections, py::object commands, double clock_hz,
-                       int switches) {
+                       int switches, double tilt_limit_deg, double pitch_limit_deg) {
              PolicyEntry e;
              e.protections = protections ? protections_from_names(*protections) : static_cast<uint8_t>(kAllProtections);
              if (py::isinstance<py::str>(commands)) {
@@ -160,10 +161,14 @@ PYBIND11_MODULE(_core, m) {
              }
              e.clock_hz = clock_hz;
              e.switches = switches;
+             e.tilt_limit_deg = tilt_limit_deg;
+             e.pitch_limit_deg = pitch_limit_deg;
              return e;
            }),
            py::arg("protections") = py::none(), py::arg("commands") = true, py::arg("clock_hz") = 0.0,
-           py::arg("switches") = 0)
+           py::arg("switches") = 0, py::arg("tilt_limit_deg") = 0.0, py::arg("pitch_limit_deg") = 0.0)
+      .def_readonly("tilt_limit_deg", &PolicyEntry::tilt_limit_deg)
+      .def_readonly("pitch_limit_deg", &PolicyEntry::pitch_limit_deg)
       .def_property_readonly("protections", [](const PolicyEntry& e) { return protection_names(e.protections); })
       .def_property_readonly("commands", [](const PolicyEntry& e) -> py::object {
         if (e.commands == CommandMode::Trick) return py::str("trick");

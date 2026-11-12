@@ -62,6 +62,21 @@ lidar_filter:
     near_m: 0.7
     near_height: 0.12
 
+# lidar_fan (real.launch.py): /lidar/points as the ranges of a lidar policy's fan (ClockScan), on /lidar/fan_ranges.
+# Points stay window_s in the base frame, moved by the estimator's velocity and the IMU's rotation (3 per ray); a ray
+# with no point reads the height of the nearest rays that have one, and with no points at all flat ground
+# prior_height below the fan (training's standing height); nothing is published once the cloud or
+# /odom/state_estimator is cloud_timeout_s old. The controller makes a lidar policy stand still on ranges older
+# than timeout_s.
+lidar_fan:
+  frame: base
+  window_s: 0.5
+  rate_hz: 50.0
+  prior_height: 0.273
+  leg_radius: 0.045
+  cloud_timeout_s: 0.5
+  timeout_s: 0.5
+
 # Real Go2 L1 lidar mount on the base (real_sensors). Gazebo uses the URDF's. lidar_level finds roll and
 # pitch from the floor and keeps yaw. The yaw is ~120 deg about the lidar's own axis off the URDF's radar
 # frame, measured by aligning the clouds before and after a straight 1.3 m walk against odometry.
@@ -380,6 +395,8 @@ safety:
 #   protections: the checks that trip the safety switch while it runs. heartbeat (console alive), tilt (any
 #                direction past base_tilt_limit_deg), pitch (nose down past base_forward_tilt_limit_deg),
 #                rom (joints in the outer joint_rom_safety_margin). Left out = all four.
+#   tilt_limit_deg, pitch_limit_deg: this policy's own tilt and pitch limits in place of the ones above (stairs:
+#                ScanImp's base tilts to 55 deg and pitches 48 deg nose down on 22 cm steps in MuJoCo).
 #   commands:    false feeds a zero velocity command, for policies trained without one. "trick" feeds the trick's
 #                switches instead (IsaacLab_Tasks/Tricks): what keeps arriving on /pipeline/trick (skill_server),
 #                [1, 0, 0] to do it (Pee: [0, 1, 0] for the right leg), zeros once it stops.

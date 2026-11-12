@@ -84,6 +84,7 @@ class ControlLoop {
   bool low_state_stale_ = false;
   LowCmd low_cmd_;
   std::optional<Eigen::Matrix<float, 12, 1>> last_targets_;
+  std::optional<Eigen::VectorXf> scan_;
 
   // Timing over the last stats period, logged with the next snapshot.
   double stats_start_ = 0.0, step_sum_ = 0.0, step_max_ = 0.0, late_max_ = 0.0;

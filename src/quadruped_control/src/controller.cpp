@@ -325,6 +325,25 @@ Vec12 Controller::step_policy(const std::string& name, const Eigen::VectorXd& co
   return targets;
 }
 
+// A lidar policy stands still on ranges older than scan_timeout and does not run before the first ones.
+bool Controller::scan_ready(const std::string& name, Eigen::VectorXd& command, double now) {
+  const PolicySpec& spec = find(name)->runner.spec();
+  if (!spec.lidar) return true;
+  const bool have = state_.scan.size() == spec.lidar->rays();
+  const bool fresh = have && scan_time_ && now - *scan_time_ <= cfg_.scan_timeout;
+  if (fresh != scan_fresh_) {
+    scan_fresh_ = fresh;
+    if (fresh) {
+      events_.log(LogLevel::Info, "[Pipeline] Lidar ranges back for '" + name + "'.");
+    } else {
+      events_.log(LogLevel::Warn, "[Pipeline] No fresh lidar ranges for '" + name + "': " +
+                                      (have ? "standing still." : "holding the default pose."));
+    }
+  }
+  if (!fresh) command.setZero();
+  return have;
+}
+
 bool Controller::is_lying() const {
   const Vec3 g = projected_gravity_b(state_.quat_wxyz);
   const bool level = -g[2] / std::max(g.norm(), 1e-6) >= lying_cos_;
@@ -360,6 +379,7 @@ StepResult Controller::step(const RawState& raw, const std::optional<Eigen::Vect
   Eigen::VectorXd cmd_vel = cmd_vel_in ? *cmd_vel_in : Eigen::VectorXd(current_cmd_vel(now));
 
   process_state(raw, policy_step);
+  if (raw.scan) scan_time_ = now;
   last_measured_q_ = state_.q.unaryExpr([](double v) { return static_cast<double>(static_cast<float>(v)); });
 
   StepResult result;
@@ -410,7 +430,9 @@ StepResult Controller::step(const RawState& raw, const std::optional<Eigen::Vect
       safety_.set_active_max_torque(max_torque);
     } else {
       const uint8_t protections = active_ ? entry(*active_).protections : static_cast<uint8_t>(kAllProtections);
-      const bool is_safe = safety_.evaluate(state_, protections, now).first;
+      const double tilt_limit = active_ ? entry(*active_).tilt_limit_deg : 0.0;
+      const double pitch_limit = active_ ? entry(*active_).pitch_limit_deg : 0.0;
+      const bool is_safe = safety_.evaluate(state_, protections, now, tilt_limit, pitch_limit).first;
 
       double dt = cfg_.policy_dt;
       if (slew_time_ && sim_time - *slew_time_ > 0.0 && sim_time - *slew_time_ <= 0.1) dt = sim_time - *slew_time_;
@@ -438,10 +460,10 @@ StepResult Controller::step(const RawState& raw, const std::optional<Eigen::Vect
           const auto t = trick_input(e, now);
           command = Eigen::Vector4d(t[0], t[1], t[2], 0.0);
         }
-        main = step_policy(*active_, command);
+        if (scan_ready(*active_, command, now)) main = step_policy(*active_, command);
       }
 
-      std::tie(final_targets, max_torque) = safety_.process(main, safety, state_, protections, now);
+      std::tie(final_targets, max_torque) = safety_.process(main, safety, state_, protections, now, tilt_limit, pitch_limit);
       if (safety_.is_policy_blocked()) {
         if (!safety_elapsed_) {
           safety_elapsed_ = 0.0;

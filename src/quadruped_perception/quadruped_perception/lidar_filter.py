@@ -53,6 +53,37 @@ def rotation(q):
     ])
 
 
+def leg_shadow(pts, origin, links, radius):
+    """Points whose beam (origin -> point) passed within radius of a leg link, by the closest
+    distance between the two segments (Ericson, Real-Time Collision Detection 5.1.9)."""
+    d1 = pts - origin
+    a = np.maximum(np.einsum("ij,ij->i", d1, d1), 1e-12)
+    hit = np.zeros(len(pts), bool)
+    for A, B in links:
+        d2, r = B - A, origin - A
+        e, f = d2 @ d2, d2 @ r
+        b, c = d1 @ d2, d1 @ r
+        denom = a * e - b * b
+        s = np.clip(np.where(denom > 1e-12, (b * f - c * e) / np.maximum(denom, 1e-12), 0.0), 0.0, 1.0)
+        t = (b * s + f) / e
+        s = np.where(t < 0, np.clip(-c / a, 0, 1), np.where(t > 1, np.clip((b - c) / a, 0, 1), s))
+        t = np.clip(t, 0, 1)
+        gap = (origin + d1 * s[:, None]) - (A + d2 * t[:, None])
+        hit |= np.einsum("ij,ij->i", gap, gap) < radius ** 2
+    return hit
+
+
+def leg_links(msg):
+    """(8, 2, 3): thigh and calf end points in base from a JointState, or None if a leg joint is missing."""
+    pos = dict(zip(msg.name, msg.position))
+    try:
+        q = [np.array([pos[f"{leg}_{j}_joint"] for j in ("hip", "thigh", "calf")]) for leg in LEGS]
+    except KeyError:
+        return None
+    chains = [leg_chain_body(i, q[i]) for i in range(len(LEGS))]
+    return np.array([(c[k], c[k + 1]) for c in chains for k in (0, 1)])
+
+
 class LidarFilter(Node):
     def __init__(self, cfg, accumulate=1):
         super().__init__("lidar_filter")
@@ -85,32 +116,9 @@ class LidarFilter(Node):
                                + (f", merging the last {accumulate} clouds" if self.history is not None else ""))
 
     def _joints_cb(self, msg):
-        pos = dict(zip(msg.name, msg.position))
-        try:
-            q = [np.array([pos[f"{leg}_{j}_joint"] for j in ("hip", "thigh", "calf")]) for leg in LEGS]
-        except KeyError:
-            return
-        chains = [leg_chain_body(i, q[i]) for i in range(len(LEGS))]
-        self.links = np.array([(c[k], c[k + 1]) for c in chains for k in (0, 1)])
-
-    def _leg_shadow(self, pts, origin):
-        """Points whose beam (origin -> point) passed within leg_radius of a leg link, by the closest
-        distance between the two segments (Ericson, Real-Time Collision Detection 5.1.9)."""
-        d1 = pts - origin
-        a = np.maximum(np.einsum("ij,ij->i", d1, d1), 1e-12)
-        hit = np.zeros(len(pts), bool)
-        for A, B in self.links:
-            d2, r = B - A, origin - A
-            e, f = d2 @ d2, d2 @ r
-            b, c = d1 @ d2, d1 @ r
-            denom = a * e - b * b
-            s = np.clip(np.where(denom > 1e-12, (b * f - c * e) / np.maximum(denom, 1e-12), 0.0), 0.0, 1.0)
-            t = (b * s + f) / e
-            s = np.where(t < 0, np.clip(-c / a, 0, 1), np.where(t > 1, np.clip((b - c) / a, 0, 1), s))
-            t = np.clip(t, 0, 1)
-            gap = (origin + d1 * s[:, None]) - (A + d2 * t[:, None])
-            hit |= np.einsum("ij,ij->i", gap, gap) < self.leg_radius ** 2
-        return hit
+        links = leg_links(msg)
+        if links is not None:
+            self.links = links
 
     def _transform(self, source):
         if source not in self.transforms:
@@ -197,7 +205,7 @@ class LidarFilter(Node):
         intensity = intensity[keep]
         outside = ~((pts > self.box_min) & (pts < self.box_max)).all(axis=1)
         if self.links is not None:
-            outside[outside] = ~self._leg_shadow(pts[outside], tf[1])
+            outside[outside] = ~leg_shadow(pts[outside], tf[1], self.links, self.leg_radius)
         out = np.column_stack([pts[outside], intensity[outside]]).astype(np.float32)
         if self.history is not None:
             out = self._merge(out, msg.header.stamp)

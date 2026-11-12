@@ -186,6 +186,8 @@ DriverNode::DriverNode(Paths paths, YAML::Node config, ControlLoop& loop, Comman
     const YAML::Node spec = item.second;
     CatalogEntry c;
     c.path = get<std::string>(spec, "path", "");
+    c.entry.tilt_limit_deg = get<double>(spec, "tilt_limit_deg", 0.0);
+    c.entry.pitch_limit_deg = get<double>(spec, "pitch_limit_deg", 0.0);
     try {
       c.entry.protections = spec["protections"] ? qc::protections_from_names(spec["protections"].as<std::vector<std::string>>())
                                                 : static_cast<uint8_t>(qc::kAllProtections);
@@ -247,6 +249,7 @@ DriverNode::DriverNode(Paths paths, YAML::Node config, ControlLoop& loop, Comman
   sub_values("/gait_command", K::Gait);
   sub_values("/gait_command/override", K::GaitOverride);
   sub_values("/pipeline/trick", K::Trick);
+  sub_values("/lidar/fan_ranges", K::Scan);
   subs_.push_back(create_subscription<geometry_msgs::msg::Twist>("/cmd_vel", 10, [this](geometry_msgs::msg::Twist::SharedPtr m) {
     Command c = at(K::CmdVel, steady_now());
     c.values = {m->linear.x, m->linear.y, m->angular.z};

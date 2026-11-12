@@ -42,9 +42,12 @@ class SafetyProcessor {
   // caused stays latched until released.
   void set_external_fault(const std::string& reason) { external_fault_ = reason; }
 
-  std::pair<bool, std::string> evaluate(const State& state, uint8_t protections, double now) const;
+  // tilt_limit, pitch_limit: the policy's own limits in degrees; 0 uses the global ones.
+  std::pair<bool, std::string> evaluate(const State& state, uint8_t protections, double now, double tilt_limit = 0.0,
+                                        double pitch_limit = 0.0) const;
   std::pair<Vec12, double> process(const std::optional<Vec12>& main, const std::optional<Vec12>& safety,
-                                   const State& state, uint8_t protections, double now);
+                                   const State& state, uint8_t protections, double now, double tilt_limit = 0.0,
+                                   double pitch_limit = 0.0);
   Vec12 clip_soft(const Vec12& targets) const;
   bool heartbeat_ok(double now) const;
 

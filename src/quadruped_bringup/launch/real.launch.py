@@ -17,6 +17,8 @@ def setup(context):
     )]
     if flag(context, "sensors"):
         actions.append(node("quadruped_real", "real_sensors", f"--interface={net_interface}" if net_interface else ""))
+        if flag(context, "lidar_fan"):
+            actions.append(node("quadruped_perception", "lidar_fan", f"--checkpoint={checkpoint}" if checkpoint else ""))
     if flag(context, "monitor"):
         actions.append(node("quadruped_drivers", "system_monitor"))
     actions += interface(context)
@@ -34,6 +36,7 @@ def generate_launch_description():
         arg("interface", "", "network interface for the Unitree SDK"),
         arg("joy", "false", "also start the gamepad teleop"),
         arg("sensors", "true", "lidar cloud to /lidar/points and the sensor TF"),
+        arg("lidar_fan", "true", "with sensors: the cloud as a lidar policy's ranges, if one is loaded or in policies.json"),
         arg("monitor", "true", "CPU/GPU/RAM/temperatures to /system_stats"),
         *reward_args(),
         OpaqueFunction(function=setup),

@@ -48,7 +48,7 @@ struct Command {
   enum class Kind {
     None, Mode, PoseCommand, PoseDuration, CmdVel, Trick, Gait, GaitOverride, Heartbeat, MaxTorque, TiltLimit,
     ForwardTiltLimit, RomMargin, WatchdogTimeout, SafetyReset, Estop, Numb, ReleaseEstop, ReleaseTrip,
-    RequestPolicy, AddPolicy, LoadError, Kp, Kd,
+    RequestPolicy, AddPolicy, LoadError, Kp, Kd, Scan,
   };
   Kind kind = Kind::None;
   std::string text, detail;

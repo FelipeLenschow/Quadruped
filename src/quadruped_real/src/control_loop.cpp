@@ -239,6 +239,7 @@ void ControlLoop::apply(Command& c, Snapshot& snap) {
       break;
     case K::AddPolicy: ctl.add_policy(c.text, std::move(*c.runner), c.entry); break;
     case K::LoadError: ctl.set_load_error(c.text, c.detail); break;
+    case K::Scan: scan_ = Eigen::Map<const Eigen::VectorXd>(c.values.data(), c.values.size()).cast<float>(); break;
     case K::Kp:
       if (c.value != cfg_.kp) {
         cfg_.kp = c.value;
@@ -316,6 +317,8 @@ void ControlLoop::check_health(Snapshot& snap) {
 qc::RawState ControlLoop::raw_state(Snapshot& snap) {
   const LowState& s = low_state_;
   qc::RawState raw;
+  raw.scan = std::move(scan_);
+  scan_.reset();
   for (int j = 0; j < 12; ++j) {
     raw.q[j] = s.motor_state()[kSdkToRos[j]].q();
     raw.dq[j] = s.motor_state()[kSdkToRos[j]].dq();

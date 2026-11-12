@@ -24,6 +24,7 @@ struct PolicyEntry {
   CommandMode commands = CommandMode::Velocity;
   double clock_hz = 0.0;
   int switches = 0;
+  double tilt_limit_deg = 0.0, pitch_limit_deg = 0.0;  // 0: the global limits
 };
 
 // command_slew.py.
@@ -132,6 +133,7 @@ class Controller {
   const Loaded* find(const std::string& name) const;
   void process_state(const RawState& raw, bool update_estimator);
   Vec12 step_policy(const std::string& name, const Eigen::VectorXd& commands);
+  bool scan_ready(const std::string& name, Eigen::VectorXd& command, double now);
   std::vector<double> trick_input(const PolicyEntry& entry, double now);
   void advance_policy_switch();
   void release_gait_override(double now);
@@ -157,6 +159,8 @@ class Controller {
   State state_;
   std::string mode_ = "pose";
   long step_counter_ = 0;
+  std::optional<double> scan_time_;
+  bool scan_fresh_ = true;
   Vec12 latest_targets_;
   std::optional<Vec12> last_measured_q_;
   bool pose_heartbeat_was_ok_ = false;

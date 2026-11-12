@@ -41,6 +41,7 @@ struct ControllerConfig {
   double mode_transition_duration = 3.0;
   double lin_accel = 0.0, lin_decel = 0.0, yaw_accel = 0.0, yaw_decel = 0.0;
   double cmd_timeout = 0.5;
+  double scan_timeout = 0.5;
   bool use_estimator = false;
   bool safety_switch = true;
   EstimatorParams estimator;
