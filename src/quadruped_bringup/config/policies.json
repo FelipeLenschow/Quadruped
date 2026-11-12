@@ -13,6 +13,18 @@
     "ClockRoughHelios": {
       "path": "IsaacLab_Tasks/Simple/logs/rsl_rl/clock_rough/ClockRoughHelios/model_29998.pt"
     },
+    "ScanImp": {
+      "path": "IsaacLab_Tasks/ClockScan/logs/rsl_rl/go2_clock_scan/ScanImp/model_40000.pt",
+      "protections": ["heartbeat", "tilt", "pitch"],
+      "tilt_limit_deg": 65,
+      "pitch_limit_deg": 60
+    },
+    "ScanHide": {
+      "path": "IsaacLab_Tasks/ClockScan/logs/rsl_rl/go2_clock_scan/ScanHide/model_42000.pt",
+      "protections": ["heartbeat", "tilt", "pitch"],
+      "tilt_limit_deg": 65,
+      "pitch_limit_deg": 60
+    },
     "Reco2": {
       "path": "IsaacLab_Tasks/Recovery/logs/rsl_rl/go2_recovery/Reco2/model_12998.pt",
       "protections": ["heartbeat"],

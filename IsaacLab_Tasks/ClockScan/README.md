@@ -230,6 +230,10 @@ between the two; 12 for a run that ended in the top block).
   front. Final tests, model_40000 / 40500 / 40999 (Scan 35000): pyramid 15-22 cm up and down 100% across, at most 2%
   fell; 0.8 m flight at 22 cm up 93 / 68 / 87% (91%), down 94 / 95 / 96% (91%); worst command cell 3.9 / 14.8 /
   3.1% fell (3.9%), mean 0.3 / 2.3 / 0.4% (0.6%).
+- **`ScanHide/model_42000.pt`**: ScanImp's model_40000 and 2000 iterations with `LIDAR_HIDE` (rays hidden as the
+  L1 misses them and filled as `lidar_fan` fills them). MuJoCo, the L1's pattern through `lidar_fan`, estimator,
+  narrow flight 22 cm: up and down 80 of 80 across (ScanImp 76 and 78 of 80); `mujoco/l1_compare.md`. The other
+  checkpoints of the run vary much at 22 cm. Not yet tested in Isaac.
 
 ## Evaluation and deploy
 
@@ -254,6 +258,27 @@ the real ones it got across 0 of 5 times on the narrow flight, so it uses the sc
 test: model_38000 all across, none fell; model_35000 and 39999 the same except the narrow flight down at 22 cm (2
 and 1 of 20 fell); model_31800 stopped on the narrow flight up at 22 cm (5 of 20 across, none fell). ScanImp:
 model_40000 and 40999 all across, none fell; model_40500 19 of 20 on the narrow flight up at 18 cm.
+
+On the real robot, `real.launch.py` starts `quadruped_perception`'s `lidar_fan` with `real_sensors`. It bins
+`/lidar/points` into the policy's fan on `/lidar/fan_ranges` at 50 Hz. Points are kept in the base frame and moved
+by the base's motion from `/odom/state_estimator` (the IMU's rotation change and the estimator's velocity, with its vertical part; no odom TF, whose height does not follow a climb). Each point is moved from its own time in the cloud. Each tick bins
+the new points and each ray's 3 nearest points from before (up to 0.5 s old, `window_s`; one L1 cloud is 0.07 s)
+into each ray's cone. A cone with any new point drops its older ones, and the ray takes the shortest range in its
+cone, as a ray's first hit. A ray with no point reads the surface of the
+4 nearest rays that have points: their mean height below the fan, as level ground in the world (from the IMU), met by this ray; a ray that does
+not go down in the world reads 3 m, as in training (the body hides the
+floor behind the robot from the L1; about 100 of the 576 rays are filled). With no points at all, a ray reads flat ground
+0.273 m below. Points behind a leg are dropped. `real_driver` gives the ranges to the
+controller. A lidar policy stands still on ranges older than `lidar_fan.timeout_s` (0.5 s) and holds the default
+pose before the first ones. The fan comes from the launcher's checkpoint, else from the first lidar policy in
+`policies.json` (`ScanImp`, model_40000). ScanImp's entry has no `rom` check: its calves go to -2.84 and -0.76 rad
+on 22 cm steps. It also has its own limits, `tilt_limit_deg` 65 and `pitch_limit_deg` 60: the base tilts to 55 deg,
+and 48 deg nose down. The global 30 deg tripped on every flight. MuJoCo checks: against the exact fan, the binned
+ranges from a random cloud are off by 3-5 mm (median), and by up to 2.7 m on 1% of rays, at step edges. Driven by
+binned ranges from 2000 rays per 0.1 s, ScanImp model_40000 got across 8 of 8 on both terrains, up and down, at
+18 cm, and on the narrow flight at 22 cm, none fell. The controller's soft target clip (90% of the
+joint range) cuts the front calves going down: at 22 cm, 4 to 7 of 8 across instead of 8 of 8; at 18 cm, all
+across. `stairs_mujoco` has no clip.
 
 The Isaac velocity sweep:
 
