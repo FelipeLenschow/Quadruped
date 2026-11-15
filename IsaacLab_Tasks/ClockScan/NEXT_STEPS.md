@@ -76,5 +76,16 @@ slowly on steps.
   up 11/16 and 10/16), so model_42000 can be a good point in a noisy run. In training the stair levels stay as
   ScanImp's, falls 2-3% (ScanImp 0.3-1.3%). Open: the Isaac final tests (`stair_eval.py`, `command_eval.py`) on
   model_42000. No LIO for a longer memory: the robot's memory is for the LLM.
+- Done: the grid fan from scratch (`CLOCK_SCAN_LIDAR_FAN=grid`: 21 x 17 rays to flat ground, x -0.5 to 1.0 m,
+  y +-0.6 m, 7.5 cm; hidden map `mdp/l1_hidden_grid.npy` from MuJoCo), seed 7: `ScanGrid` to 39999
+  (`logs/train_out/scratch_grid.log`), then `ScanGridLong`, model_39999 resumed to 49998 with `START_STAGE=3`, levels
+  12-15, `SAFETY_START_PHASE=3` (`logs/train_out/grid_more.log`). In MuJoCo with the L1 (ScanHide driving), the polar
+  fan had 16.4% of its rays hidden and 8.3% more than 20 cm off; this grid 19.9% and 9.5%, most hidden behind and
+  beside the rear hips. Deploy takes a grid fan from the `.qpol` (`grid_x`, `grid_y`, `grid_height`; `lidar_fan`'s
+  GridBins). Result: not better than ScanHide. MuJoCo, L1 pattern, estimator, narrow flight 22 cm, 16 trials, 40 s
+  (`ScanGridLong/mujoco/l1_compare.md`): model_46000 up 16/16 in 23.2 s, down 15/16; model_49000 up 15/16 in
+  20.9 s, down 16/16; ScanHide model_42000 up 16/16 in 16.2 s, down 16/16 in 13.7 s. The grid policies climb
+  slowly (about 0.2 m/s for a 0.4 m/s command), so with the 20 s default many trials time out near the top. Up at
+  22 cm varies much between checkpoints (0.38 to 1.00). All 18 cm tests pass on ScanGrid model_39999.
 - Robot standing on flat ground: the binned real ranges against the simulated ranges, within a few cm.
 - Real robot: flat ground, then one step, then a full flight, with a person or a harness beside it.

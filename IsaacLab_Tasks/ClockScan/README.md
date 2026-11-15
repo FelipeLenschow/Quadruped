@@ -137,7 +137,11 @@ Task: `Go2-Clock-Scan`
   (`CLOCK_SCAN_SCAN_LENGTH`, `_SCAN_WIDTH`, `_SCAN_RESOLUTION`), same values. The base-height reward and the critic's
   base height come from it.
 - **Lidar ranges (actor, `CLOCK_SCAN_ACTOR_SCAN=lidar`, the default):** what the L1 measures, so the top of a tall
-  step that its riser hides stays hidden. A fan of 16 x 36 = 576 rays from the L1's place on the base (x 0.289 m,
+  step that its riser hides stays hidden. Now a grid fan (`CLOCK_SCAN_LIDAR_FAN=grid`, the default): 357 rays from
+  the lidar to a 21 x 17 grid of points on flat ground 0.273 m below it, x -0.5 to 1.0 m and y +-0.6 m in the base
+  frame, every 7.5 cm (`_LIDAR_GRID_X0`, `_X1`, `_Y`, `_STEP`), with the same noise, stale rays and hidden rays
+  (`mdp/l1_hidden_grid.npy`, 19.9% hidden, most behind the hips); no ray reads the floor the trunk hides far behind
+  the robot. `CLOCK_SCAN_LIDAR_FAN=polar` gives the fan of the runs up to ScanHide: 16 x 36 = 576 rays from the L1's place on the base (x 0.289 m,
   z -0.047 m; config.yaml's `real_lidar`), turning with the whole base: 16 rows aimed at flat ground 0.07-1.3 m from
   the lidar (`CLOCK_SCAN_LIDAR_ROWS`, `_NEAR`, `_FAR`, `_HEIGHT`), 36 columns all around it, every 10 deg from -170
   to 180 (`_COLS`, `_AZIMUTH` 180; up to Lidar3: 21 columns over +-60 deg ahead, 336 rays, which never saw the edges
@@ -234,6 +238,12 @@ between the two; 12 for a run that ended in the top block).
   L1 misses them and filled as `lidar_fan` fills them). MuJoCo, the L1's pattern through `lidar_fan`, estimator,
   narrow flight 22 cm: up and down 80 of 80 across (ScanImp 76 and 78 of 80); `mujoco/l1_compare.md`. The other
   checkpoints of the run vary much at 22 cm. Not yet tested in Isaac.
+- **`ScanGrid/model_39999.pt`**: the grid fan (21 x 17 rays to flat ground, x -0.5 to 1.0 m, y +-0.6 m) from
+  scratch, seed 7. MuJoCo, L1, narrow flight 22 cm: up 0.69, down 1.00; all 18 cm tests 16/16;
+  `mujoco/l1_compare.md`.
+- **`ScanGridLong/model_46000.pt`, `model_49000.pt`**: ScanGrid's model_39999 and 10000 iterations more. Narrow
+  flight 22 cm, 40 s: 46000 up 16/16 (23.2 s), down 15/16; 49000 up 15/16 (20.9 s), down 16/16. Slower than
+  ScanHide (16.2 s up) and not more reliable; `mujoco/l1_compare.md`.
 
 ## Evaluation and deploy
 
