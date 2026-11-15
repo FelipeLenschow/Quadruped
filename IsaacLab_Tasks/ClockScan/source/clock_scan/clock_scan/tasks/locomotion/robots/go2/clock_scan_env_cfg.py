@@ -82,10 +82,10 @@ MAP_Y = _axis(-MAP_SIDE, MAP_SIDE, -MAP_FINE_SIDE, MAP_FINE_SIDE)
 ACTOR_SCAN = os.environ.get("CLOCK_SCAN_ACTOR_SCAN", "lidar")
 LIDAR_POS = (0.28945, 0.0, -0.046825)
 LIDAR_HEIGHT = _env("LIDAR_HEIGHT", 0.273)
-LIDAR_ROWS = int(_env("LIDAR_ROWS", 16))
+LIDAR_ROWS = int(_env("LIDAR_ROWS", 12))
 LIDAR_COLS = int(_env("LIDAR_COLS", 36))
 LIDAR_NEAR = _env("LIDAR_NEAR", 0.07)
-LIDAR_FAR = _env("LIDAR_FAR", 1.3)
+LIDAR_FAR = _env("LIDAR_FAR", 0.972)
 LIDAR_AZIMUTH = _env("LIDAR_AZIMUTH", 180.0)
 LIDAR_RANGE = _env("LIDAR_RANGE", 3.0)
 LIDAR_LAG = int(_env("LIDAR_LAG", 0))
@@ -99,11 +99,11 @@ LIDAR_HIDE_SCALE = _range("LIDAR_HIDE_SCALE", 0.5, 1.5)
 # each, as the error of the measured mount pose.
 LIDAR_MOUNT_POS = _env("LIDAR_MOUNT_POS", 0.01)
 LIDAR_MOUNT_ROT = _env("LIDAR_MOUNT_ROT", 1.0)
-# LIDAR_FAN "grid" (default): in place of the polar fan above, rays from the lidar to a grid of points on flat ground
+# LIDAR_FAN "grid" (ScanGrid): in place of the polar fan above, rays from the lidar to a grid of points on flat ground
 # LIDAR_HEIGHT below it, x LIDAR_GRID_X0 to LIDAR_GRID_X1 and y +-LIDAR_GRID_Y (base frame, m) every LIDAR_GRID_STEP m,
 # so no ray reads the floor that the trunk hides far behind the robot (mdp/l1_hidden_grid.npy its hidden map). "polar"
-# is the fan of Lidar4, Scan, ScanImp and ScanHide.
-LIDAR_FAN = os.environ.get("CLOCK_SCAN_LIDAR_FAN", "grid")
+# (default) is the fan of Lidar4 to ScanHide12; up to ScanHide 16 rows to 1.3 m, ScanHide12 the first 12 of them.
+LIDAR_FAN = os.environ.get("CLOCK_SCAN_LIDAR_FAN", "polar")
 LIDAR_GRID_X0 = _env("LIDAR_GRID_X0", -0.5)
 LIDAR_GRID_X1 = _env("LIDAR_GRID_X1", 1.0)
 LIDAR_GRID_Y = _env("LIDAR_GRID_Y", 0.6)

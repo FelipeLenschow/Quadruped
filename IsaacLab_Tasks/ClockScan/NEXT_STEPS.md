@@ -87,5 +87,11 @@ slowly on steps.
   20.9 s, down 16/16; ScanHide model_42000 up 16/16 in 16.2 s, down 16/16 in 13.7 s. The grid policies climb
   slowly (about 0.2 m/s for a 0.4 m/s command), so with the 20 s default many trials time out near the top. Up at
   22 cm varies much between checkpoints (0.38 to 1.00). All 18 cm tests pass on ScanGrid model_39999.
+- Done: ScanHide12, model_49000 (ScanHide model_42000, the 4 outer rings removed: `CLOCK_SCAN_LIDAR_ROWS=12`,
+  `_LIDAR_FAR=0.972`, now the default; resumed to 51999 with `START_STAGE=3`, levels 12-15, `SAFETY_START_PHASE=3`;
+  `logs/train_out/scanhide12.log`). The checkpoint was cut from 632 to 488 inputs, the cut rings' weights times
+  their flat-ground ranges added to the first bias (`ScanHide12_init`, not kept in git). MuJoCo, L1, estimator,
+  narrow flight 22 cm, 40 s, 4 seeds of 16: model_49000 up 64/64, down 64/64; model_51000 62/64, 63/64 and the
+  fastest up (14.7 s, ScanHide 16.2 s). Open: the Isaac final tests on model_49000.
 - Robot standing on flat ground: the binned real ranges against the simulated ranges, within a few cm.
 - Real robot: flat ground, then one step, then a full flight, with a person or a harness beside it.

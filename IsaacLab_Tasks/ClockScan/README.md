@@ -137,17 +137,15 @@ Task: `Go2-Clock-Scan`
   (`CLOCK_SCAN_SCAN_LENGTH`, `_SCAN_WIDTH`, `_SCAN_RESOLUTION`), same values. The base-height reward and the critic's
   base height come from it.
 - **Lidar ranges (actor, `CLOCK_SCAN_ACTOR_SCAN=lidar`, the default):** what the L1 measures, so the top of a tall
-  step that its riser hides stays hidden. Now a grid fan (`CLOCK_SCAN_LIDAR_FAN=grid`, the default): 357 rays from
-  the lidar to a 21 x 17 grid of points on flat ground 0.273 m below it, x -0.5 to 1.0 m and y +-0.6 m in the base
-  frame, every 7.5 cm (`_LIDAR_GRID_X0`, `_X1`, `_Y`, `_STEP`), with the same noise, stale rays and hidden rays
-  (`mdp/l1_hidden_grid.npy`, 19.9% hidden, most behind the hips); no ray reads the floor the trunk hides far behind
-  the robot. `CLOCK_SCAN_LIDAR_FAN=polar` gives the fan of the runs up to ScanHide: 16 x 36 = 576 rays from the L1's place on the base (x 0.289 m,
-  z -0.047 m; config.yaml's `real_lidar`), turning with the whole base: 16 rows aimed at flat ground 0.07-1.3 m from
-  the lidar (`CLOCK_SCAN_LIDAR_ROWS`, `_NEAR`, `_FAR`, `_HEIGHT`), 36 columns all around it, every 10 deg from -170
+  step that its riser hides stays hidden. A polar fan (`CLOCK_SCAN_LIDAR_FAN=polar`, the default): 12 x 36 = 432 rays
+  from the L1's place on the base (x 0.289 m,
+  z -0.047 m; config.yaml's `real_lidar`), turning with the whole base: 12 rows aimed at flat ground 0.07-0.972 m
+  from the lidar (up to ScanHide: 16 rows to 1.3 m, 576 rays; the 4 outer rings read mostly filled floor behind the
+  robot) (`CLOCK_SCAN_LIDAR_ROWS`, `_NEAR`, `_FAR`, `_HEIGHT`), 36 columns all around it, every 10 deg from -170
   to 180 (`_COLS`, `_AZIMUTH` 180; up to Lidar3: 21 columns over +-60 deg ahead, 336 rays, which never saw the edges
   beside the legs). The rays hit only the ground, not the robot: the real L1 sees the floor all around the robot,
   down to a few cm from the legs (`Mcap/Recordings/lio_bag`). Each value is the range from the lidar, clipped to 3 m
-  (no hit reads 3 m, `_RANGE`), the current scan only: 576 inputs (`CLOCK_SCAN_LIDAR_LAG=5` adds the scan 0.1 s back, as the 2026-10-30/31
+  (no hit reads 3 m, `_RANGE`), the current scan only: 432 inputs (`CLOCK_SCAN_LIDAR_LAG=5` adds the scan 0.1 s back, as the 2026-10-30/31
   runs had). Per ray and step: +-0.02 m noise (`_NOISE`), and a
   reading 1-10 steps older (`_STALE_STEPS`) with a probability drawn per episode from 0 to 30% (`_STALE`): an L1 bin
   keeps its last return. Empty rays first read 3 m at 15%; that policy (2026-10-30 run, 21300) climbed 12 cm 94% of
@@ -155,8 +153,11 @@ Task: `Go2-Clock-Scan`
   Per episode, the mount is moved +-1 cm and turned +-1 deg on each axis (`_MOUNT_POS`, `_MOUNT_ROT`;
   `mdp.randomize_ray_mount`), as the error of the measured mount; the ranges are from the moved mount.
   `mdp.lidar_ranges`, pattern `mdp.FanPatternCfg`; the mirror swaps the columns. Plan and deploy notes:
-  `LIDAR_RANGES_PLAN.md`.
-- **Actor input:** 632 = Simple's 48-wide layout, the clock (8), the lidar ranges (576), in this order (379 with the
+  `LIDAR_RANGES_PLAN.md`. `CLOCK_SCAN_LIDAR_FAN=grid` (ScanGrid): 357 rays from the lidar to a 21 x 17 grid of points
+  on flat ground 0.273 m below it, x -0.5 to 1.0 m and y +-0.6 m in the base frame, every 7.5 cm (`_LIDAR_GRID_X0`,
+  `_X1`, `_Y`, `_STEP`), hidden map `mdp/l1_hidden_grid.npy`.
+- **Actor input:** 488 = Simple's 48-wide layout, the clock (8), the lidar ranges (432), in this order (632 with the
+  16-ring fan up to ScanHide; 379 with the
   height map; 392 with the old 336-ray fan of Lidar1-3: `CLOCK_SCAN_LIDAR_COLS=21 CLOCK_SCAN_LIDAR_AZIMUTH=60`). The critic gets 592 (the head clearance last). To run or evaluate a height-map checkpoint (Stairs1),
   set `CLOCK_SCAN_ACTOR_SCAN=map`. To resume a height-map checkpoint into the lidar actor, set
   `CLOCK_SCAN_NEW_INPUTS_FROM=56`: the first 56 inputs keep their weights, the lidar ones start at zero.
@@ -244,10 +245,15 @@ between the two; 12 for a run that ended in the top block).
 - **`ScanGridLong/model_46000.pt`, `model_49000.pt`**: ScanGrid's model_39999 and 10000 iterations more. Narrow
   flight 22 cm, 40 s: 46000 up 16/16 (23.2 s), down 15/16; 49000 up 15/16 (20.9 s), down 16/16. Slower than
   ScanHide (16.2 s up) and not more reliable; `mujoco/l1_compare.md`.
+- **`ScanHide12/model_49000.pt`**: ScanHide's model_42000 with the 4 outer rings removed (12 x 36 rays, 0.07-0.972 m)
+  and 10000 iterations more. The actor's input weights of those rings went into the first layer's bias at their
+  flat-ground ranges (without this the bias moved by up to 27 and the reward fell to -43 in 40 iterations).
+  MuJoCo, L1, narrow flight 22 cm, 40 s: up 64/64 and down 64/64 across (4 seeds), 18.0 s up; model_51000 62/64 and
+  63/64, 14.7 s up (ScanHide 16.2 s); `mujoco/l1_compare.md`.
 
 ## Evaluation and deploy
 
-The C++ policy runner (`quadruped_control`) reads the 576 lidar ranges after the clock; the export writes the fan
+The C++ policy runner (`quadruped_control`) reads the lidar ranges after the clock; the export writes the fan
 (mount, angles, 3 m) into the `.qpol`. MuJoCo casts the same fan (`quadruped_drivers/lidar_fan.py`, floor and
 terrain only), and `terrain.py` has `stairs` (6 steps up, a 2 m platform, 6 steps down, 3 m wide) and `narrow`
 (15 steps, 0.8 m, open sides, up to an upper floor). The sim2sim stairs test, with no ROS (in the container,
