@@ -227,8 +227,14 @@ PolicySpec PolicySpec::from_file(const std::string& path) {
     LidarFan f;
     const auto pos = l["pos"].as<std::vector<float>>();
     f.pos = Vec3f(pos.at(0), pos.at(1), pos.at(2));
-    f.depressions = l["depressions"].as<std::vector<float>>();
-    f.azimuths = l["azimuths"].as<std::vector<float>>();
+    if (l["grid_x"]) {
+      f.grid_x = l["grid_x"].as<std::vector<float>>();
+      f.grid_y = l["grid_y"].as<std::vector<float>>();
+      f.grid_height = l["grid_height"].as<float>();
+    } else {
+      f.depressions = l["depressions"].as<std::vector<float>>();
+      f.azimuths = l["azimuths"].as<std::vector<float>>();
+    }
     f.max_range = l["max_range"].as<float>(3.0f);
     spec.lidar = f;
   }

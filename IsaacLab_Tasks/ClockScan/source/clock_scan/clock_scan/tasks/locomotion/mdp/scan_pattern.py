@@ -41,3 +41,22 @@ class FanPatternCfg(PatternBaseCfg):
     func: Callable = fan_pattern
     depressions: tuple[float, ...] = MISSING
     azimuths: tuple[float, ...] = MISSING
+
+
+def grid_fan_pattern(cfg: GridFanPatternCfg, device: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Rays from one point (the sensor) to the grid x_points by y_points (sensor frame, m) on flat ground height m
+    below it, x outer, y inner."""
+    x = torch.tensor(cfg.x_points, device=device)
+    y = torch.tensor(cfg.y_points, device=device)
+    gx, gy = torch.meshgrid(x, y, indexing="ij")
+    v = torch.stack([gx, gy, torch.full_like(gx, -cfg.height)], dim=-1).reshape(-1, 3)
+    directions = v / torch.linalg.norm(v, dim=-1, keepdim=True)
+    return torch.zeros_like(directions), directions
+
+
+@configclass
+class GridFanPatternCfg(PatternBaseCfg):
+    func: Callable = grid_fan_pattern
+    x_points: tuple[float, ...] = MISSING
+    y_points: tuple[float, ...] = MISSING
+    height: float = MISSING

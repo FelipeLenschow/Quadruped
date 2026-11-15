@@ -99,6 +99,17 @@ LIDAR_HIDE_SCALE = _range("LIDAR_HIDE_SCALE", 0.5, 1.5)
 # each, as the error of the measured mount pose.
 LIDAR_MOUNT_POS = _env("LIDAR_MOUNT_POS", 0.01)
 LIDAR_MOUNT_ROT = _env("LIDAR_MOUNT_ROT", 1.0)
+# LIDAR_FAN "grid" (default): in place of the polar fan above, rays from the lidar to a grid of points on flat ground
+# LIDAR_HEIGHT below it, x LIDAR_GRID_X0 to LIDAR_GRID_X1 and y +-LIDAR_GRID_Y (base frame, m) every LIDAR_GRID_STEP m,
+# so no ray reads the floor that the trunk hides far behind the robot (mdp/l1_hidden_grid.npy its hidden map). "polar"
+# is the fan of Lidar4, Scan, ScanImp and ScanHide.
+LIDAR_FAN = os.environ.get("CLOCK_SCAN_LIDAR_FAN", "grid")
+LIDAR_GRID_X0 = _env("LIDAR_GRID_X0", -0.5)
+LIDAR_GRID_X1 = _env("LIDAR_GRID_X1", 1.0)
+LIDAR_GRID_Y = _env("LIDAR_GRID_Y", 0.6)
+LIDAR_GRID_STEP = _env("LIDAR_GRID_STEP", 0.075)
+LIDAR_GRID_XS = tuple(round(float(v), 4) for v in np.arange(LIDAR_GRID_X0, LIDAR_GRID_X1 + 1e-6, LIDAR_GRID_STEP))
+LIDAR_GRID_YS = tuple(round(float(v), 4) for v in np.arange(-LIDAR_GRID_Y, LIDAR_GRID_Y + 1e-6, LIDAR_GRID_STEP))
 LIDAR_DEPRESSIONS = tuple(
     round(float(np.degrees(np.arctan2(LIDAR_HEIGHT, d))), 3) for d in np.linspace(LIDAR_NEAR, LIDAR_FAR, LIDAR_ROWS)
 )
@@ -464,7 +475,15 @@ class RobotSceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/Robot/base",
         offset=RayCasterCfg.OffsetCfg(pos=LIDAR_POS),
         ray_alignment="base",
-        pattern_cfg=mdp.FanPatternCfg(depressions=LIDAR_DEPRESSIONS, azimuths=LIDAR_AZIMUTHS),
+        pattern_cfg=(
+            mdp.GridFanPatternCfg(
+                x_points=tuple(round(x - LIDAR_POS[0], 5) for x in LIDAR_GRID_XS),
+                y_points=tuple(round(y - LIDAR_POS[1], 5) for y in LIDAR_GRID_YS),
+                height=LIDAR_HEIGHT,
+            )
+            if LIDAR_FAN == "grid"
+            else mdp.FanPatternCfg(depressions=LIDAR_DEPRESSIONS, azimuths=LIDAR_AZIMUTHS)
+        ),
         max_distance=LIDAR_RANGE,
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
@@ -703,8 +722,13 @@ class ObservationsCfg:
                 "noise": LIDAR_NOISE,
                 "stale_max": LIDAR_STALE,
                 "stale_steps": LIDAR_STALE_STEPS,
-                "hide_map": os.path.join(os.path.dirname(mdp.__file__), "l1_hidden.npy") if LIDAR_HIDE else None,
-                "fan_shape": (LIDAR_ROWS, LIDAR_COLS),
+                "hide_map": os.path.join(
+                    os.path.dirname(mdp.__file__), "l1_hidden_grid.npy" if LIDAR_FAN == "grid" else "l1_hidden.npy"
+                )
+                if LIDAR_HIDE
+                else None,
+                "fan_shape": (len(LIDAR_GRID_XS), len(LIDAR_GRID_YS)) if LIDAR_FAN == "grid" else (LIDAR_ROWS, LIDAR_COLS),
+                "circular": LIDAR_FAN != "grid",
                 "hide_tau": LIDAR_HIDE_TAU,
                 "hide_scale": LIDAR_HIDE_SCALE,
             },

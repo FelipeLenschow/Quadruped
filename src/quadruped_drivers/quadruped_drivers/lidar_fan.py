@@ -1,8 +1,9 @@
 """ClockScan's actor lidar in MuJoCo: ranges along the policy's fixed fan of rays (quadruped_control.LidarFan).
 
 The rays start at the fan's pos in the base frame and turn with the whole base, rows by depression and columns by
-azimuth (the order Isaac Lab's fan_pattern makes). They hit only geom group 0 (the floor and terrain), as the
-training rays hit only the ground; no hit within max_range reads max_range.
+azimuth (the order Isaac Lab's fan_pattern makes), or to the grid of a grid fan (grid_fan_pattern's order). They
+hit only geom group 0 (the floor and terrain), as the training rays hit only the ground; no hit within max_range
+reads max_range.
 """
 
 import numpy as np
@@ -15,10 +16,16 @@ class LidarFan:
         self.body = model.body(body).id
         self.pos = np.asarray(fan.pos, dtype=np.float64)
         self.max_range = float(fan.max_range)
-        dep = np.radians(np.asarray(fan.depressions, dtype=np.float64))
-        az = np.radians(np.asarray(fan.azimuths, dtype=np.float64))
-        d, a = np.meshgrid(dep, az, indexing="ij")
-        self.dirs = np.stack([np.cos(d) * np.cos(a), np.cos(d) * np.sin(a), -np.sin(d)], axis=-1).reshape(-1, 3)
+        if getattr(fan, "grid", False):
+            gx, gy = np.meshgrid(np.asarray(fan.grid_x, dtype=np.float64) - self.pos[0],
+                                 np.asarray(fan.grid_y, dtype=np.float64) - self.pos[1], indexing="ij")
+            v = np.stack([gx, gy, np.full(gx.shape, -float(fan.grid_height))], axis=-1).reshape(-1, 3)
+            self.dirs = v / np.linalg.norm(v, axis=1, keepdims=True)
+        else:
+            dep = np.radians(np.asarray(fan.depressions, dtype=np.float64))
+            az = np.radians(np.asarray(fan.azimuths, dtype=np.float64))
+            d, a = np.meshgrid(dep, az, indexing="ij")
+            self.dirs = np.stack([np.cos(d) * np.cos(a), np.cos(d) * np.sin(a), -np.sin(d)], axis=-1).reshape(-1, 3)
         self.n = len(self.dirs)
         self.group = np.array([1, 0, 0, 0, 0, 0], dtype=np.uint8)
         self.geomid = np.zeros(self.n, dtype=np.int32)

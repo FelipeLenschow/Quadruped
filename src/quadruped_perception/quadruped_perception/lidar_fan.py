@@ -1,7 +1,7 @@
 """Lidar fan: the lidar cloud as the ranges a lidar policy (ClockScan) was trained on, on /lidar/fan_ranges.
 
 The policy's fan (from its .qpol) is rays from a fixed point in the base frame, rows by depression and columns by
-azimuth, turning with the whole base. Points stay in the base frame: each /odom/state_estimator message moves the
+azimuth (or, for a grid fan, to a grid of points on flat ground: GridBins), turning with the whole base. Points stay in the base frame: each /odom/state_estimator message moves the
 kept ones by the base's motion since the last (the IMU's rotation change and the estimator's velocity, with its
 vertical part; the odom TF's height is the base above the stance feet, which does not follow a climb). At rate_hz
 the new points and each ray's KEEP nearest (while younger than window_s) are binned into each ray's cone (half the
@@ -68,6 +68,27 @@ class FanBins:
         self.dirs = np.stack([np.cos(d) * np.cos(a), np.cos(d) * np.sin(a), -np.sin(d)], -1).reshape(-1, 3)
         self.prior = np.minimum(prior_height / np.maximum(-self.dirs[:, 2], 1e-3), self.max_range).astype(np.float32)
 
+    def _rays(self, v, r):
+        """Each point's ray (v from pos, r its length) and whether it is in one."""
+        dep = np.degrees(np.arcsin(np.clip(-v[:, 2] / r, -1.0, 1.0)))
+        az = np.degrees(np.arctan2(v[:, 1], v[:, 0]))
+        if self.circular:
+            az = (az - self.az_edges[0]) % 360.0 + self.az_edges[0]
+        i = np.searchsorted(self.dep_edges, dep) - 1
+        j = np.searchsorted(self.az_edges, az) - 1
+        ok = (i >= 0) & (i < len(self.dep)) & (j >= 0) & (j < len(self.az))
+        i, j = np.clip(i, 0, len(self.dep) - 1), np.clip(j, 0, len(self.az) - 1)
+        return ok, self.dep_order[i] * self.n_az + self.az_order[j]
+
+    def _d2(self, rays, src_rays):
+        """Squared grid distance between rays and src_rays."""
+        row, col = np.divmod(rays, self.n_az)
+        srow, scol = np.divmod(src_rays, self.n_az)
+        dc = np.abs(self.az_rank[col][:, None] - self.az_rank[scol][None, :])
+        if self.circular:
+            dc = np.minimum(dc, self.n_az - dc)
+        return (self.dep_rank[row][:, None] - self.dep_rank[srow][None, :]) ** 2 + dc ** 2
+
     def update(self, pts, keep=1, new=None):
         """Range per ray (NaN with no point): the shortest in its cone, where a cone with any new point (mask over
         pts) drops its older ones. picked, picked_rays: each ray's point; kept: up to keep nearest per ray."""
@@ -77,14 +98,8 @@ class FanBins:
         r = np.linalg.norm(v, axis=1)
         idx = np.flatnonzero(r > 1e-3)
         v, r = v[idx], r[idx]
-        dep = np.degrees(np.arcsin(np.clip(-v[:, 2] / r, -1.0, 1.0)))
-        az = np.degrees(np.arctan2(v[:, 1], v[:, 0]))
-        if self.circular:
-            az = (az - self.az_edges[0]) % 360.0 + self.az_edges[0]
-        i = np.searchsorted(self.dep_edges, dep) - 1
-        j = np.searchsorted(self.az_edges, az) - 1
-        ok = (i >= 0) & (i < len(self.dep)) & (j >= 0) & (j < len(self.az))
-        idx, r, ray = idx[ok], r[ok], self.dep_order[i[ok]] * self.n_az + self.az_order[j[ok]]
+        ok, ray = self._rays(v, r)
+        idx, r, ray = idx[ok], r[ok], ray[ok]
         if new is not None:
             fresh = new[idx]
             ok = fresh | ~np.isin(ray, ray[fresh])
@@ -102,12 +117,7 @@ class FanBins:
     def fill(self, rays, src_rays, src_pts, up=(0.0, 0.0, 1.0), k=4):
         """Ranges for rays from the k nearest src_rays (grid distance): their points' mean height below the fan along
         up (world up in the base frame), as a level plane met by each ray."""
-        row, col = np.divmod(rays, self.n_az)
-        srow, scol = np.divmod(src_rays, self.n_az)
-        dc = np.abs(self.az_rank[col][:, None] - self.az_rank[scol][None, :])
-        if self.circular:
-            dc = np.minimum(dc, self.n_az - dc)
-        d2 = (self.dep_rank[row][:, None] - self.dep_rank[srow][None, :]) ** 2 + dc ** 2
+        d2 = self._d2(rays, src_rays)
         k = min(k, len(src_rays))
         near = np.argpartition(d2, k - 1, axis=1)[:, :k]
         w = 1.0 / np.maximum(np.take_along_axis(d2, near, axis=1), 1)
@@ -116,6 +126,36 @@ class FanBins:
         down = -(self.dirs[rays] @ up)
         hit = (h > 0.0) & (down > 1e-3)
         return np.where(hit, np.minimum(h / np.where(hit, down, 1.0), self.max_range), self.max_range)
+
+
+class GridBins(FanBins):
+    """FanBins for a grid fan: rays from pos to a grid of points (xs by ys, base frame) on flat ground height below
+    pos, flat index row (x) * len(ys) + column (y). A ray's cone is the directions that meet that ground in its cell."""
+
+    def __init__(self, pos, xs, ys, height, max_range):
+        self.pos = np.asarray(pos, dtype=np.float64)
+        self.max_range, self.height = float(max_range), float(height)
+        self.xs, self.ys = np.sort(np.asarray(xs, dtype=np.float64)), np.sort(np.asarray(ys, dtype=np.float64))
+        self.n_az = len(self.ys)
+        self.x_edges, self.y_edges = _edges(self.xs, False), _edges(self.ys, False)
+        gx, gy = np.meshgrid(self.xs - self.pos[0], self.ys - self.pos[1], indexing="ij")
+        v = np.stack([gx, gy, np.full(gx.shape, -self.height)], -1).reshape(-1, 3)
+        n = np.linalg.norm(v, axis=1)
+        self.dirs = v / n[:, None]
+        self.prior = np.minimum(n, self.max_range).astype(np.float32)
+
+    def _rays(self, v, r):
+        down = -v[:, 2] > 1e-3
+        s = self.height / np.where(down, -v[:, 2], 1.0)
+        i = np.searchsorted(self.x_edges, self.pos[0] + v[:, 0] * s) - 1
+        j = np.searchsorted(self.y_edges, self.pos[1] + v[:, 1] * s) - 1
+        ok = down & (i >= 0) & (i < len(self.xs)) & (j >= 0) & (j < len(self.ys))
+        return ok, np.clip(i, 0, len(self.xs) - 1) * self.n_az + np.clip(j, 0, len(self.ys) - 1)
+
+    def _d2(self, rays, src_rays):
+        row, col = np.divmod(rays, self.n_az)
+        srow, scol = np.divmod(src_rays, self.n_az)
+        return (row[:, None] - srow[None, :]) ** 2 + (col[:, None] - scol[None, :]) ** 2
 
 
 class FanTracker:
@@ -161,11 +201,14 @@ class FanTracker:
 class FanInput:
     """lidar_fan without ROS (also stairs_mujoco's): clouds, base motion and leg links in, the fan's ranges out."""
 
-    def __init__(self, fan, cfg):
+    def __init__(self, fan, cfg, bins=None):
         self.window = float(cfg.get("window_s", 0.5))
         self.timeout = float(cfg.get("cloud_timeout_s", 0.5))
         self.leg_radius = float(cfg.get("leg_radius", 0.045))
-        self.bins = FanBins(fan.pos, fan.depressions, fan.azimuths, fan.max_range, float(cfg.get("prior_height", 0.273)))
+        if bins is None and getattr(fan, "grid", False):
+            bins = GridBins(fan.pos, fan.grid_x, fan.grid_y, fan.grid_height, fan.max_range)
+        self.bins = bins or FanBins(fan.pos, fan.depressions, fan.azimuths, fan.max_range,
+                                    float(cfg.get("prior_height", 0.273)))
         self.tracker = FanTracker(self.bins, self.window)
         self.links = None
         self.last_cloud = self.last_motion = None

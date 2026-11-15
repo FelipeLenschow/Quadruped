@@ -202,12 +202,16 @@ def _lidar(checkpoint, env):
     if sensor.get("ray_alignment") != "base" or min(abs(abs(rot[0]) - 1.0), abs(abs(rot[-1]) - 1.0)) > 1e-6:
         raise ValueError(f"{checkpoint}: the lidar must be aligned to the base with no mount rotation.")
     pattern = sensor.get("pattern_cfg") or {}
-    return {
-        "pos": [float(v) for v in offset.get("pos") or (0.0, 0.0, 0.0)],
-        "depressions": [float(v) for v in pattern["depressions"]],
-        "azimuths": [float(v) for v in pattern["azimuths"]],
-        "max_range": float(params.get("max_range", sensor.get("max_distance", 3.0))),
-    }
+    pos = [float(v) for v in offset.get("pos") or (0.0, 0.0, 0.0)]
+    fan = {"pos": pos, "max_range": float(params.get("max_range", sensor.get("max_distance", 3.0)))}
+    if "x_points" in pattern:
+        fan["grid_x"] = [float(v) + pos[0] for v in pattern["x_points"]]
+        fan["grid_y"] = [float(v) + pos[1] for v in pattern["y_points"]]
+        fan["grid_height"] = float(pattern["height"])
+    else:
+        fan["depressions"] = [float(v) for v in pattern["depressions"]]
+        fan["azimuths"] = [float(v) for v in pattern["azimuths"]]
+    return fan
 
 
 def read_checkpoint(checkpoint, name=""):

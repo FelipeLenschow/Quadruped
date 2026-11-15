@@ -58,6 +58,10 @@ PYBIND11_MODULE(_core, m) {
       .def_readonly("pos", &LidarFan::pos)
       .def_readonly("depressions", &LidarFan::depressions)
       .def_readonly("azimuths", &LidarFan::azimuths)
+      .def_readonly("grid_x", &LidarFan::grid_x)
+      .def_readonly("grid_y", &LidarFan::grid_y)
+      .def_readonly("grid_height", &LidarFan::grid_height)
+      .def_property_readonly("grid", &LidarFan::grid)
       .def_readonly("max_range", &LidarFan::max_range)
       .def_property_readonly("rays", &LidarFan::rays);
 

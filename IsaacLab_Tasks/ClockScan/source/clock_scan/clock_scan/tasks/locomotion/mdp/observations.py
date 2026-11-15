@@ -121,9 +121,10 @@ class lidar_ranges(ManagerTermBase):
     +-noise m.
 
     With hide_map (a .npy of one probability per ray: how often the real L1 has no point for it, as deploy's
-    lidar_fan measured it in MuJoCo, mostly behind the robot where the body hides the floor), each ray is hidden or
-    seen in a state that lasts hide_tau s on average, hidden with that probability times a factor drawn per episode
-    from hide_scale. A hidden ray reads what lidar_fan gives it: the 4 nearest seen rays (grid distance, weight
+    lidar_fan measured it in MuJoCo, mostly behind the robot where the body hides the floor; of a map with more rows,
+    the nearest ones), each ray is hidden or seen in a state that lasts hide_tau s on average, hidden with that
+    probability times a factor drawn per episode from hide_scale. A hidden ray reads what lidar_fan gives it: the 4
+    nearest seen rays (grid distance over fan_shape, its columns wrapping around if circular, weight
     1 / distance^2), their points' mean depth below the lidar, as level ground met by this ray, or max_range if
     the ray does not go down."""
 
@@ -143,12 +144,16 @@ class lidar_ranges(ManagerTermBase):
             import numpy as np
 
             self._hide = torch.tensor(np.load(p["hide_map"]), dtype=torch.float32, device=env.device)
+            if len(self._hide) > rays and len(self._hide) % p["fan_shape"][1] == 0:
+                self._hide = self._hide[:rays]
             if len(self._hide) != rays:
                 raise ValueError(f"hide_map has {len(self._hide)} rays, the lidar {rays}")
             rows, cols = p["fan_shape"]
             r, c = torch.arange(rays, device=env.device).div(cols, rounding_mode="floor"), torch.arange(rays, device=env.device) % cols
             dc = (c.view(-1, 1) - c.view(1, -1)).abs()
-            d2 = (r.view(-1, 1) - r.view(1, -1)) ** 2 + torch.minimum(dc, cols - dc) ** 2
+            if p.get("circular", True):
+                dc = torch.minimum(dc, cols - dc)
+            d2 = (r.view(-1, 1) - r.view(1, -1)) ** 2 + dc ** 2
             d2.fill_diagonal_(10**6)
             self._nbr_d2, self._nbr = torch.sort(d2.float(), dim=1)
             self._nbr_d2, self._nbr = self._nbr_d2[:, :48], self._nbr[:, :48]
@@ -177,6 +182,7 @@ class lidar_ranges(ManagerTermBase):
         stale_steps: int = 0,
         hide_map: str | None = None,
         fan_shape: tuple[int, int] | None = None,
+        circular: bool = True,
         hide_tau: float = 0.5,
         hide_scale: tuple[float, float] = (1.0, 1.0),
     ) -> torch.Tensor:
