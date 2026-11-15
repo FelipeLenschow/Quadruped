@@ -74,8 +74,7 @@ slowly on steps.
   up 76/80 (1 fell), down 78/80 (2 fell). model_42000 is also 16/16 on all six tests with the L1 and with the exact
   fan. The other checkpoints vary much at 22 cm (model_44000 up 1/16, model_45999 up 12/16, model_41500 and 42500
   up 11/16 and 10/16), so model_42000 can be a good point in a noisy run. In training the stair levels stay as
-  ScanImp's, falls 2-3% (ScanImp 0.3-1.3%). Open: the Isaac final tests (`stair_eval.py`, `command_eval.py`) on
-  model_42000. No LIO for a longer memory: the robot's memory is for the LLM.
+  ScanImp's, falls 2-3% (ScanImp 0.3-1.3%). Isaac final tests: see ScanHide12 below. No LIO for a longer memory: the robot's memory is for the LLM.
 - Done: the grid fan from scratch (`CLOCK_SCAN_LIDAR_FAN=grid`: 21 x 17 rays to flat ground, x -0.5 to 1.0 m,
   y +-0.6 m, 7.5 cm; hidden map `mdp/l1_hidden_grid.npy` from MuJoCo), seed 7: `ScanGrid` to 39999
   (`logs/train_out/scratch_grid.log`), then `ScanGridLong`, model_39999 resumed to 49998 with `START_STAGE=3`, levels
@@ -92,6 +91,9 @@ slowly on steps.
   `logs/train_out/scanhide12.log`). The checkpoint was cut from 632 to 488 inputs, the cut rings' weights times
   their flat-ground ranges added to the first bias (`ScanHide12_init`, not kept in git). MuJoCo, L1, estimator,
   narrow flight 22 cm, 40 s, 4 seeds of 16: model_49000 up 64/64, down 64/64; model_51000 62/64, 63/64 and the
-  fastest up (14.7 s, ScanHide 16.2 s). Open: the Isaac final tests on model_49000.
+  fastest up (14.7 s, ScanHide 16.2 s). Isaac final tests (`final/`, hidden rays on), 0.8 m flight at 22 cm:
+  model_49000 up 94.5% across, down 89.5% (4.7% fell); ScanHide model_42000 up 90%, down 99% (0.4% fell); worst
+  command cell 13% against 8%. So ScanHide (16 rings) stays the pick: the outer rings see the steps far ahead
+  going down. Next idea: 16 rings ahead and 12 behind.
 - Robot standing on flat ground: the binned real ranges against the simulated ranges, within a few cm.
 - Real robot: flat ground, then one step, then a full flight, with a person or a harness beside it.

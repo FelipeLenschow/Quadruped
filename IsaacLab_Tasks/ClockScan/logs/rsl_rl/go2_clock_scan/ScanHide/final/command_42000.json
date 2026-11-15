@@ -1,0 +1,585 @@
+{
+ "checkpoint": "logs/rsl_rl/go2_clock_scan/ScanHide/model_42000.pt",
+ "seconds": 15.0,
+ "approach": 0.4,
+ "switch_max": 10.0,
+ "flight_width": 0.8,
+ "results": [
+  {
+   "command": "x=0.4",
+   "terrain": "pyramid down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 1.058
+  },
+  {
+   "command": "x=0.4",
+   "terrain": "pyramid down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 1.065
+  },
+  {
+   "command": "x=0.4",
+   "terrain": "pyramid up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 1.096
+  },
+  {
+   "command": "x=0.4",
+   "terrain": "pyramid up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 1.1
+  },
+  {
+   "command": "x=0.4",
+   "terrain": "narrow down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 1.045
+  },
+  {
+   "command": "x=0.4",
+   "terrain": "narrow down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 1.071
+  },
+  {
+   "command": "x=0.4",
+   "terrain": "narrow up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.999
+  },
+  {
+   "command": "x=0.4",
+   "terrain": "narrow up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 1.025
+  },
+  {
+   "command": "x=0.6",
+   "terrain": "pyramid down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.997
+  },
+  {
+   "command": "x=0.6",
+   "terrain": "pyramid down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.008,
+   "fell_before": 0.0,
+   "followed": 1.009
+  },
+  {
+   "command": "x=0.6",
+   "terrain": "pyramid up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.999
+  },
+  {
+   "command": "x=0.6",
+   "terrain": "pyramid up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.008,
+   "fell_before": 0.0,
+   "followed": 1.008
+  },
+  {
+   "command": "x=0.6",
+   "terrain": "narrow down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.802
+  },
+  {
+   "command": "x=0.6",
+   "terrain": "narrow down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.827
+  },
+  {
+   "command": "x=0.6",
+   "terrain": "narrow up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.713
+  },
+  {
+   "command": "x=0.6",
+   "terrain": "narrow up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.726
+  },
+  {
+   "command": "x=-0.3",
+   "terrain": "pyramid down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.238
+  },
+  {
+   "command": "x=-0.3",
+   "terrain": "pyramid down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.275
+  },
+  {
+   "command": "x=-0.3",
+   "terrain": "pyramid up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.359
+  },
+  {
+   "command": "x=-0.3",
+   "terrain": "pyramid up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.039,
+   "fell_before": 0.0,
+   "followed": 0.313
+  },
+  {
+   "command": "x=-0.3",
+   "terrain": "narrow down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.135
+  },
+  {
+   "command": "x=-0.3",
+   "terrain": "narrow down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.123
+  },
+  {
+   "command": "x=-0.3",
+   "terrain": "narrow up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.016,
+   "fell_before": 0.0,
+   "followed": 0.233
+  },
+  {
+   "command": "x=-0.3",
+   "terrain": "narrow up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.016,
+   "fell_before": 0.0,
+   "followed": 0.23
+  },
+  {
+   "command": "y=0.3",
+   "terrain": "pyramid down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.023,
+   "fell_before": 0.0,
+   "followed": 0.594
+  },
+  {
+   "command": "y=0.3",
+   "terrain": "pyramid down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.078,
+   "fell_before": 0.0,
+   "followed": 0.551
+  },
+  {
+   "command": "y=0.3",
+   "terrain": "pyramid up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.5
+  },
+  {
+   "command": "y=0.3",
+   "terrain": "pyramid up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.016,
+   "fell_before": 0.0,
+   "followed": 0.394
+  },
+  {
+   "command": "y=0.3",
+   "terrain": "narrow down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.207
+  },
+  {
+   "command": "y=0.3",
+   "terrain": "narrow down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.224
+  },
+  {
+   "command": "y=0.3",
+   "terrain": "narrow up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.26
+  },
+  {
+   "command": "y=0.3",
+   "terrain": "narrow up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.244
+  },
+  {
+   "command": "y=-0.3",
+   "terrain": "pyramid down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.023,
+   "fell_before": 0.0,
+   "followed": 0.623
+  },
+  {
+   "command": "y=-0.3",
+   "terrain": "pyramid down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.062,
+   "fell_before": 0.0,
+   "followed": 0.567
+  },
+  {
+   "command": "y=-0.3",
+   "terrain": "pyramid up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.008,
+   "fell_before": 0.0,
+   "followed": 0.486
+  },
+  {
+   "command": "y=-0.3",
+   "terrain": "pyramid up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.023,
+   "fell_before": 0.0,
+   "followed": 0.39
+  },
+  {
+   "command": "y=-0.3",
+   "terrain": "narrow down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.197
+  },
+  {
+   "command": "y=-0.3",
+   "terrain": "narrow down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.206
+  },
+  {
+   "command": "y=-0.3",
+   "terrain": "narrow up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.256
+  },
+  {
+   "command": "y=-0.3",
+   "terrain": "narrow up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.289
+  },
+  {
+   "command": "yaw=0.5",
+   "terrain": "pyramid down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.031,
+   "fell_before": 0.0,
+   "followed": 0.728
+  },
+  {
+   "command": "yaw=0.5",
+   "terrain": "pyramid down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.078,
+   "fell_before": 0.0,
+   "followed": 0.65
+  },
+  {
+   "command": "yaw=0.5",
+   "terrain": "pyramid up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.023,
+   "fell_before": 0.0,
+   "followed": 0.765
+  },
+  {
+   "command": "yaw=0.5",
+   "terrain": "pyramid up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.078,
+   "fell_before": 0.0,
+   "followed": 0.727
+  },
+  {
+   "command": "yaw=0.5",
+   "terrain": "narrow down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.271
+  },
+  {
+   "command": "yaw=0.5",
+   "terrain": "narrow down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.334
+  },
+  {
+   "command": "yaw=0.5",
+   "terrain": "narrow up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.262
+  },
+  {
+   "command": "yaw=0.5",
+   "terrain": "narrow up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.201
+  },
+  {
+   "command": "x=0.3,y=0.3",
+   "terrain": "pyramid down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.925
+  },
+  {
+   "command": "x=0.3,y=0.3",
+   "terrain": "pyramid down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.929
+  },
+  {
+   "command": "x=0.3,y=0.3",
+   "terrain": "pyramid up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.936
+  },
+  {
+   "command": "x=0.3,y=0.3",
+   "terrain": "pyramid up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.912
+  },
+  {
+   "command": "x=0.3,y=0.3",
+   "terrain": "narrow down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.73
+  },
+  {
+   "command": "x=0.3,y=0.3",
+   "terrain": "narrow down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.008,
+   "fell_before": 0.0,
+   "followed": 0.728
+  },
+  {
+   "command": "x=0.3,y=0.3",
+   "terrain": "narrow up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.7
+  },
+  {
+   "command": "x=0.3,y=0.3",
+   "terrain": "narrow up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.718
+  },
+  {
+   "command": "x=-0.3,y=0.2",
+   "terrain": "pyramid down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.008,
+   "fell_before": 0.0,
+   "followed": 0.328
+  },
+  {
+   "command": "x=-0.3,y=0.2",
+   "terrain": "pyramid down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.008,
+   "fell_before": 0.0,
+   "followed": 0.314
+  },
+  {
+   "command": "x=-0.3,y=0.2",
+   "terrain": "pyramid up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.008,
+   "fell_before": 0.0,
+   "followed": 0.389
+  },
+  {
+   "command": "x=-0.3,y=0.2",
+   "terrain": "pyramid up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.039,
+   "fell_before": 0.0,
+   "followed": 0.342
+  },
+  {
+   "command": "x=-0.3,y=0.2",
+   "terrain": "narrow down",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.216
+  },
+  {
+   "command": "x=-0.3,y=0.2",
+   "terrain": "narrow down",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.196
+  },
+  {
+   "command": "x=-0.3,y=0.2",
+   "terrain": "narrow up",
+   "height_cm": 15.0,
+   "robots": 128,
+   "fell": 0.0,
+   "fell_before": 0.0,
+   "followed": 0.277
+  },
+  {
+   "command": "x=-0.3,y=0.2",
+   "terrain": "narrow up",
+   "height_cm": 18.0,
+   "robots": 128,
+   "fell": 0.031,
+   "fell_before": 0.0,
+   "followed": 0.196
+  }
+ ]
+}

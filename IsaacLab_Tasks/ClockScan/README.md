@@ -238,7 +238,9 @@ between the two; 12 for a run that ended in the top block).
 - **`ScanHide/model_42000.pt`**: ScanImp's model_40000 and 2000 iterations with `LIDAR_HIDE` (rays hidden as the
   L1 misses them and filled as `lidar_fan` fills them). MuJoCo, the L1's pattern through `lidar_fan`, estimator,
   narrow flight 22 cm: up and down 80 of 80 across (ScanImp 76 and 78 of 80); `mujoco/l1_compare.md`. The other
-  checkpoints of the run vary much at 22 cm. Not yet tested in Isaac.
+  checkpoints of the run vary much at 22 cm. Final tests in Isaac (`final/`, hidden rays on, 256 robots per height,
+  128 per command cell): pyramid 15-22 cm 100% across, at most 0.4% fell; 0.8 m flight at 22 cm up 90% (2.0% fell),
+  down 99% (0.4%); worst command cell 8% fell (turning, pyramid up 18 cm), mean 1.0%. The safest going down.
 - **`ScanGrid/model_39999.pt`**: the grid fan (21 x 17 rays to flat ground, x -0.5 to 1.0 m, y +-0.6 m) from
   scratch, seed 7. MuJoCo, L1, narrow flight 22 cm: up 0.69, down 1.00; all 18 cm tests 16/16;
   `mujoco/l1_compare.md`.
@@ -249,7 +251,11 @@ between the two; 12 for a run that ended in the top block).
   and 10000 iterations more. The actor's input weights of those rings went into the first layer's bias at their
   flat-ground ranges (without this the bias moved by up to 27 and the reward fell to -43 in 40 iterations).
   MuJoCo, L1, narrow flight 22 cm, 40 s: up 64/64 and down 64/64 across (4 seeds), 18.0 s up; model_51000 62/64 and
-  63/64, 14.7 s up (ScanHide 16.2 s); `mujoco/l1_compare.md`.
+  63/64, 14.7 s up (ScanHide 16.2 s); `mujoco/l1_compare.md`. Final tests in Isaac (`final/`), model_49000 /
+  51000: pyramid 15-22 cm at least 99.6% across, at most 0.8% fell; 0.8 m flight at 22 cm up 94.5 / 91% (2.7 /
+  5.1% fell), down 89.5 / 87.5% (4.7 / 10.5% fell); worst command cell 13 / 7% fell (49000: sideways, pyramid down
+  18 cm), mean 1.2 / 1.6%. Better than ScanHide up the flight, worse down it: the cut rings (1.0-1.3 m out) see the
+  steps far ahead going down.
 
 ## Evaluation and deploy
 
