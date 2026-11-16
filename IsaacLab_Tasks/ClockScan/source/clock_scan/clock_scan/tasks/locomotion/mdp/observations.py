@@ -126,7 +126,8 @@ class lidar_ranges(ManagerTermBase):
     probability times a factor drawn per episode from hide_scale. A hidden ray reads what lidar_fan gives it: the 4
     nearest seen rays (grid distance over fan_shape, its columns wrapping around if circular, weight
     1 / distance^2), their points' mean depth below the lidar, as level ground met by this ray, or max_range if
-    the ray does not go down."""
+    the ray does not go down. The rays fixed_rays always read fixed_ranges (no noise), as the deploy's runner
+    gives them; with fixed_ramp, they move there from what they read over the first fixed_ramp env steps."""
 
     def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
@@ -185,6 +186,9 @@ class lidar_ranges(ManagerTermBase):
         circular: bool = True,
         hide_tau: float = 0.5,
         hide_scale: tuple[float, float] = (1.0, 1.0),
+        fixed_rays: tuple[int, ...] = (),
+        fixed_ranges: tuple[float, ...] = (),
+        fixed_ramp: int = 0,
     ) -> torch.Tensor:
         from isaaclab.utils.math import quat_apply
 
@@ -229,4 +233,10 @@ class lidar_ranges(ManagerTermBase):
             out[e, :, k] = torch.where(ws > 0, fill, out[e, 0, k]).unsqueeze(1).expand(-1, out.shape[1])
         if noise > 0.0:
             out = out + torch.empty_like(out).uniform_(-noise, noise)
-        return out.clamp(0.0, max_range).reshape(n, -1)
+        out = out.clamp(0.0, max_range)
+        if fixed_rays:
+            idx = list(fixed_rays)
+            a = 1.0 if fixed_ramp <= 0 else min(1.0, env.common_step_counter / fixed_ramp)
+            val = torch.tensor(fixed_ranges, dtype=out.dtype, device=out.device)
+            out[:, :, idx] = out[:, :, idx] + a * (val - out[:, :, idx])
+        return out.reshape(n, -1)

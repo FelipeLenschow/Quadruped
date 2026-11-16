@@ -236,6 +236,18 @@ PolicySpec PolicySpec::from_file(const std::string& path) {
       f.azimuths = l["azimuths"].as<std::vector<float>>();
     }
     f.max_range = l["max_range"].as<float>(3.0f);
+    if (l["fixed_rays"]) {
+      f.fixed_rays = l["fixed_rays"].as<std::vector<int>>();
+      f.fixed_ranges = l["fixed_ranges"].as<std::vector<float>>();
+      if (f.fixed_rays.size() != f.fixed_ranges.size()) {
+        throw std::invalid_argument("[PolicyRunner] '" + spec.name + "': fixed_rays and fixed_ranges differ in size.");
+      }
+      for (int i : f.fixed_rays) {
+        if (i < 0 || i >= f.rays()) {
+          throw std::invalid_argument("[PolicyRunner] '" + spec.name + "': fixed ray " + std::to_string(i) + " out of range.");
+        }
+      }
+    }
     spec.lidar = f;
   }
   return spec;
@@ -349,7 +361,11 @@ VecXf PolicyRunner::build_obs(const ObsInput& in, const Eigen::VectorXd& command
       throw std::invalid_argument("[PolicyRunner] '" + spec_.name + "': needs " + std::to_string(rays) + " lidar ranges, got " +
                                   std::to_string(in.scan ? in.scan->size() : 0) + ".");
     }
-    append(obs, VecXf(in.scan->cwiseMax(0.0f).cwiseMin(spec_.lidar->max_range)));
+    VecXf scan = in.scan->cwiseMax(0.0f).cwiseMin(spec_.lidar->max_range);
+    for (size_t i = 0; i < spec_.lidar->fixed_rays.size(); ++i) {
+      scan(spec_.lidar->fixed_rays[i]) = spec_.lidar->fixed_ranges[i];
+    }
+    append(obs, scan);
   }
 
   if (static_cast<int>(obs.size()) != spec_.obs_dim_single) {

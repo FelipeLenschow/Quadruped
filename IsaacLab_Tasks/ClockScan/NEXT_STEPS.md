@@ -94,6 +94,14 @@ slowly on steps.
   fastest up (14.7 s, ScanHide 16.2 s). Isaac final tests (`final/`, hidden rays on), 0.8 m flight at 22 cm:
   model_49000 up 94.5% across, down 89.5% (4.7% fell); ScanHide model_42000 up 90%, down 99% (0.4% fell); worst
   command cell 13% against 8%. So ScanHide (16 rings) stays the pick: the outer rings see the steps far ahead
-  going down. Next idea: 16 rings ahead and 12 behind.
+  going down.
+- Done: ScanHideBack12, model_48000 (ScanHide model_42000, 16 rings ahead and 12 behind: the 68 rays of the outer 4
+  rings past +-90 deg read their flat-ground range, in training and in the C++ runner; `CLOCK_SCAN_LIDAR_BACK_ROWS=12`,
+  `_FIXED_RAMP=48000`, resumed to 51999 as ScanHide12; `logs/train_out/scanhide_back12.log`). Fixed at once
+  (`scanhide_back12_noramp.log`), the reward fell to -114 in 100 iterations: ScanHide with those rays fixed fell
+  11.7% on the 22 cm flight up in Isaac (2.0% without). With the ramp it stays stable. MuJoCo, L1, 22 cm, 4 seeds:
+  model_48000 up 63/64, down 64/64; model_50000 and 51999 worse (down 45 and 52 of 64). Isaac, 0.8 m flight at
+  22 cm: model_48000 up 81.6%, down 95.7% (1.6% fell); ScanHide up 89.8%, down 99.2%. So ScanHide stays the pick;
+  ScanHideBack12 is the one to try on the robot if the hidden rear floor is a problem there.
 - Robot standing on flat ground: the binned real ranges against the simulated ranges, within a few cm.
 - Real robot: flat ground, then one step, then a full flight, with a person or a harness beside it.

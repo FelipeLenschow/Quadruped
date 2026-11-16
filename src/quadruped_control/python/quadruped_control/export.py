@@ -211,6 +211,9 @@ def _lidar(checkpoint, env):
     else:
         fan["depressions"] = [float(v) for v in pattern["depressions"]]
         fan["azimuths"] = [float(v) for v in pattern["azimuths"]]
+    if params.get("fixed_rays"):
+        fan["fixed_rays"] = [int(v) for v in params["fixed_rays"]]
+        fan["fixed_ranges"] = [float(v) for v in params["fixed_ranges"]]
     return fan
 
 

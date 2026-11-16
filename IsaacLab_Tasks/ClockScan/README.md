@@ -137,15 +137,14 @@ Task: `Go2-Clock-Scan`
   (`CLOCK_SCAN_SCAN_LENGTH`, `_SCAN_WIDTH`, `_SCAN_RESOLUTION`), same values. The base-height reward and the critic's
   base height come from it.
 - **Lidar ranges (actor, `CLOCK_SCAN_ACTOR_SCAN=lidar`, the default):** what the L1 measures, so the top of a tall
-  step that its riser hides stays hidden. A polar fan (`CLOCK_SCAN_LIDAR_FAN=polar`, the default): 12 x 36 = 432 rays
+  step that its riser hides stays hidden. A polar fan (`CLOCK_SCAN_LIDAR_FAN=polar`, the default): 16 x 36 = 576 rays
   from the L1's place on the base (x 0.289 m,
-  z -0.047 m; config.yaml's `real_lidar`), turning with the whole base: 12 rows aimed at flat ground 0.07-0.972 m
-  from the lidar (up to ScanHide: 16 rows to 1.3 m, 576 rays; the 4 outer rings read mostly filled floor behind the
-  robot) (`CLOCK_SCAN_LIDAR_ROWS`, `_NEAR`, `_FAR`, `_HEIGHT`), 36 columns all around it, every 10 deg from -170
+  z -0.047 m; config.yaml's `real_lidar`), turning with the whole base: 16 rows aimed at flat ground 0.07-1.3 m
+  from the lidar (ScanHide12: 12 rows to 0.972 m, 432 rays) (`CLOCK_SCAN_LIDAR_ROWS`, `_NEAR`, `_FAR`, `_HEIGHT`), 36 columns all around it, every 10 deg from -170
   to 180 (`_COLS`, `_AZIMUTH` 180; up to Lidar3: 21 columns over +-60 deg ahead, 336 rays, which never saw the edges
   beside the legs). The rays hit only the ground, not the robot: the real L1 sees the floor all around the robot,
   down to a few cm from the legs (`Mcap/Recordings/lio_bag`). Each value is the range from the lidar, clipped to 3 m
-  (no hit reads 3 m, `_RANGE`), the current scan only: 432 inputs (`CLOCK_SCAN_LIDAR_LAG=5` adds the scan 0.1 s back, as the 2026-10-30/31
+  (no hit reads 3 m, `_RANGE`), the current scan only: 576 inputs (`CLOCK_SCAN_LIDAR_LAG=5` adds the scan 0.1 s back, as the 2026-10-30/31
   runs had). Per ray and step: +-0.02 m noise (`_NOISE`), and a
   reading 1-10 steps older (`_STALE_STEPS`) with a probability drawn per episode from 0 to 30% (`_STALE`): an L1 bin
   keeps its last return. Empty rays first read 3 m at 15%; that policy (2026-10-30 run, 21300) climbed 12 cm 94% of
@@ -155,9 +154,13 @@ Task: `Go2-Clock-Scan`
   `mdp.lidar_ranges`, pattern `mdp.FanPatternCfg`; the mirror swaps the columns. Plan and deploy notes:
   `LIDAR_RANGES_PLAN.md`. `CLOCK_SCAN_LIDAR_FAN=grid` (ScanGrid): 357 rays from the lidar to a 21 x 17 grid of points
   on flat ground 0.273 m below it, x -0.5 to 1.0 m and y +-0.6 m in the base frame, every 7.5 cm (`_LIDAR_GRID_X0`,
-  `_X1`, `_Y`, `_STEP`), hidden map `mdp/l1_hidden_grid.npy`.
-- **Actor input:** 488 = Simple's 48-wide layout, the clock (8), the lidar ranges (432), in this order (632 with the
-  16-ring fan up to ScanHide; 379 with the
+  `_X1`, `_Y`, `_STEP`), hidden map `mdp/l1_hidden_grid.npy`. `CLOCK_SCAN_LIDAR_BACK_ROWS=12` (ScanHideBack12): behind
+  the lidar (azimuth past +-90 deg, `_BACK_AZIMUTH`) the rings from the 13th out always read their flat-ground range
+  (68 rays, no noise); the export puts them in the `.qpol` (`fixed_rays`, `fixed_ranges`) and the C++ runner gives
+  the same values. `_FIXED_RAMP` (env steps, 24 per iteration) moves them there slowly for a resume from a
+  checkpoint that read them: fixed at once, PPO diverged.
+- **Actor input:** 632 = Simple's 48-wide layout, the clock (8), the lidar ranges (576), in this order (488 with the
+  12-ring fan of ScanHide12; 379 with the
   height map; 392 with the old 336-ray fan of Lidar1-3: `CLOCK_SCAN_LIDAR_COLS=21 CLOCK_SCAN_LIDAR_AZIMUTH=60`). The critic gets 592 (the head clearance last). To run or evaluate a height-map checkpoint (Stairs1),
   set `CLOCK_SCAN_ACTOR_SCAN=map`. To resume a height-map checkpoint into the lidar actor, set
   `CLOCK_SCAN_NEW_INPUTS_FROM=56`: the first 56 inputs keep their weights, the lidar ones start at zero.
@@ -256,6 +259,14 @@ between the two; 12 for a run that ended in the top block).
   5.1% fell), down 89.5 / 87.5% (4.7 / 10.5% fell); worst command cell 13 / 7% fell (49000: sideways, pyramid down
   18 cm), mean 1.2 / 1.6%. Better than ScanHide up the flight, worse down it: the cut rings (1.0-1.3 m out) see the
   steps far ahead going down.
+- **`ScanHideBack12/model_48000.pt`**: ScanHide's model_42000 and 10000 iterations more with the outer 4 rings
+  behind the lidar fixed at flat ground (`CLOCK_SCAN_LIDAR_BACK_ROWS=12`, `_FIXED_RAMP=48000`: 2000 iterations to
+  fix them), so no input reads the floor that the trunk hides from the real L1. MuJoCo, L1, narrow flight 22 cm,
+  40 s, 4 seeds of 16: model_48000 up 63/64, down 64/64; model_50000 44 / 45 of 64, model_51999 63 / 52 of 64;
+  `mujoco/l1_compare.md`. Final tests in Isaac (`final/`, `CLOCK_SCAN_LIDAR_BACK_ROWS=12`), model_48000 / 51999:
+  pyramid 15-22 cm at least 96.5% across, at most 1.2% fell; 0.8 m flight up to 20 cm at least 96.5% across;
+  at 22 cm up 81.6 / 85.5% (3.9 / 4.3% fell), down 95.7 / 94.5% (1.6 / 4.7% fell); worst command cell 10 / 3%
+  fell, mean 0.9 / 0.7%. Not better than ScanHide at 22 cm; the same up to 20 cm.
 
 ## Evaluation and deploy
 

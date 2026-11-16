@@ -63,6 +63,8 @@ PYBIND11_MODULE(_core, m) {
       .def_readonly("grid_height", &LidarFan::grid_height)
       .def_property_readonly("grid", &LidarFan::grid)
       .def_readonly("max_range", &LidarFan::max_range)
+      .def_readonly("fixed_rays", &LidarFan::fixed_rays)
+      .def_readonly("fixed_ranges", &LidarFan::fixed_ranges)
       .def_property_readonly("rays", &LidarFan::rays);
 
   py::class_<PolicySpec>(m, "PolicySpec")

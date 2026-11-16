@@ -56,7 +56,7 @@ struct SpeedClockConfig {
 // The actor's lidar input (ClockScan): ranges along fixed rays from pos in the base frame, turning with the
 // whole base; rows by depression (deg below the base x-y plane), columns by azimuth (deg, left positive). A grid
 // fan (grid_x not empty) has instead rays from pos to the points grid_x by grid_y (base frame, m, x outer) on flat
-// ground grid_height below pos.
+// ground grid_height below pos. The rays fixed_rays always read fixed_ranges.
 struct LidarFan {
   Vec3f pos = Vec3f::Zero();
   std::vector<float> depressions;
@@ -65,6 +65,8 @@ struct LidarFan {
   std::vector<float> grid_y;
   float grid_height = 0.0f;
   float max_range = 3.0f;
+  std::vector<int> fixed_rays;
+  std::vector<float> fixed_ranges;
   bool grid() const { return !grid_x.empty(); }
   int rays() const {
     return static_cast<int>(grid() ? grid_x.size() * grid_y.size() : depressions.size() * azimuths.size());

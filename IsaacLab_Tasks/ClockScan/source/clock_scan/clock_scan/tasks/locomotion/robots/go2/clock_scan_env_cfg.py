@@ -82,10 +82,10 @@ MAP_Y = _axis(-MAP_SIDE, MAP_SIDE, -MAP_FINE_SIDE, MAP_FINE_SIDE)
 ACTOR_SCAN = os.environ.get("CLOCK_SCAN_ACTOR_SCAN", "lidar")
 LIDAR_POS = (0.28945, 0.0, -0.046825)
 LIDAR_HEIGHT = _env("LIDAR_HEIGHT", 0.273)
-LIDAR_ROWS = int(_env("LIDAR_ROWS", 12))
+LIDAR_ROWS = int(_env("LIDAR_ROWS", 16))
 LIDAR_COLS = int(_env("LIDAR_COLS", 36))
 LIDAR_NEAR = _env("LIDAR_NEAR", 0.07)
-LIDAR_FAR = _env("LIDAR_FAR", 0.972)
+LIDAR_FAR = _env("LIDAR_FAR", 1.3)
 LIDAR_AZIMUTH = _env("LIDAR_AZIMUTH", 180.0)
 LIDAR_RANGE = _env("LIDAR_RANGE", 3.0)
 LIDAR_LAG = int(_env("LIDAR_LAG", 0))
@@ -102,7 +102,7 @@ LIDAR_MOUNT_ROT = _env("LIDAR_MOUNT_ROT", 1.0)
 # LIDAR_FAN "grid" (ScanGrid): in place of the polar fan above, rays from the lidar to a grid of points on flat ground
 # LIDAR_HEIGHT below it, x LIDAR_GRID_X0 to LIDAR_GRID_X1 and y +-LIDAR_GRID_Y (base frame, m) every LIDAR_GRID_STEP m,
 # so no ray reads the floor that the trunk hides far behind the robot (mdp/l1_hidden_grid.npy its hidden map). "polar"
-# (default) is the fan of Lidar4 to ScanHide12; up to ScanHide 16 rows to 1.3 m, ScanHide12 the first 12 of them.
+# (default) is the fan of Lidar4 to ScanHideBack12; ScanHide12 had LIDAR_ROWS=12 LIDAR_FAR=0.972 (the first 12 rows).
 LIDAR_FAN = os.environ.get("CLOCK_SCAN_LIDAR_FAN", "polar")
 LIDAR_GRID_X0 = _env("LIDAR_GRID_X0", -0.5)
 LIDAR_GRID_X1 = _env("LIDAR_GRID_X1", 1.0)
@@ -120,6 +120,20 @@ LIDAR_AZIMUTHS = tuple(
         if LIDAR_AZIMUTH >= 180.0
         else np.linspace(-LIDAR_AZIMUTH, LIDAR_AZIMUTH, LIDAR_COLS)
     )
+)
+# Behind the lidar (|azimuth| over LIDAR_BACK_AZIMUTH deg) only the first LIDAR_BACK_ROWS rows are read; the rays
+# past them always read flat ground's range (ScanHide12 cut those rings all around and lost the far view ahead when
+# going down). The default reads them all, as ScanHide; ScanHideBack12 had LIDAR_BACK_ROWS=12.
+LIDAR_BACK_ROWS = int(_env("LIDAR_BACK_ROWS", 16))
+LIDAR_BACK_AZIMUTH = _env("LIDAR_BACK_AZIMUTH", 90.0)
+# Env steps (24 per iteration) over which those rays move from their reading to the fixed range, for a resume from
+# a checkpoint that read them: ScanHide fell 12% on the 22 cm flight up with them fixed at once, and PPO diverged.
+LIDAR_FIXED_RAMP = int(_env("LIDAR_FIXED_RAMP", 0))
+LIDAR_FIXED = tuple(
+    (r * len(LIDAR_AZIMUTHS) + c, round(min(LIDAR_HEIGHT / math.sin(math.radians(d)), LIDAR_RANGE), 4))
+    for r, d in enumerate(LIDAR_DEPRESSIONS)
+    for c, a in enumerate(LIDAR_AZIMUTHS)
+    if r >= LIDAR_BACK_ROWS and abs(a) > LIDAR_BACK_AZIMUTH
 )
 # Height grid, critic only: 1.6 x 1.0 m at 0.1 m (187 rays) under the base, turned with its yaw. Base height
 # for the reward and the critic is taken from it.
@@ -729,6 +743,9 @@ class ObservationsCfg:
                 else None,
                 "fan_shape": (len(LIDAR_GRID_XS), len(LIDAR_GRID_YS)) if LIDAR_FAN == "grid" else (LIDAR_ROWS, LIDAR_COLS),
                 "circular": LIDAR_FAN != "grid",
+                "fixed_rays": tuple(i for i, _ in LIDAR_FIXED) if LIDAR_FAN != "grid" else (),
+                "fixed_ranges": tuple(v for _, v in LIDAR_FIXED) if LIDAR_FAN != "grid" else (),
+                "fixed_ramp": LIDAR_FIXED_RAMP,
                 "hide_tau": LIDAR_HIDE_TAU,
                 "hide_scale": LIDAR_HIDE_SCALE,
             },
