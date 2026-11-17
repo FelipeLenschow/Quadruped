@@ -1,6 +1,6 @@
 # Quadruped Universal Docker Environment
 
-This folder contains the Docker configuration to run the Quadruped software identically across your laptop (Ubuntu 24), your VDI (Ubuntu 22), and the physical robot (Ubuntu 20).
+This folder contains the Docker configuration to run the Quadruped software identically across your laptop (Ubuntu 24), your VDI (Ubuntu 22), and the physical robot (Jetson AGX Thor or Orin, JetPack 7, Ubuntu 24.04).
 
 ## What is this `docker/` folder?
 
@@ -18,7 +18,7 @@ Prebuilt images live in the GitHub Container Registry under a single package,
 | Tag | Machine | Reports as (`uname -m`) |
 | --- | --- | --- |
 | `amd64` | Laptop / VDI | `x86_64` |
-| `arm64` | Physical robot (Jetson Orin) | `aarch64` |
+| `arm64_jetpack7` | Physical robot (Jetson AGX Thor or Orin, JetPack 7, `Dockerfile.jetson`) | `aarch64` |
 
 There is **no `latest` tag**, and the two tags are *not* joined into a multi-arch
 manifest — so Docker will not pick for you. You have to name the tag matching the
@@ -33,14 +33,14 @@ sudo docker pull ghcr.io/felipelenschow/quadruped_env:amd64
 sudo docker tag  ghcr.io/felipelenschow/quadruped_env:amd64 quadruped_env
 
 # Physical robot (aarch64)
-sudo docker pull ghcr.io/felipelenschow/quadruped_env:arm64
-sudo docker tag  ghcr.io/felipelenschow/quadruped_env:arm64 quadruped_env
+sudo docker pull ghcr.io/felipelenschow/quadruped_env:arm64_jetpack7
+sudo docker tag  ghcr.io/felipelenschow/quadruped_env:arm64_jetpack7 quadruped_env
 ```
 
 ...or let the shell fill it in, which makes it the same line on every machine:
 
 ```bash
-ARCH=$(dpkg --print-architecture)   # prints exactly "amd64" or "arm64"
+ARCH=$(dpkg --print-architecture | sed s/arm64/arm64_jetpack7/)   # "amd64" or "arm64_jetpack7"
 sudo docker pull ghcr.io/felipelenschow/quadruped_env:$ARCH && \
 sudo docker tag ghcr.io/felipelenschow/quadruped_env:$ARCH quadruped_env
 ```
@@ -92,13 +92,13 @@ sudo docker buildx build --network host --platform linux/amd64 \
   -t ghcr.io/felipelenschow/quadruped_env:amd64 \
   -f Docker/Dockerfile --push .
 
-sudo docker buildx build --network host --platform linux/arm64 --build-arg BUILD_JOBS=20 \
-  -t ghcr.io/felipelenschow/quadruped_env:arm64 \
+sudo docker buildx build --network host --platform linux/arm64 \
+  -t ghcr.io/felipelenschow/quadruped_env:arm64_jetpack7 \
   -f Docker/Dockerfile.jetson --push Docker
 ```
 
 The `arm64` build runs under QEMU emulation on an x86 host, so expect it to be
-several times slower than the native one (it compiles CycloneDDS from source).
+several times slower than the native one.
 Building it natively on the robot and pushing from there is the faster route if
 the robot has a decent network connection.
 
@@ -109,30 +109,31 @@ demands a login.
 
 ## 1d. The Robot's GPU Image (`Dockerfile.jetson`)
 
-The `arm64` image above cannot use the Jetson's GPU: its torch is pip's CPU build and it starts
-without NVIDIA's runtime. `Dockerfile.jetson` is the robot image with the GPU (CUDA 11.4, TensorRT,
-CUDA torch), for `object_detector` (YOLOE). JetPack 5 is Ubuntu 20.04, where ROS 2 Humble has no apt
-packages, so it starts from dusty-nv's image (Humble built from source, Python 3.8) and builds Nav2,
-slam_toolbox and the rest from source on top. Laptop-only tools (rviz plugins, foxglove_bridge,
-PlotJuggler, Gazebo) are not in it.
+`Dockerfile.jetson` is the robot image with the GPU (CUDA 13, TensorRT, CUDA torch), for `object_detector`
+(YOLOE). It is for JetPack 7 (Ubuntu 24.04), and the same image runs on the Jetson AGX Thor and on the Orin.
+The base is NVIDIA's PyTorch container (`nvcr.io/nvidia/pytorch`, SBSA arm64, Python 3.12). Ubuntu 24.04
+has ROS 2 **Jazzy** as apt packages, so nothing is built from source (the laptop image stays on Humble).
+Laptop-only tools (rviz, foxglove_bridge, PlotJuggler, Gazebo) are not in it.
 
-1. On the robot (not in Docker): `cat /etc/nv_tegra_release`. The base tag must have the same L4T
-   major version (`R35`); the default is `r35.4.1`. For another R35, pass
-   `--build-arg BASE=dustynv/ros:humble-desktop-pytorch-l4t-r35.x.x` (tags on Docker Hub, `dustynv/ros`).
-2. Build it on the laptop through QEMU (section 1c's `binfmt` setup; about 1.5 h with 20 jobs, 7 GB),
-   or natively on the robot with a lower `BUILD_JOBS` so it does not run out of memory:
+1. On the robot (not in Docker): `nvidia-smi` shows the driver's CUDA version. The base's CUDA must not be
+   newer. The default base is `25.08-py3`; for another one, pass
+   `--build-arg BASE=nvcr.io/nvidia/pytorch:<yy.mm>-py3`. The build stops if the base's torch has no code
+   for the Thor (`sm_110`) or the Orin (`sm_80` / `sm_87`).
+2. Build it natively on the robot (fastest), or on the laptop through QEMU (section 1c's `binfmt` setup):
 
    ```bash
-   sudo docker buildx build --platform linux/arm64 --load --build-arg BUILD_JOBS=20 \
+   sudo docker buildx build --network host --platform linux/arm64 --load \
      -t quadruped_env:jetson -f Docker/Dockerfile.jetson Docker
    ```
 
    Under QEMU nothing that needs the GPU or DDS can be tested (sockets fail), only that it builds and imports.
 
-3. Push it once so the build is not repeated: tag it `ghcr.io/felipelenschow/quadruped_env:arm64`
+3. Push it once so the build is not repeated: tag it `ghcr.io/felipelenschow/quadruped_env:arm64_jetpack7`
    (the robot's tag, section 1) and push as in section 1c.
-4. Run it with `--runtime nvidia` (the robot alias in section 4). Check the GPU inside:
-   `python3 -c "import torch; print(torch.cuda.is_available())"` must print `True`.
+4. Run it with `--runtime nvidia` (the robot alias in section 4; the Thor does not see its GPU without it).
+   Check the GPU inside, on each board:
+   `python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name())"` must print
+   `True`, and `nvidia-smi` must show the GPU (`system_monitor` reads the GPU load from it).
 5. Build the YOLO engine once, on the robot (engines are tied to the GPU they are built on):
    `ros2 run quadruped_perception object_detector --export` (after `colcon build`). Rebuild it after
    changing `detector:` in `config.yaml`.
@@ -170,7 +171,7 @@ sudo docker run -it --rm \
 
 Once you run the command above, your terminal will change to look something like `(Quadruped-Docker) root@docker:/app#`.
 
-You are now inside the isolated ROS 2 Humble environment! You can now run any of your scripts (like the `Unitree` hardware drivers or the `IsaacSim` launchers) safely.
+You are now inside the isolated ROS 2 environment (Humble on the laptop, Jazzy on the robot)! You can now run any of your scripts (like the `Unitree` hardware drivers or the `IsaacSim` launchers) safely.
 
 ## 4. Creating a Shortcut (Alias)
 
@@ -207,8 +208,9 @@ source ~/.bashrc
 
 No `xhost`, no `DISPLAY`, no X11 socket, no `--gpus all` — section 6 explains how
 each of those fails on a screenless box. `--runtime nvidia` is the Jetson's way of
-giving the container the GPU (JetPack ships the runtime); drop it on a machine
-without one.
+giving the container the GPU (JetPack ships the runtime); the Thor and the Orin
+both need it. Drop it on a machine without one. Add `quadattach` (section 5) on
+the robot too.
 
 ### Using it
 
@@ -392,10 +394,11 @@ When deploying this Docker image directly onto the physical Unitree robot, sever
 3. **Dead CMOS Battery (Clock Drift)**: Physical robots often lose track of real-world time when powered off, resetting to 1970 or falling hours behind.
    * This causes `git pull` to fail due to SSL verification. Workaround: `env GIT_SSL_NO_VERIFY=true git pull`.
    * This causes `apt-get update` to fail because repository signatures appear to be from the "future". The `Dockerfile` permanently resolves this by passing `-o Acquire::Check-Valid-Until=false` to bypass time-checks.
-4. **ROS 2 telemetry arriving in bursts (bad DDS return path)**: the Go2's Jetson ships on Unitree's internal `192.168.123.0/24`. Plugged into a lab switch on a *different* subnet, DDS discovery still finds peers via multicast, but the unicast return path has no valid source address or route. Reliable-QoS readers then stall on each lost packet and receive the retransmission batch all at once — telemetry lands in **bursts**, which looks like a laggy visualizer even though the renderer is at a solid 60 fps. Give `eth0` an address on the lab subnet and a default route:
+4. **ROS 2 telemetry arriving in bursts (bad DDS return path)**: the Go2's Jetson ships on Unitree's internal `192.168.123.0/24`. Plugged into a lab switch on a *different* subnet, DDS discovery still finds peers via multicast, but the unicast return path has no valid source address or route. Reliable-QoS readers then stall on each lost packet and receive the retransmission batch all at once — telemetry lands in **bursts**, which looks like a laggy visualizer even though the renderer is at a solid 60 fps. Give the wired interface (`enP2p1s0` on the Thor, `eth0` on the Orin) an address on the lab subnet and a default route. On the Thor this is set for good through NetworkManager (`enP2p1s0`, `10.13.3.19`); by hand:
 
    ```bash
-   sudo ip addr add 10.13.3.18/24 dev eth0
+   IF=enP2p1s0   # eth0 on the Orin
+   sudo ip addr add 10.13.3.19/24 dev $IF   # 10.13.3.18 on the Orin
    sudo ip route add default via 10.13.3.254
    sudo rm -f /etc/resolv.conf
    echo "nameserver 192.146.156.1" | sudo tee /etc/resolv.conf

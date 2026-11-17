@@ -331,7 +331,7 @@ joint_limits:
 network:
   robot_ip: "192.168.123.18"
   local_ip: "192.168.123.10"
-  interface: "eth0"
+  interface: ["enP2p1s0", "eth0"]   # Unitree SDK interface: the first one this computer has (Thor, Orin)
   ros_domain_id: 42
 
   # ROS 2 discovery. The robot's WiFi AP drops multicast, so DDS discovery never

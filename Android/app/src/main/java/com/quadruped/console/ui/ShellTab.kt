@@ -126,7 +126,7 @@ private fun ConnectPanel(lastMessage: String?, onConnect: (SshTarget, String?) -
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
         }
-        OutlinedTextField(user, { user = it }, Modifier.fillMaxWidth(), label = { Text("User") }, singleLine = true)
+        OutlinedTextField(user, { user = it }, Modifier.fillMaxWidth(), label = { Text("User (a comma list is tried in order)") }, singleLine = true)
         OutlinedTextField(
             password, { password = it }, Modifier.fillMaxWidth(), singleLine = true,
             label = { Text("Password (first time only)") }, visualTransformation = PasswordVisualTransformation(),

@@ -3,6 +3,9 @@
 Measurements taken on 2026-10-30/31 on the Go2's Jetson while adding the launcher's stacks one at a time, then
 trying a vision-language model (Qwen3-VL) on board for the [A] LLM agent.
 
+These numbers are from the Orin Nano on JetPack 5. The robot now carries a Jetson AGX Thor (or the Orin), both
+on JetPack 7; they are not measured again yet.
+
 ## Hardware
 
 | | |

@@ -1,5 +1,6 @@
 twist_mux:
   ros__parameters:
+    use_stamped: false   # Jazzy's twist_mux; the pipeline reads Twist
     topics:
       joystick:
         topic: /cmd_vel/joy

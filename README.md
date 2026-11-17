@@ -42,7 +42,7 @@ Each backend (MuJoCo, Gazebo, Isaac Sim, Real Robot) has a dedicated driver that
 1. **Train Policy**: `python launcher.py` -> Select Task -> **[1] Train Policy**.
 2. **Play Policy**: Verify logic immediately in Isaac Lab via **[2] Play Policy**.
 3. **High-Fidelity Verification**: Use the **MuJoCo** or **Gazebo** drivers to validate physics-dependent behaviors (e.g., foot friction, actuator dynamics).
-4. **Deploy**: The same `quadruped_control` C++ controller used in simulation runs on the Jetson Orin on the physical robot.
+4. **Deploy**: The same `quadruped_control` C++ controller used in simulation runs on the robot's Jetson (AGX Thor or Orin, JetPack 7).
 
 ## ⚠️ Requirements
 

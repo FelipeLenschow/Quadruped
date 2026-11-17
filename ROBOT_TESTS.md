@@ -61,7 +61,7 @@ Needs the calibration above.
 
 ## App
 
-- [ ] **SSH terminal:** `sshd` and the login user on the Go2's Jetson (the app defaults to `unitree@10.42.0.1`).
+- [ ] **SSH terminal:** `sshd` and the login user on the Go2's Jetson (the app tries `Perro`, then `unitree`, at `10.42.0.1`: the Thor, then the Orin).
 
 ## Once built
 

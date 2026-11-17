@@ -295,30 +295,20 @@ Known port bug: `standard_pcl_cbk` keeps only whole seconds of `last_timestamp_l
 
 ## GPU on the robot: ROS with CUDA torch
 
-The Go2's Jetson Orin Nano (40 TOPS) has a GPU with 1024 CUDA cores and 32 Tensor cores. The `arm64` image
-can't use it: pip's `torch` for ARM is CPU-only, and `ros:humble-ros-base` has no CUDA.
+The robot carries a Jetson AGX Thor, or the Orin Nano. Both run JetPack 7 (Ubuntu 24.04, CUDA 13, SBSA GPU
+driver), so one image serves both. pip's `torch` for ARM is CPU-only, so the GPU needs its own image:
+[Docker/Dockerfile.jetson](Docker/Dockerfile.jetson) starts from NVIDIA's PyTorch container
+(`nvcr.io/nvidia/pytorch:25.08-py3`: CUDA torch, torchvision and TensorRT, Python 3.12) and adds ROS 2 Jazzy
+from apt: Nav2 (with MPPI), slam_toolbox, pointcloud_to_laserscan, twist_mux, joy, teleop_twist_joy, the MCAP
+plugin, pcl_ros and the laptop image's pip list. pip is held to the base's torch, so nothing replaces it with
+the CPU one. How to build and run it: [Docker/README.md](Docker/README.md), section 1d.
 
-JetPack 5 is Ubuntu 20.04, and NVIDIA ships the R35 CUDA libraries and CUDA torch only for 20.04 (Python 3.8).
-ROS 2 Humble has no apt packages for 20.04, so [Docker/Dockerfile.jetson](Docker/Dockerfile.jetson) starts
-from dusty-nv's `dustynv/ros:humble-desktop-pytorch-l4t-r35.4.1` (Humble built from source, CUDA 11.4,
-TensorRT, torch 2.0) and builds on top:
-- the robot's ROS packages: Nav2 (with MPPI, gcc 11), slam_toolbox, pointcloud_to_laserscan, twist_mux,
-  joy, teleop_twist_joy, the MCAP plugin and pcl_ros;
-- torchvision with CUDA, CycloneDDS 0.10 for the Unitree SDK, and the laptop image's pip list (ultralytics,
-  OpenCV 5 headless instead of NVIDIA's 4.5 Python binding, whose C++ libraries stay for cv_bridge);
-- pip is held to the base's torch, so nothing replaces it with the CPU one.
-
-Still different from the laptop because of 20.04: Python 3.8, torch 2.0, numpy 1.24, mujoco 3.2.3.
-How to build and run it: [Docker/README.md](Docker/README.md), section 1d.
-
-- **Check the L4T version** on the robot (`cat /etc/nv_tegra_release`); the base's must be R35 too.
+- **One image, two GPUs.** The base's torch must have code for the Thor (`sm_110`) and the Orin (`sm_87`, or
+  `sm_80`); the build checks this.
+- **Jazzy on the robot, Humble on the laptop.** They talk over DDS for the messages the stack uses; test this.
 - **Leave the policy on the CPU.** It runs in about 6 ms there, and the GPU would only add launch latency.
   The GPU is for perception.
-- **Size and build time.** About 7 GB, and 1.5 h on the laptop under QEMU (most of it Nav2). Push it to GHCR
-  (`:arm64`) so the robot only pulls it.
-- **Memory.** The GPU shares the 8 GB of RAM with the CPU; watch `/system_stats`.
-- **Later, JetPack 6** (Ubuntu 22.04, "Super" mode, ~67 TOPS) would allow Jazzy from apt with dusty-nv's
-  `jazzy-ros-base-r36.4.0-cu128-24.04`, with no source builds. That needs reflashing the Jetson.
+- **Memory.** The GPU shares the RAM with the CPU (8 GB on the Orin Nano); watch `/system_stats`.
 
 ## Policies: switching, safety lie-down and numb
 

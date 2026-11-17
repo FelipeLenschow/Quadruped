@@ -48,7 +48,7 @@ def discovery_server_address():
 
 
 def sdk_network_interface():
-    """Interface the Unitree SDK binds to (config.yaml -> network.interface).
+    """Interface the Unitree SDK binds to: the first of config.yaml's network.interface this computer has.
 
     Without it the SDK calls ChannelFactoryInitialize(networkInterface=None) and
     lets CycloneDDS pick. That was unambiguous while the robot only had eth0;
@@ -58,9 +58,15 @@ def sdk_network_interface():
     try:
         with open(CONFIG_PATH, "r") as f:
             net = (yaml.safe_load(f) or {}).get("network", {}) or {}
-        return str(net.get("interface", "") or "").strip() or None
+        names = net.get("interface") or []
+        names = [names] if isinstance(names, str) else names
     except Exception:
         return None
+    names = [str(n).strip() for n in names if str(n).strip()]
+    for name in names:
+        if os.path.exists(os.path.join("/sys/class/net", name)):
+            return name
+    return names[0] if names else None
 
 
 def _discovery_server_running():

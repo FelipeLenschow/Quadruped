@@ -83,7 +83,7 @@ class SshTerminal(
             client.resize(cols, rows, pixels.first, pixels.second)
             output = out
             state = State.CONNECTED
-            message = "${target.user}@${target.host}"
+            message = "${client.user}@${target.host}"
             post(Runnable { onUpdate?.invoke() })
             pump(input)
             finish("Connection closed.")

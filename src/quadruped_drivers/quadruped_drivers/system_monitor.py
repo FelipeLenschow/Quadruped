@@ -6,7 +6,8 @@ whole Jetson, not just the container.
     {"cpu": 45.2, "cores": [40.1, 52.3, ...], "ram_used_mb": 3100, "ram_total_mb": 7400,
      "gpu": 3.0, "temps": {"cpu-thermal": 52.1, ...}, "temp_max": 55.0, "load": [1.2, 1.0, 0.9]}
 
-gpu is null when no GPU load file is found (pass --gpu_load to point at it).
+gpu comes from the Jetson's GPU load file (older nvgpu driver) or, when there is none (Thor, JetPack 7),
+from nvidia-smi. It is null when neither works (pass --gpu_load to point at the file).
 """
 
 import argparse
@@ -14,6 +15,8 @@ import glob
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 
 import rclpy
@@ -94,6 +97,17 @@ def find_gpu_load():
     return None
 
 
+def nvidia_smi_gpu():
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=2.0,
+        ).stdout
+        return float(out.split()[0])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+
+
 def read_temps():
     temps = {}
     for zone in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
@@ -113,7 +127,8 @@ class SystemMonitor(Node):
         super().__init__("system_monitor")
         self.pub = self.create_publisher(String, "/system_stats", 10)
         self.gpu_path = args.gpu_load or find_gpu_load()
-        self.get_logger().info(f"GPU load: {self.gpu_path or 'not found'}")
+        self.use_smi = not self.gpu_path and shutil.which("nvidia-smi") is not None
+        self.get_logger().info(f"GPU load: {self.gpu_path or ('nvidia-smi' if self.use_smi else 'not found')}")
         self.prev = parse_proc_stat(read("/proc/stat"))
         self.create_timer(args.period, self.tick)
 
@@ -128,6 +143,8 @@ class SystemMonitor(Node):
                 gpu = round(int(read(self.gpu_path).strip()) / 10.0, 1)
             except (OSError, ValueError):
                 pass
+        elif self.use_smi:
+            gpu = nvidia_smi_gpu()
         temps = read_temps()
         stats = {
             "cpu": pct[0] if pct else 0.0,

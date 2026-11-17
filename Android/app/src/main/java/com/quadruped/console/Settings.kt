@@ -65,7 +65,7 @@ object Settings {
 data class ShellSettings(
     val host: String = "10.42.0.1",
     val port: Int = 22,
-    val user: String = "unitree",
+    val user: String = "Perro, unitree",
     val shortcuts: String = DEFAULT_SHORTCUTS,
 ) {
     fun shortcutList(): List<Pair<String, String>> = shortcuts.lines().mapNotNull { line ->
@@ -90,7 +90,7 @@ data class ShellSettings(
             return ShellSettings(
                 host = p.getString("ssh_host", d.host)!!,
                 port = p.getInt("ssh_port", d.port),
-                user = p.getString("ssh_user", d.user)!!,
+                user = p.getString("ssh_user", d.user)!!.takeUnless { it == "unitree" } ?: d.user,
                 shortcuts = p.getString("ssh_shortcuts", d.shortcuts)!!
                     .replace(Regex("(?m)^tmux = tmux new -A -s robot$"), "tmux = tmux new -A -s robot \\\\; set -g mouse on"),
             )

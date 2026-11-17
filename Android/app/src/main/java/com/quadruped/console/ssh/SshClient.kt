@@ -3,6 +3,7 @@ package com.quadruped.console.ssh
 import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.ChannelShell
 import com.jcraft.jsch.JSch
+import com.jcraft.jsch.JSchException
 import com.jcraft.jsch.KeyPair
 import com.jcraft.jsch.Session
 import com.jcraft.jsch.SocketFactory
@@ -11,7 +12,10 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 
-data class SshTarget(val host: String, val port: Int, val user: String)
+/** [user] may be a comma list ("Perro, unitree"): each is tried in order, for a robot whose computer can change. */
+data class SshTarget(val host: String, val port: Int, val user: String) {
+    val users get() = user.split(',').map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf(user) }
+}
 
 /**
  * The app's SSH key and known hosts, kept in the app's private storage. The key is
@@ -44,6 +48,10 @@ class SshClient(private val keys: SshKeys) {
 
     val connected get() = session?.isConnected == true && shell?.isClosed == false
 
+    /** The user [connect] logged in as. */
+    var user: String? = null
+        private set
+
     /** Password is only for the first login, before the app's key is installed. */
     fun connect(
         target: SshTarget,
@@ -51,13 +59,31 @@ class SshClient(private val keys: SshKeys) {
         timeoutMs: Int = 8000,
         socketFactory: SocketFactory? = null,
     ): Session {
+        val users = target.users
+        for ((i, u) in users.withIndex()) {
+            try {
+                return connectAs(target, u, password, timeoutMs, socketFactory).also { user = u }
+            } catch (e: JSchException) {
+                if (i == users.lastIndex || e.message?.startsWith("Auth") != true) throw e
+            }
+        }
+        error("no user")
+    }
+
+    private fun connectAs(
+        target: SshTarget,
+        user: String,
+        password: String?,
+        timeoutMs: Int,
+        socketFactory: SocketFactory?,
+    ): Session {
         keys.ensure()
         val jsch = JSch()
         jsch.addIdentity(keys.privateKey.path)
         keys.knownHosts.parentFile?.mkdirs()
         keys.knownHosts.createNewFile()
         jsch.setKnownHosts(keys.knownHosts.path)
-        val s = jsch.getSession(target.user, target.host, target.port)
+        val s = jsch.getSession(user, target.host, target.port)
         if (!password.isNullOrEmpty()) s.setPassword(password)
         socketFactory?.let { s.setSocketFactory(it) }
         // First contact trusts and remembers the host key; a changed key is refused.

@@ -15,6 +15,7 @@ export ROS_DOMAIN_ID=42
 sudo ip route add default via 192.168.123.40 dev eth0
 
 
+# Thor: set for good by NetworkManager (enP2p1s0, 10.13.3.19). Orin:
 sudo ip addr add 10.13.3.18/24 dev eth0
 sudo ip route add default via 10.13.3.254
 sudo rm -f /etc/resolv.conf
