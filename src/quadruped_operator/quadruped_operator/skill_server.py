@@ -10,8 +10,9 @@ import time
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.task import Future
 from rclpy.utilities import remove_ros_args
 from std_msgs.msg import Float32MultiArray, String
 from std_srvs.srv import Empty
@@ -39,28 +40,21 @@ TRICKS = {
 }
 
 
-class SkillServer(Node):
-    def __init__(self, args):
-        super().__init__("skill_server")
-        self.args = args
+class SkillInputs(Node):
+    """The data that the skills read: /robot_state, /amcl_pose and the AMCL client. This node has its own executor
+    thread, so the data stays fresh while a skill blocks the /skill node. Do not use MultiThreadedExecutor: on Jazzy
+    (rclpy 7.1.13, rmw_fastrtps 8.4.5) it removes a busy subscription from the wait set, then rmw_wait returns
+    immediately with no entity ready, and the node uses 100% of one core (2026-11-17, Thor)."""
+
+    def __init__(self):
+        super().__init__("skill_server_inputs")
         self.state = None
         self.state_time = 0.0
-        self.busy = threading.Lock()
-        group = ReentrantCallbackGroup()
-        self.create_subscription(String, "/robot_state", self._state_cb, 10, callback_group=group)
-        self.mode_pub = self.create_publisher(String, "/pipeline/mode", 10)
-        self.pose_pub = self.create_publisher(String, "/pose/command", 10)
-        self.cmd_pub = self.create_publisher(Twist, "/cmd_vel/skill", 10)
-        self.gait_pub = self.create_publisher(Float32MultiArray, "/gait_command", 10)
-        self.policy_pub = self.create_publisher(String, "/pipeline/policy", 10)
-        self.trick_pub = self.create_publisher(Float32MultiArray, "/pipeline/trick", 10)
         self.amcl_pose = None
         self.amcl_time = 0.0
-        self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_cb, 10, callback_group=group)
-        self.global_localization = self.create_client(Empty, "/reinitialize_global_localization",
-                                                      callback_group=group)
-        self.create_service(Skill, "/skill", self._skill_cb, callback_group=group)
-        self.get_logger().info("ready: /skill")
+        self.create_subscription(String, "/robot_state", self._state_cb, 10)
+        self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._amcl_cb, 10)
+        self.global_localization = self.create_client(Empty, "/reinitialize_global_localization")
 
     def _state_cb(self, msg):
         self.state = json.loads(msg.data)
@@ -70,10 +64,30 @@ class SkillServer(Node):
         self.amcl_pose = msg.pose
         self.amcl_time = time.monotonic()
 
+
+class SkillServer(Node):
+    def __init__(self, args, inputs):
+        super().__init__("skill_server")
+        self.args = args
+        self.inputs = inputs
+        self.busy = threading.Lock()
+        self.mode_pub = self.create_publisher(String, "/pipeline/mode", 10)
+        self.pose_pub = self.create_publisher(String, "/pose/command", 10)
+        self.cmd_pub = self.create_publisher(Twist, "/cmd_vel/skill", 10)
+        self.gait_pub = self.create_publisher(Float32MultiArray, "/gait_command", 10)
+        self.policy_pub = self.create_publisher(String, "/pipeline/policy", 10)
+        self.trick_pub = self.create_publisher(Float32MultiArray, "/pipeline/trick", 10)
+        # Reentrant group: when a request comes while a skill runs, the executor takes it and replies "busy"
+        # immediately. In the default (mutually exclusive) group, the request stays out of the wait set until the
+        # skill ends.
+        self.create_service(Skill, "/skill", self._skill_cb, callback_group=ReentrantCallbackGroup())
+        self.get_logger().info("ready: /skill")
+
     def _fresh(self):
-        if self.state is None or time.monotonic() - self.state_time > 1.0:
+        i = self.inputs
+        if i.state is None or time.monotonic() - i.state_time > 1.0:
             return None
-        return self.state
+        return i.state
 
     def _wait(self, cond, timeout):
         end = time.monotonic() + timeout
@@ -84,15 +98,23 @@ class SkillServer(Node):
             time.sleep(0.05)
         return None
 
-    def _skill_cb(self, req, res):
+    async def _skill_cb(self, req, res):
+        """The skill runs in a thread. This coroutine waits for it, so that the executor can reply "busy"."""
         name = req.name.strip().lower()
         if not self.busy.acquire(blocking=False):
             res.success, res.message = False, "busy with another skill"
             return res
+        done = Future(executor=self.executor)
+
+        def work():
+            try:
+                done.set_result(self._run(name, float(req.duration)))
+            except Exception as e:
+                done.set_result((False, f"error: {e}"))
+
         try:
-            res.success, res.message = self._run(name, float(req.duration))
-        except Exception as e:
-            res.success, res.message = False, f"error: {e}"
+            threading.Thread(target=work, name=f"skill {name}", daemon=True).start()
+            res.success, res.message = await done
         finally:
             self.busy.release()
         self.get_logger().info(f"{name}: {'ok' if res.success else 'failed'} - {res.message}")
@@ -122,10 +144,10 @@ class SkillServer(Node):
         """Spread AMCL's particles over the whole map, then turn in place until they agree."""
         if self._fresh()["mode"] != "policy":
             return False, "localize needs policy mode; call walk first"
-        if not self.global_localization.wait_for_service(timeout_sec=2.0):
+        if not self.inputs.global_localization.wait_for_service(timeout_sec=2.0):
             return False, "AMCL is not running: start navigation with a saved map"
         start = time.monotonic()
-        future = self.global_localization.call_async(Empty.Request())
+        future = self.inputs.global_localization.call_async(Empty.Request())
         while not future.done() and time.monotonic() - start < 3.0:
             time.sleep(0.05)
         turn = Twist()
@@ -134,13 +156,14 @@ class SkillServer(Node):
         while time.monotonic() - start < seconds:
             self.cmd_pub.publish(turn)
             time.sleep(0.05)
-            if self.amcl_pose is None or self.amcl_time < start + 1.0:
+            amcl, amcl_time = self.inputs.amcl_pose, self.inputs.amcl_time
+            if amcl is None or amcl_time < start + 1.0:
                 continue
-            cov = self.amcl_pose.covariance
+            cov = amcl.covariance
             spread = (math.sqrt(max(cov[0], cov[7])), math.sqrt(cov[35]))
             if spread[0] < self.args.localize_xy and spread[1] < self.args.localize_yaw:
                 self._hold_still(0.5)
-                p = self.amcl_pose.pose
+                p = self.inputs.amcl_pose.pose
                 yaw = 2.0 * math.atan2(p.orientation.z, p.orientation.w)
                 return True, (f"localized at x={p.position.x:.2f} y={p.position.y:.2f} yaw={yaw:.2f} "
                               f"(spread {spread[0]:.2f} m, {spread[1]:.2f} rad)")
@@ -279,8 +302,19 @@ def main():
     args = ap.parse_args(remove_ros_args()[1:])
 
     rclpy.init()
-    node = SkillServer(args)
-    executor = MultiThreadedExecutor()
+    inputs = SkillInputs()
+    node = SkillServer(args, inputs)
+    input_executor = SingleThreadedExecutor()
+    input_executor.add_node(inputs)
+
+    def spin_inputs():
+        try:
+            input_executor.spin()
+        except ExternalShutdownException:
+            pass
+
+    threading.Thread(target=spin_inputs, name="skill inputs", daemon=True).start()
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
@@ -288,7 +322,9 @@ def main():
         pass
     finally:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
+        input_executor.shutdown(timeout_sec=1.0)
         node.destroy_node()
+        inputs.destroy_node()
         rclpy.try_shutdown()
 
 

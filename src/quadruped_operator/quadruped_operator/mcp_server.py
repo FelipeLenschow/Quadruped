@@ -34,7 +34,7 @@ from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
-from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
@@ -136,8 +136,8 @@ class Robot(Node):
         self.create_timer(5.0, self._tf_close_idle)
         # locate: what the last look saw, and object_mapper's lidar settings.
         self.seen = None
-        # look's subscriptions, made and destroyed in the HTTP thread while the executor runs. A worker about to read
-        # one as it is destroyed raises before its group's ending_execution: in the node's default (mutually
+        # look's subscriptions, made and destroyed in the HTTP thread while the executor runs. The executor thread, when
+        # it is about to read one as it is destroyed, raises before its group's ending_execution: in the node's default (mutually
         # exclusive) group, that group then stayed busy and no callback of the node ran again (no /robot_state, no
         # camera; 2026-11-04). A reentrant group keeps no such state. The TF listener has its own reentrant group.
         self.look_group = ReentrantCallbackGroup()
@@ -1204,8 +1204,8 @@ def spin(executor, node):
         except ExternalShutdownException:
             return
         except Exception as e:
-            # look and the TF listener's close destroy subscriptions from the HTTP and timer threads; a worker that
-            # was about to read one raises InvalidHandle. Both are in reentrant groups (see look_group), so only that
+            # look and the TF listener's close destroy subscriptions from the HTTP and timer threads; the executor
+            # thread, when it was about to read one, raises InvalidHandle. Both are in reentrant groups (see look_group), so only that
             # message is lost, with its subscription.
             if type(e).__name__ == "InvalidHandle":
                 continue
@@ -1234,7 +1234,11 @@ def main():
 
     rclpy.init()
     robot = Robot(cfg)
-    executor = MultiThreadedExecutor()
+    # Single thread: the callbacks only keep data, and the tools block in the HTTP threads. Do not use
+    # MultiThreadedExecutor: on Jazzy (rclpy 7.1.13, rmw_fastrtps 8.4.5) it removes a busy subscription from the wait
+    # set, then rmw_wait returns immediately with no entity ready, and the node uses 100% of one core (see
+    # skill_server.SkillInputs).
+    executor = SingleThreadedExecutor()
     executor.add_node(robot)
     threading.Thread(target=spin, args=(executor, robot), daemon=True).start()
 
