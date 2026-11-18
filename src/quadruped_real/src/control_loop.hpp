@@ -33,7 +33,7 @@ struct LoopConfig {
   double gyro_offset_max = 0.05, gyro_spread_max = 0.02;  // rad/s
   // config.yaml safety: warn (log and /robot_state health.warning), then lie down with the safety policy.
   // 0 turns a limit off.
-  int motor_temp_warn_c = 75, motor_temp_lie_c = 95;
+  int motor_temp_warn_c = 68, motor_temp_lie_c = 74;  // config.yaml's; the firmware cuts a motor at 79 C
   int battery_warn_pct = 15, battery_lie_pct = 0;
 };
 

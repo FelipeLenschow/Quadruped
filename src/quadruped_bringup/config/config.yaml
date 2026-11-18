@@ -378,10 +378,11 @@ safety:
   joint_rom_safety_margin: 0.15        # Protect the outer 15% range of motion of each joint
   # Robot health (real Go2 only): the firmware cuts a motor that is too hot, and the robot falls. A warning (log,
   # /robot_state health.warning, app banner) at *_warn, then the safety policy lies it down at *_lie, whatever
-  # the policy's protections. 0 turns a limit off. High values for now: set them from measurements (motor
-  # temperatures under the main policy's stand, sit and lie; the battery % the Go2 reports).
-  motor_temp_warn_c: 75
-  motor_temp_lie_c: 95
+  # the policy's protections. 0 turns a limit off. The firmware cut a motor at 79 C (2026-11-18; the old lie limit,
+  # 95 C, never came first): lie 5 C under it. The agent trials that day stood and walked at up to 64 C (rear-right
+  # hip, front-right thigh), so the warning at 68 C does not come in normal use.
+  motor_temp_warn_c: 68
+  motor_temp_lie_c: 74
   battery_warn_pct: 15
   battery_lie_pct: 0
   # The safety policy is policies.json's safety_policy. It takes over when a check trips, with no checks
