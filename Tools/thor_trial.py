@@ -315,7 +315,9 @@ def main():
     path = os.path.join(trial, "trial.json")
     mcap_dir, agent_dir = os.path.join(trial, "mcap"), os.path.join(trial, "agent")
     result_path = os.path.join(trial, "agent_result.json")
-    agent_cmd = [sys.executable, LLM_HOST, "--auto", "--done_tool", "--result_file", result_path, "--model", args.model,
+    # --serve: the app's Chat tab shows the trial, and its Stop ends it.
+    agent_cmd = [sys.executable, LLM_HOST, "--auto", "--done_tool", "--serve", "--result_file", result_path,
+                 "--model", args.model,
                  "--minutes", str(args.minutes), "--max_calls", str(args.max_calls), "--ctx", str(args.ctx),
                  "--log_dir", agent_dir] + extra
     agent_cmd.append(args.task)

@@ -57,6 +57,8 @@ Android, no bridge on the robot.
   plain HTTP to that address only. The first message is the task, later ones answer the agent. The agent's
   text, its tool calls and results, and the photos (`look`'s, `find_something`'s with its box, `go_to_place`'s with its point) show in the list;
   a tap shows a photo full size. Stop stops the chat and the robot; New chat also clears it.
+  A trial (launcher [A] -> [2], `Tools/thor_trial.py`, `llm_host.py --serve`) shows in the tab too, its status
+  starting with "trial:": watch only (a trial takes no answers), and Stop (or New chat) ends the trial.
 - System tab: "Robot body" card from `/robot_state` (real Go2 only): battery %, volts and amps, and the 12
   motor temperatures by leg and joint. Then the "Robot computer" card from `/system_stats` (CPU per core, GPU, RAM, temperatures),
   published once a second by `quadruped_drivers/system_monitor`, which the real launch starts;

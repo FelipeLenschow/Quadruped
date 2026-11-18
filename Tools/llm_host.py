@@ -390,6 +390,41 @@ class AppChat:
                     self._add("info", f"stopped by the operator ({text})")
 
 
+class WatchChat(AppChat):
+    """A run with no operator (--auto --serve: Tools/thor_trial.py) shown in the app's Chat tab as it goes. Without
+    it, the tab said "no agent" during a trial. The app's messages are not given to the agent (a trial takes no
+    operator answers); its Stop, and New chat, stop the robot and end the run (end: stopped)."""
+
+    def __init__(self, stop_robot, task):
+        super().__init__(stop_robot)
+        with self.cond:
+            self.running = True
+            self.state = "trial: starting"
+            self._add("you", task)
+
+    def status(self, text):
+        super().status("trial: " + text)
+
+    def answer(self):
+        return ""  # --auto: the agent is told to go on (or to call done)
+
+    def interjection(self):
+        return None
+
+    def post(self, text):
+        with self.cond:
+            self._add("info", "A trial takes no answers. Stop ends it.")
+
+    def stop(self, clear=False):
+        super().stop(False)  # the trial's chat stays: it is its record
+
+    def end(self, text):
+        with self.cond:
+            self.running = False
+            self.state = "trial ended"
+            self._add("info", text)
+
+
 def serve(chat, port):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -544,6 +579,8 @@ def main():
     ap.add_argument("--keep", type=int, default=40, help="recent messages kept in context")
     ap.add_argument("--auto", action="store_true", help="never wait for the operator: always tell it to keep going")
     ap.add_argument("--keep_loaded", action="store_true", help="leave the model in Ollama's memory on exit")
+    ap.add_argument("--serve", action="store_true",
+                    help="--auto with a task: show the run in the app's Chat tab (HTTP on --port); its Stop ends it")
     ap.add_argument("--done_tool", action="store_true",
                     help="give the model a done(success, summary) tool that ends the task (Tools/thor_trial.py)")
     ap.add_argument("--result_file", default="",
@@ -600,9 +637,23 @@ def main():
         else:
             ask = not args.auto and sys.stdin.isatty()
             system = instructions + ("\n" + OPERATOR if ask else "") + ("\n" + DONE_NOTE if args.done_tool else "")
-            log("you", args.task or default_task)
-            calls = run_chat(Terminal(ask), mcp, args, tools + ([DONE_TOOL] if args.done_tool else []), system,
-                             args.task or default_task, outcome)
+            task = args.task or default_task
+            log("you", task)
+            io = Terminal(ask)
+            if args.serve and args.auto:
+                watch = WatchChat(stop_robot, task)
+                try:
+                    serve(watch, args.port)
+                    stopper.start()
+                    io = watch
+                    print(f"The app's Chat tab shows this run (port {args.port}); its Stop ends it.")
+                except OSError as e:
+                    print(f"Not shown in the app ({e}): does launcher [A] -> [1] run?")
+            calls = run_chat(io, mcp, args, tools + ([DONE_TOOL] if args.done_tool else []), system, task, outcome)
+            if isinstance(io, WatchChat):
+                done = outcome["end"] == "done"
+                claim = f", success {outcome.get('success')}: {outcome.get('summary')}" if done else ""
+                io.end(f"run ended: {outcome['end']}{claim}")
     except KeyboardInterrupt:
         print("\ninterrupted")
         outcome["end"] = "interrupted"
