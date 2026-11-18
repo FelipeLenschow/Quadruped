@@ -5,12 +5,13 @@ group needs the ones before it. Tests for things not built yet are at the end.
 
 ## Retest after the 2026-10-14 fixes
 
-- [ ] **ENTER at the driver** releases a lost-heartbeat trip and numb, and an e-stop. The driver now reads the
+- [x] **ENTER at the driver** releases a lost-heartbeat trip and numb, and an e-stop. The driver now reads the
       terminal directly; before, `ros2 launch` never passed ENTER on. Try it from the launcher's terminal.
 - [x] **Light colors:** blue in policy mode, green in pose mode, red during an e-stop, numb or a trip. Uses the
       Go2 app's undocumented light call; if the robot refuses it, the driver logs it once and leaves the
       light alone. 2026-11-18 (Thor): the robot accepts the call; blue, green and red are correct.
-- [ ] **Policy switch and Lie2** with the colcon install rebuilt (repo path fix).
+- [x] **Policy switch and Lie2** with the colcon install rebuilt (repo path fix). 2026-11-18 (Thor): ENTER, e-stop,
+      Lie2 then numb, and the switch to ClockRough and back, all correct.
 
 ## Navigation (Phase 1)
 

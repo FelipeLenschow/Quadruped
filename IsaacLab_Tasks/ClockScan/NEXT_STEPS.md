@@ -37,7 +37,9 @@ slowly on steps.
 - The lidar input in the `.qpol` export and the C++ runner (`quadruped_control`). Done.
 - Open: the soft target clip (`control.saturation_limit` 0.9) costs the narrow flight down at 22 cm; a per-policy
   clip or 1.0 for ScanImp.
-- Open: `lidar_fan`'s time per tick on the robot (0.8 ms mean, 1.4 ms at most, on the PC, with the fill).
+- Done: `lidar_fan`'s time on the robot (Thor, 2026-11-18; a `[timing]` line in its log every 10 s, and a warning
+  for each gap in `/lidar/fan_ranges` over 0.3 s, with its cause): a tick 2-3 ms mean, 10 ms at most; a cloud 3-7 ms;
+  no garbage-collector pauses.
 - Real L1 (`Mcap/Recordings/lio_bag`, 15 Hz, 3800 points per cloud after the filters, replayed through
   `lidar_fan`): the flat floor within 0.6-8 cm per row (median). Most rays are 0.1-0.2 s old; 11% (65 rays) have no point
   for 0.5 s, all behind the robot, where the body hides the floor: the far rows at -170, 160 deg and the column at
@@ -103,5 +105,22 @@ slowly on steps.
   model_48000 up 63/64, down 64/64; model_50000 and 51999 worse (down 45 and 52 of 64). Isaac, 0.8 m flight at
   22 cm: model_48000 up 81.6%, down 95.7% (1.6% fell); ScanHide up 89.8%, down 99.2%. So ScanHide stays the pick;
   ScanHideBack12 is the one to try on the robot if the hidden rear floor is a problem there.
-- Robot standing on flat ground: the binned real ranges against the simulated ranges, within a few cm.
-- Real robot: flat ground, then one step, then a full flight, with a person or a harness beside it.
+- Done (2026-11-18, Thor, ScanHide model_42000): robot standing on flat ground, the binned real ranges against a
+  flat floor (`src/quadruped_perception/test/fan_flat_check.py`: listens only; the floor plane fitted to the ray
+  ends, against the IMU's level, and the policy run offline on the real ranges against ideal ones).
+  - The lidar mount was 1.73 deg off in roll and pitch: the floor seen by the lidar was 1.4-3.5 deg off the IMU's
+    level, the outer rings 11-22 cm long. Measured in two headings 180 deg apart (the part that turns with the robot
+    is the floor's slope, 0.4 deg); `real_lidar.rpy` is now [0.1868, 3.2647, 2.0804], and `point_lio_go2.yaml`'s
+    extrinsic with it. After: 0.5-0.6 deg off, the floor flat to 1.0 cm (median), 464 of 576 rays within 3 cm.
+  - Gaps of 0.36-0.94 s in `/lidar/fan_ranges`, several per minute (over `timeout_s`, so a walking robot stops):
+    UDP receive buffer overflow. Fast DDS runs on UDP only (the launcher's profile), a cloud is 134 KB, the socket
+    buffer was 212 KB, and `lidar_fan` reads best effort, so a lost fragment lost the cloud (6112 datagrams dropped).
+    Now 8 MB (`launcher.py`'s profile, and `net.core.rmem_max` / `wmem_max` in `/etc/sysctl.d/60-dds-buffers.conf`
+    on the Thor; a machine with the old cap still works, with the small buffer): no drops, no gaps.
+  - The policy's joint targets on the real ranges differ from those on ideal flat ranges by 0.03 rad (mean), 0.08 rad
+    at most (MuJoCo's L1 hidden rays: 0.079 rad).
+- Real robot (2026-11-18, ScanHide model_42000): the safety tests passed (ENTER, e-stop, Lie2 then numb, lights). It
+  walked over a few containers and climbed one 17 cm step. Once the robot fell on its belly in policy mode: the Go2's
+  firmware stopped the FR hip motor (`motor_flags` 16 on that joint only, red light blinking, no trip in the driver,
+  49 C); a power cycle cleared it; cause not known (nothing recorded). Open: a full flight (up, then down), with a
+  person or a harness beside it and an MCAP recording; the narrow flight last.
