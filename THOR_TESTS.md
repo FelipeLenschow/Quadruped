@@ -25,6 +25,8 @@ model sizes), so big dense models are slow.
 - [ ] **Limits:** `--ctx 16384` (the 8B needs it on the Orin NX), the same `--keep`, and for the ladder the same
       `--minutes` and `--max_calls` (for example 5 min, 60 calls).
 - [ ] **No operator answers:** `--auto`.
+- [ ] **The agent ends the task itself:** `--done_tool` (`thor_trial.py` sets it). The model gets one more tool,
+      `done(success, summary)`, and one more sentence after `INSTRUCTIONS`; a run ends at `done`, or at the limits.
 
 A run (on the robot, in the ROS 2 environment, with the driver [6] running): launcher **[A] → [2] Recorded
 trial**. It asks for the model, then a task from `Tools/agent_tasks.yaml` by number (the task set and the demo
@@ -39,8 +41,10 @@ python3 Tools/thor_trial.py <task>_<model>_<n> "<task prompt>" --model <model>
 ```
 
 It clears `/objects`, records an MCAP (camera, `/map`, `/tf`, `/plan`, `/objects`, `/cmd_vel`, `/robot_state`;
-`--lidar` adds the clouds), runs `llm_host.py --auto --ctx 16384 --minutes 5 --max_calls 60` (other limits for a
-demo: `--minutes 0 --max_calls 200`), asks for the result and makes the map video. All goes into
+`--lidar` adds the clouds), runs `llm_host.py --auto --done_tool --ctx 16384 --minutes 5 --max_calls 60` (other
+limits for a demo: `--minutes 0 --max_calls 200`), shows how the run ended (`done` with the agent's own success and
+summary, or the time or call limit), asks for the real result and makes the map video. `trial.json` keeps both: the
+agent's claim (`agent`) and the operator's result (`success`, `failure`); a false claim of success is a result too. All goes into
 `logs/thor/<name>/`: `trial.json`, `mcap/`, `agent/` (the log and the agent's photos), `map.mp4` (the map as it
 grows, the path, the plan, the camera, the agent's photos and tool calls), `camera.mp4` (the Go2's own camera,
 `/go2_camera/image/compressed`, at real time and its own rate, from the same start as `map.mp4`: for the corner of

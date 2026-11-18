@@ -69,6 +69,20 @@ Call skill walk first if you are not walking. If a call fails, read why and try 
 Keep each message short: one line on what you do next, then the tool call."""
 
 KEEP_GOING = "Keep going: pick the next thing to do and call a tool."
+# --done_tool (a trial: one task, no operator): the agent says itself when the task is over. Without it, --auto told it
+# to keep going after "Done!", and it went on to look for a chair until Ctrl+C (2026-11-18). No object names here: the
+# 2B copies example names.
+DONE = "done"
+DONE_TOOL = {"type": "function", "function": {
+    "name": DONE,
+    "description": "Call this once, when the task is finished, or when it cannot be done. It ends the task.",
+    "parameters": {"type": "object", "properties": {
+        "success": {"type": "boolean", "description": "true if the task is done, false if it cannot be done"},
+        "summary": {"type": "string", "description": "one line: what you did, or why it cannot be done"}},
+        "required": ["success", "summary"]}}}
+DONE_NOTE = "When the task is finished, or it cannot be done, call done. Do nothing more after the task."
+DONE_NUDGE = ("You did not call a tool. If the task is finished, or it cannot be done, call done. "
+              "Else call the next tool.")
 OPERATOR = ("The operator reads your messages and may answer when you reply without a tool call. Ask only when you "
             "cannot go on without them. Keep each message short: one line on what you do next, then the tool call.")
 
@@ -432,9 +446,12 @@ def serve(chat, port):
     return server
 
 
-def run_chat(io, mcp, args, tools, system, task):
-    """One task, until the model answers and the operator ends it, the time is up, or the operator stops it.
-    Returns the number of tool calls."""
+def run_chat(io, mcp, args, tools, system, task, outcome=None):
+    """One task, until the model answers and the operator ends it, the model calls done (--done_tool), the time is
+    up, or the operator stops it. Returns the number of tool calls (done does not count). outcome (a dict): gets
+    "end" (done, operator, time, max_calls, stopped) and, after done, "success" and "summary"."""
+    outcome = {} if outcome is None else outcome
+    outcome["end"] = "max_calls"
     # The task alone. A pee note after it (find_something, then visit with the trick) made the 4B refuse every other
     # task ("go under the table" 10 times in 10), and the 4B finds the thing without it (19 in 20). The 2B needs it:
     # without it, it called the trick at once for "pee on the chair" 8 times in 10 (2026-11-03).
@@ -442,6 +459,7 @@ def run_chat(io, mcp, args, tools, system, task):
     end = time.monotonic() + args.minutes * 60
     calls = 0
     while calls < args.max_calls and not io.stopped():
+        outcome["end"] = "max_calls"
         more = io.interjection()
         if more is not None:
             messages.append({"role": "user", "content": more or KEEP_GOING})
@@ -450,6 +468,7 @@ def run_chat(io, mcp, args, tools, system, task):
         t = time.monotonic()
         reply = chat(args.ollama, args.model, messages, tools, args.think, args.ctx)
         if io.stopped():
+            outcome["end"] = "stopped"
             break
         said = (reply.get("content") or "").strip()
         if said:
@@ -459,14 +478,22 @@ def run_chat(io, mcp, args, tools, system, task):
         if not todo:
             answer = io.answer()
             if answer is None or (not answer and args.minutes > 0 and time.monotonic() > end):
+                outcome["end"] = "operator" if answer is None else "time"
                 break
-            messages.append({"role": "user", "content": answer or KEEP_GOING})
+            messages.append({"role": "user", "content": answer or (DONE_NUDGE if args.done_tool else KEEP_GOING)})
             continue
         for tc in todo:
             name, targs = tc["function"]["name"], tc["function"].get("arguments") or {}
             if isinstance(targs, str):
                 targs = json.loads(targs or "{}")
             io.show("call", f"{name}({json.dumps(targs)[1:-1]})", name)
+            if args.done_tool and name == DONE:
+                outcome.update(end="done", success=targs.get("success"), summary=str(targs.get("summary", "")))
+                io.show("done", f"success {outcome['success']}: {outcome['summary']}")
+                skipped = todo[todo.index(tc) + 1:]
+                if skipped:
+                    io.show("info", "not run, after done: " + ", ".join(t["function"]["name"] for t in skipped))
+                return calls
             io.status(f"calling {name}")
             def note(data, name=name):
                 """Before the result: go_to_place's photo with its points, before Nav2 has the goal."""
@@ -489,9 +516,13 @@ def run_chat(io, mcp, args, tools, system, task):
             if seen:
                 messages.append({"role": "user", "content": f"The photo from {name}.", "images": seen})
             if io.stopped():
+                outcome["end"] = "stopped"
                 break
+        if io.stopped():
+            break
         if args.minutes > 0 and time.monotonic() > end:
             io.show("info", f"{args.minutes:g} minutes are up.")
+            outcome["end"] = "time"
             break
     return calls
 
@@ -513,6 +544,10 @@ def main():
     ap.add_argument("--keep", type=int, default=40, help="recent messages kept in context")
     ap.add_argument("--auto", action="store_true", help="never wait for the operator: always tell it to keep going")
     ap.add_argument("--keep_loaded", action="store_true", help="leave the model in Ollama's memory on exit")
+    ap.add_argument("--done_tool", action="store_true",
+                    help="give the model a done(success, summary) tool that ends the task (Tools/thor_trial.py)")
+    ap.add_argument("--result_file", default="",
+                    help="write how the run ended as JSON: end, success and summary (after done), calls, seconds")
     ap.add_argument("--log_dir", default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                       "logs", "agent"), help='the run log\'s folder; "" for none')
     args = ap.parse_args()
@@ -541,6 +576,8 @@ def main():
             return f"stop failed: {e}"
 
     calls = 0
+    outcome = {"end": "error"}
+    t0 = time.monotonic()
     try:
         if args.app:
             stopper.start()
@@ -562,12 +599,24 @@ def main():
                     app.show("info", "chat ended: send a new task, or New chat")
         else:
             ask = not args.auto and sys.stdin.isatty()
-            system = instructions + ("\n" + OPERATOR if ask else "")
+            system = instructions + ("\n" + OPERATOR if ask else "") + ("\n" + DONE_NOTE if args.done_tool else "")
             log("you", args.task or default_task)
-            calls = run_chat(Terminal(ask), mcp, args, tools, system, args.task or default_task)
+            calls = run_chat(Terminal(ask), mcp, args, tools + ([DONE_TOOL] if args.done_tool else []), system,
+                             args.task or default_task, outcome)
     except KeyboardInterrupt:
         print("\ninterrupted")
+        outcome["end"] = "interrupted"
+    except Exception:
+        outcome["end"] = "error"
+        raise
     finally:
+        if args.result_file:
+            outcome.update(calls=calls, seconds=round(time.monotonic() - t0, 1))
+            try:
+                with open(args.result_file, "w") as f:
+                    json.dump(outcome, f, indent=2)
+            except OSError as e:
+                print(f"result file not written: {e}")
         try:
             print("stop:", mcp.call("stop", {})["content"][0]["text"])
         except Exception as e:

@@ -14,7 +14,8 @@ Run it on the robot, in the ROS 2 environment, with the driver ([6]) and the MCP
   3. waits until Nav2 is active, /map has come and a camera frame has come,
   4. clears /objects (what find_something and object_mapper found in the last trial),
   5. starts the MCAP recorder (record.launch.py: the camera always, the lidar clouds with --lidar),
-  6. runs Tools/llm_host.py --auto with the fixed limits (--ctx 16384, --minutes 5, --max_calls 60 unless given),
+  6. runs Tools/llm_host.py --auto --done_tool with the fixed limits (--ctx 16384, --minutes 5, --max_calls 60
+     unless given): the agent ends the task itself with done(success, summary), or the limits end it,
   7. waits for the last /map, then stops the recorder, Nav2 and the cameras it started,
   8. asks for the result (success, or the failure type of THOR_TESTS.md),
   9. makes the map video and the camera video (Tools/map_video.py; it needs opencv and mcap_ros2, which the
@@ -251,9 +252,12 @@ def run_agent(cmd):
                 proc.terminate()
 
 
-def ask_result():
+def ask_result(agent):
     if not sys.stdin.isatty():
         return {}
+    end = agent.get("end", "?")
+    claim = f": success {agent.get('success')}, \"{agent.get('summary', '')}\"" if end == "done" else ""
+    print(f"\nThe run ended by {end}{claim}")
     try:
         a = input("\nResult? [s]uccess, [f]ail, Enter = fill in trial.json later: ").strip().lower()
         if a.startswith("s"):
@@ -310,8 +314,10 @@ def main():
     os.makedirs(trial)
     path = os.path.join(trial, "trial.json")
     mcap_dir, agent_dir = os.path.join(trial, "mcap"), os.path.join(trial, "agent")
-    agent_cmd = [sys.executable, LLM_HOST, "--auto", "--model", args.model, "--minutes", str(args.minutes),
-                 "--max_calls", str(args.max_calls), "--ctx", str(args.ctx), "--log_dir", agent_dir] + extra
+    result_path = os.path.join(trial, "agent_result.json")
+    agent_cmd = [sys.executable, LLM_HOST, "--auto", "--done_tool", "--result_file", result_path, "--model", args.model,
+                 "--minutes", str(args.minutes), "--max_calls", str(args.max_calls), "--ctx", str(args.ctx),
+                 "--log_dir", agent_dir] + extra
     agent_cmd.append(args.task)
     info = {
         "name": args.name, "task_id": args.task_id, "task": args.task, "criterion": args.criterion,
@@ -365,12 +371,19 @@ def main():
     if "aborted" in info:
         sys.exit(f"ABORTED: {info['aborted']}\n(trial folder kept: {trial})")
     info["agent_exit"], info["interrupted"] = code, interrupted > 0
+    try:
+        with open(result_path) as f:
+            # end: done (the agent's own success and summary), time, max_calls, interrupted, error
+            info["agent"] = json.load(f)
+    except (OSError, ValueError):
+        info["agent"] = {}
+    save(path, info)  # complete before the question: a kill there loses only the operator's result
     if code != 0 and not interrupted:
         print(f"WARNING: llm_host ended with code {code} (MCP server or Ollama down?): see its output above")
     if not os.path.isfile(os.path.join(mcap_dir, "metadata.yaml")):
         print(f"WARNING: no metadata.yaml in {mcap_dir}: the MCAP may be cut (see record.log)")
     if not args.no_ask:
-        info.update(ask_result())
+        info.update(ask_result(info["agent"]))
     save(path, info)
 
     video = [sys.executable, MAP_VIDEO, trial]
