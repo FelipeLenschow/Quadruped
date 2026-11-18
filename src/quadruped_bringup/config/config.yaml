@@ -80,9 +80,11 @@ lidar_fan:
 # Real Go2 L1 lidar mount on the base (real_sensors). Gazebo uses the URDF's. lidar_level finds roll and
 # pitch from the floor and keeps yaw. The yaw is ~120 deg about the lidar's own axis off the URDF's radar
 # frame, measured by aligning the clouds before and after a straight 1.3 m walk against odometry.
+# Roll and pitch corrected by 1.73 deg on 2026-11-18: the floor plane from the lidar against the IMU's level,
+# standing, in two headings 180 deg apart (the part that turns with the robot is the floor's slope, 0.4 deg).
 real_lidar:
   xyz: [0.28945, 0.0, -0.046825]
-  rpy: [0.2171, 3.2680, 2.0766]
+  rpy: [0.1868, 3.2647, 2.0804]
   # The L1 reports every range this much too long (m); real_sensors pulls each point back along its ray.
   # Fitted to a wall at a tape-measured 1.60 m and the floor under the standing robot's feet (leg FK).
   range_offset: 0.12

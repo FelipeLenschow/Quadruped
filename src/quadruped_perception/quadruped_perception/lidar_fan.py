@@ -17,6 +17,7 @@ Nothing is published while the cloud or the motion is older than cloud_timeout_s
 
 import argparse
 from collections import deque
+import gc
 import os
 import signal
 import time
@@ -283,6 +284,81 @@ def find_fan(checkpoint, wait_s):
     return None, None
 
 
+class Timing:
+    """Where /lidar/fan_ranges loses time: callback durations, tick intervals, publish gaps with their cause, and
+    Python's garbage-collector pauses. A summary every `every` s, and a warning at once for each long publish gap."""
+
+    def __init__(self, logger, gap_warn=0.3, every=10.0):
+        self.log, self.gap_warn, self.every = logger, gap_warn, every
+        self.t0 = time.monotonic()
+        self.last_pub = None
+        self.last_tick = None
+        self.longest = ("", 0.0)  # the longest callback since the last publish
+        self.tick_wait = 0.0  # the longest interval between ticks since the last publish
+        self.no_pub = {"cloud": 0, "motion": 0}
+        self._reset()
+        self._gc_start = None
+        gc.callbacks.append(self._gc)
+
+    def _reset(self):
+        self.cb = {}  # name -> [count, total, max]
+        self.tick_gap_max = 0.0
+        self.pub_gap_max = 0.0
+        self.gc_max, self.gc_n = 0.0, 0
+        self.skipped = {"cloud": 0, "motion": 0}
+
+    def _gc(self, phase, info):
+        if phase == "start":
+            self._gc_start = time.perf_counter()
+        elif self._gc_start is not None:
+            took = time.perf_counter() - self._gc_start
+            self.gc_n += 1
+            self.gc_max = max(self.gc_max, took)
+            if took > 0.05:
+                self.log.warn(f"[timing] garbage collection (generation {info.get('generation')}) took {took * 1000:.0f} ms")
+
+    def callback(self, name, took):
+        c = self.cb.setdefault(name, [0, 0.0, 0.0])
+        c[0] += 1
+        c[1] += took
+        c[2] = max(c[2], took)
+        if took > self.longest[1]:
+            self.longest = (name, took)
+
+    def tick(self, now):
+        if self.last_tick is not None:
+            self.tick_gap_max = max(self.tick_gap_max, now - self.last_tick)
+            self.tick_wait = max(self.tick_wait, now - self.last_tick)
+        self.last_tick = now
+
+    def skipped_tick(self, why):
+        self.skipped[why] += 1
+        self.no_pub[why] += 1
+
+    def published(self, now, cloud_age, motion_age):
+        if self.last_pub is not None:
+            gap = now - self.last_pub
+            self.pub_gap_max = max(self.pub_gap_max, gap)
+            if gap > self.gap_warn:
+                held = ", ".join(f"{n} stale {k} ticks" for n, k in self.no_pub.items() if k) or "no stale input"
+                self.log.warn(f"[timing] no fan ranges for {gap * 1000:.0f} ms (longest wait between ticks "
+                              f"{self.tick_wait * 1000:.0f} ms; {held}; longest callback "
+                              f"{self.longest[0]} {self.longest[1] * 1000:.0f} ms; now cloud {cloud_age * 1000:.0f} ms "
+                              f"and motion {motion_age * 1000:.0f} ms old)")
+        self.last_pub = now
+        self.longest = ("", 0.0)
+        self.tick_wait = 0.0
+        self.no_pub = {"cloud": 0, "motion": 0}
+        if now - self.t0 >= self.every:
+            parts = [f"{n} {c[1] / c[0] * 1000:.1f}/{c[2] * 1000:.1f} ms x{c[0]}" for n, c in sorted(self.cb.items())]
+            self.log.info(f"[timing] last {now - self.t0:.0f} s: callbacks mean/max {', '.join(parts)}; tick interval "
+                          f"max {self.tick_gap_max * 1000:.0f} ms; publish gap max {self.pub_gap_max * 1000:.0f} ms; "
+                          f"no publish for stale cloud {self.skipped['cloud']}, motion {self.skipped['motion']} ticks; "
+                          f"gc {self.gc_n} runs, max {self.gc_max * 1000:.1f} ms")
+            self.t0 = now
+            self._reset()
+
+
 class LidarFan(Node):
     def __init__(self, fan, cfg):
         super().__init__("lidar_fan")
@@ -291,6 +367,7 @@ class LidarFan(Node):
         self.mounts = {}
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.timing = Timing(self.get_logger())
         self.pub = self.create_publisher(Float32MultiArray, "/lidar/fan_ranges", 10)
         self.create_subscription(PointCloud2, "/lidar/points", self._cloud_cb, qos_profile_sensor_data)
         self.create_subscription(Odometry, "/odom/state_estimator", self._motion_cb, 50)
@@ -301,16 +378,31 @@ class LidarFan(Node):
                                f"window {self.fan.window:.2f} s -> /lidar/fan_ranges")
 
     def _joints_cb(self, msg):
+        t0 = time.perf_counter()
+        self._joints(msg)
+        self.timing.callback("joints", time.perf_counter() - t0)
+
+    def _joints(self, msg):
         links = leg_links(msg)
         if links is not None:
             self.fan.links = links
 
     def _motion_cb(self, msg):
+        t0 = time.perf_counter()
+        self._motion(msg)
+        self.timing.callback("motion", time.perf_counter() - t0)
+
+    def _motion(self, msg):
         v = msg.twist.twist.linear
         self.fan.motion(Time.from_msg(msg.header.stamp).nanoseconds * 1e-9, rotation(msg.pose.pose.orientation),
                         (v.x, v.y, v.z), time.monotonic())
 
     def _cloud_cb(self, msg):
+        t0 = time.perf_counter()
+        self._cloud(msg)
+        self.timing.callback("cloud", time.perf_counter() - t0)
+
+    def _cloud(self, msg):
         if msg.header.frame_id not in self.mounts:
             try:
                 tf = self.tf_buffer.lookup_transform(self.frame, msg.header.frame_id, Time()).transform
@@ -329,9 +421,18 @@ class LidarFan(Node):
                        time.monotonic(), times[ok])
 
     def _tick(self):
-        ranges = self.fan.ranges(time.monotonic())
-        if ranges is not None and rclpy.ok():
+        t0 = time.perf_counter()
+        now = time.monotonic()
+        self.timing.tick(now)
+        ranges = self.fan.ranges(now)
+        if ranges is None:
+            f = self.fan
+            cloud_old = f.last_cloud is None or now - f.last_cloud > f.timeout
+            self.timing.skipped_tick("cloud" if cloud_old else "motion")
+        elif rclpy.ok():
             self.pub.publish(Float32MultiArray(data=ranges.tolist()))
+            self.timing.published(now, now - self.fan.last_cloud, now - self.fan.last_motion)
+        self.timing.callback("tick", time.perf_counter() - t0)
 
 
 def main():

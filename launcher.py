@@ -179,6 +179,10 @@ def write_fastdds_profile(local_ip, super_server=None):
                server and the nodes both run locally. -->
           <address>127.0.0.1</address>
         </interfaceWhiteList>
+        <!-- A lidar cloud is ~134 KB; with the 212 KB default the socket overflowed and best-effort readers
+             (lidar_fan) lost whole clouds. The kernel caps this at net.core.rmem_max / wmem_max. -->
+        <receiveBufferSize>8388608</receiveBufferSize>
+        <sendBufferSize>8388608</sendBufferSize>
       </transport_descriptor>
     </transport_descriptors>
     <participant profile_name="iface_only" is_default_profile="true">
