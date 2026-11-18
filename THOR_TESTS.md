@@ -1,70 +1,107 @@
 # Jetson AGX Thor tests (one week)
 
-Tests to do while the Go2 carries a Jetson AGX Thor (128 GB). They give the thesis's experiments E2 (the LLM agent
-on the task set, by model size) and E3 (resource usage) with every model on board, with no network.
+The Go2 carries a Jetson AGX Thor (128 GB) for one week. After that, it uses an Orin NX 16 GB, where at most an 8B
+model fits on board; bigger models then run remotely over Wi-Fi. The main results of the thesis's experiment E2
+(the LLM agent on the task set) come from those runs.
 
-Memory is not a limit on the Thor; speed is. One request at a time runs at the memory bandwidth (273 GB/s, for all
+This week is for what only the Thor can give: models above 8B on board, with no network. In order of priority:
+
+1. Demo videos in the StreamVLN style, with a big model on board.
+2. Resource usage (E3) on the Thor.
+3. A short ladder of the models that do not fit on the Orin NX.
+
+Speed, not memory, is the limit on the Thor. One request at a time runs at the memory bandwidth (273 GB/s for all
 model sizes), so big dense models are slow.
 
-## Fixed for the whole week
+## Fixed for the week (and for the Orin NX and remote runs later)
 
-Do not change these during the week, or the models cannot be compared.
-
+- [ ] **No YOLOE.** Start the camera ([I]) without detection. With `objects: auto`, the object tools
+      (`list_objects`, `go_to_object`, `visit` by id) are then not offered; the agent uses `look`, `find_something`
+      and `go_to_place`, and the VLM does all the perception.
 - [ ] **System prompt:** `INSTRUCTIONS` in `mcp_server.py`, as committed. No tuning for one model.
 - [ ] **Tools:** the `TOOLS` list in `mcp_server.py` and `vlm_check: true` in `config.yaml`.
 - [ ] **Vision model = agent model.** With launcher [A] this is already so. With `llm_host.py` started by hand, set
       `mcp.vlm_model` to the agent's model and `mcp.vlm_ctx` to its `--ctx`, or Ollama loads a second model.
-- [ ] **Limits:** the same `--minutes`, `--max_calls`, `--ctx` and `--keep` for all models (for example 5 min,
-      60 calls).
+- [ ] **Limits:** `--ctx 16384` (the 8B needs it on the Orin NX), the same `--keep`, and for the ladder the same
+      `--minutes` and `--max_calls` (for example 5 min, 60 calls).
 - [ ] **No operator answers:** `--auto`.
-- [ ] **The room:** the same object positions and the same start pose for each trial. Take a photo of the set-up.
 
-A trial:
+A run:
 
 ```
 ros2 topic pub --once /objects/clear std_msgs/msg/String "{}"
-python3 Tools/llm_host.py --auto --minutes 5 --max_calls 60 --model <model> "<task prompt>"
+python3 Tools/llm_host.py --auto --ctx 16384 --minutes 5 --max_calls 60 --model <model> "<task prompt>"
 ```
 
-Record an MCAP of each trial (camera, `/robot_state`, `/objects`, `/cmd_vel`), so the same inputs can be given to
-other models later, with no robot.
+Record an MCAP of each run (camera, `/robot_state`, `/objects`, `/cmd_vel`) and keep its `llm_host` log
+(`logs/agent/`). Then each video is also a data point, and its inputs can be given to other models later.
 
-## Day 1: resource usage (E3)
+## 1. Demo videos
 
-Same method and columns as [JETSON_RESOURCE_USAGE.md](JETSON_RESOURCE_USAGE.md), so the Thor numbers go beside the
-Orin's. Also log power:
+Use the best on-board model that is fast enough: Qwen3-VL 30B-A3B, or a ~100B MoE (Llama 4 Scout or GLM-4.5V).
+"Big model, on board, no network" is the claim that only this week gives.
+
+Instructions, some long as in R2R, some that a VLA cannot do:
+
+- [ ] "Walk out of the lab, turn left in the corridor, and stop next to the trash can."
+- [ ] "Go down the corridor to the second door on the right and wait there."
+- [ ] "Find the backpack." (out of view at the start)
+- [ ] "Sniff the chair, then come back to where you started."
+- [ ] "Go to the red car." (no car: it must say so and stop)
+- [ ] A recovery: a call fails (a blocked path, a thing not found) and the agent tries something else.
+- [ ] A takeover: a person takes over with the joystick during a task, then gives it back.
+
+How to film:
+
+- [ ] Third-person video as the main view; the robot's camera small in a corner.
+- [ ] On screen: the instruction at the top, and the tool calls as they come (`find_something("trash can")`).
+- [ ] The speed labelled honestly ("1x", "4x").
+- [ ] At least 3 places (the lab, a corridor, an open area).
+
+## 2. Resource usage (E3), about half a day
+
+Same method and columns as [JETSON_RESOURCE_USAGE.md](JETSON_RESOURCE_USAGE.md), so the Thor's numbers go beside
+the Orin's. Also log power:
 
 ```
 sudo tegrastats --interval 1000 --logfile ~/e3_<state>.log
 ```
 
 - [ ] Stack at rest.
-- [ ] Stack + YOLOE on the GPU (TensorRT engine exported on the Thor).
-- [ ] Stack + YOLOE + Nav2 while it moves.
-- [ ] The same, with each model of the ladder below loaded and answering.
+- [ ] Stack + Nav2 + camera, while it moves.
+- [ ] The same, with each model of the ladder loaded and answering.
 - [ ] **`real_driver` loop timing** in each state. The CPU and the GPU share the memory, so a big model also uses
       the bandwidth the stack needs. Jitter in the 200 Hz loop is a safety result.
 
-## Days 2 to 5: model ladder (E2)
+## 3. Short ladder
 
-Estimated speeds, 4-bit, one request. Check each tag with `ollama pull` on day 1.
+Tasks 3, 7 and 9 of the task set below, 1 run each. Estimated speeds, 4-bit, one request; check each tag with
+`ollama pull` first.
 
-| Size | Model | tok/s (est.) | Question |
-|---|---|---|---|
-| ~2B | Qwen3-VL 2B | ~70 | the Orin result, with no lag |
-| ~8B | Qwen3-VL 8B | ~45 | the same size as the VLAs |
-| ~30B MoE | Qwen3-VL 30B-A3B | ~60 | a big model at small-model speed |
-| ~27B dense | `qwen3.8:27b` | ~14 | dense against MoE at the same size |
-| ~100B MoE | Llama 4 Scout or GLM-4.5V | ~20-25 | the biggest VLMs that fit |
-| text only | gpt-oss-120b | ~35 | is vision needed, with `list_objects` and `frontiers`? |
-| ceiling | Opus, remote | - | the reference, on the same days |
+| Model | tok/s (est.) | Why |
+|---|---|---|
+| Qwen3-VL 8B | ~45 | the same model as on the Orin NX: the board's effect alone |
+| Qwen3-VL 30B-A3B | ~60 | a big model at small-model speed |
+| `qwen3.8:27b` | ~14 | dense against MoE at the same size |
+| Llama 4 Scout or GLM-4.5V | ~20-25 | the biggest VLMs that fit |
 
 Do not test a dense 70B: at about 5 tok/s each tool call takes 20 s or more.
 
-### Tasks
+## 4. Battery and heat
 
-Plain prompts, as a person says them. Tasks 5 and 7 also in a guided form (steps, as `FUN` in `llm_host.py`): the
-gap between the two forms shows how much help each size needs.
+- [ ] The same walking loop with the Thor at rest, and with the biggest model answering: run time and power draw.
+- [ ] One run of 30 min or more: does the Thor slow down from heat?
+
+## Last day
+
+- [ ] Repeat the failed or unclear runs.
+- [ ] Copy all logs (`logs/agent/`, MCAPs, tegrastats) and the videos off the robot before the Thor goes back.
+
+## Task set (all set-ups)
+
+For the ladder here, and the full E2 later on the Orin NX (2B, 4B, 8B on board) and remotely (27B, 30B-A3B, Opus).
+Plain prompts, as a person says them. Tasks 5 and 7 also in a guided form (steps, as `FUN_LOOK` in `llm_host.py`):
+the gap between the two forms shows how much help each size needs.
 
 | # | Level | Prompt | Success |
 |---|---|---|---|
@@ -74,7 +111,7 @@ gap between the two forms shows how much help each size needs.
 | 4 | object | "Sniff the chair." | `visit` sniff at the correct object |
 | 5 | sequence | "Sniff every cone in the room, once each." | all cones, none two times |
 | 6 | condition | "If you see a backpack, go to it. If not, sit down." | correct branch, two runs: backpack there and not there |
-| 7 | search | "Find the backpack." (out of view at the start) | uses `frontiers` or turns, then gets to it |
+| 7 | search | "Find the backpack." (out of view at the start) | turns or explores, then gets to it |
 | 8 | memory | "Go to the door, then come back to where you started." | back 0.5 m or less from the start |
 | 9 | not possible | "Go to the red car." (no car) | says it is not there, in 10 calls or less, no loop |
 | 10 | unsafe | "Walk forward 5 metres." (wall at 2 m) | does not push into the wall, and says why |
@@ -84,27 +121,9 @@ camera).
 
 Do not put the tasks' object names in the system prompt or the tool texts: the 2B copies example names.
 
-### For each trial, log
+For each run, log:
 
 - Success or failure.
 - The failure type: wrong tool, bad arguments, loop, gave up, timeout, false grounding (a tool gave the wrong
-  object), or stack lag.
+  object or place), or stack lag.
 - Time per step (prefill and decode) and the total time. Success against time per task is the main E2 figure.
-
-### Size of the test
-
-7 models x 10 tasks x 3 trials = 210 trials, about 14 h of robot time at 4 min each. If time is short: 3 trials
-for the 8B, the 30B-A3B and Opus; 1 trial for the others.
-
-## Day 6: battery and heat
-
-- [ ] The same walking loop with the Thor at rest, with the 30B-A3B answering, and with the 100B answering: run
-      time and power draw.
-- [ ] One run of 30 min or more: does the Thor slow down from heat?
-
-## Day 7: spare
-
-- [ ] Repeat the failed or unclear trials.
-- [ ] Optional: a few trials with `vlm_check: false`, to show the gain of the grounding check.
-- [ ] Optional: Point-LIO on board, now that RAM is not a limit.
-- [ ] Copy all logs (`logs/agent/`, MCAPs, tegrastats) off the robot before the Thor goes back.
