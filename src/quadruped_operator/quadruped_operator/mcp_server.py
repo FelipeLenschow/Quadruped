@@ -66,9 +66,12 @@ INSTRUCTIONS = """You control a robot dog. Positions are metres in the map frame
 radians/degrees, counter-clockwise, 0 along the map's x axis. Call skill('walk') before moving. Motions block until
 done and report the result. A human with a joystick or the phone app can always take over. The tricks are harmless dog
 poses for fun: sniff points the nose at an object, pee_left / pee_right lift a hind leg beside it (nothing is
-released), wiggle wags the body. To go to something you see: find_something by its name, then visit or go_to the x, y
-that it gives. To go to a place you see that is not a thing: go_to_place, with the place in words. Both take their
+released), wiggle wags the body. To go to a thing or a place you see: go_to_place, with it in words (it stops in front
+of a thing). For a trick at a thing: find_something by its name, then visit the x, y that it gives. Both take their
 own photo, so call them directly; move is not for going somewhere."""
+# Not "to go to something you see: find_something, then visit or go_to the x, y": with that, and look's result naming
+# only find_something, the 27B agent went to a door with find_something and go_to, and Nav2 aborted (the x, y is the
+# lidar on the door: an obstacle), on the way to a room in the corridor (2026-11-18).
 
 
 def boxed(image_b64, box, label):
@@ -461,7 +464,7 @@ class Robot(Node):
         why = self._keep_for_locate(image, infos[-1] if infos else None, clouds, sent)
         size = f"photo {sent[0]} x {sent[1]} px" if sent else "photo"
         note = (f"{size}; find_something cannot use it: {why}" if why
-                else f"{size}; find_something takes the name of a thing in it")
+                else f"{size}; go_to_place walks to a thing or place in it, find_something maps a thing for visit")
         return {"content": [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": mime},
                             {"type": "text", "text": note}], "isError": False}
 
@@ -1047,8 +1050,8 @@ TOOLS = [
              "x": {"type": "number"}, "y": {"type": "number"}}, ["trick"])),
     # "Not to go somewhere": with "get out of the lab", the 2B agent called move forward again and again, with no look.
     ("move", "Turn, or take a short step, from where the robot stands, with Nav2 (it goes around obstacles or "
-     "refuses): to turn and look around, or for a small correction. Not to go somewhere: use go_to_place or "
-     "find_something, which take their own photo. At most 2 m. Blocks until there.",
+     "refuses): to turn and look around, or for a small correction. Not to go somewhere: use go_to_place, which "
+     "takes its own photo. At most 2 m. Blocks until there.",
      schema({"forward": {"type": "number", "description": "metres, - is back"},
              # Not "left": for "follow the corridor to the left" the 2B agent stepped sideways (left: 1) twice.
              "sideways": {"type": "number", "description": "metres to step sideways, + is left; to go left, turn_left"},
@@ -1061,13 +1064,14 @@ TOOLS = [
     # No example names in find_something's text or INSTRUCTIONS: the 2B agent called find with the example ("the
     # trash can")
     # 18 times in 20, not with the thing in its task.
-    ("find_something", "Find a thing in the camera's view and where it is on the map, for visit or go_to: takes a "
-     "photo and returns x, y. Name a thing you can see, not a purpose. A thing already on the map comes from there, "
+    ("find_something", "Find a thing in the camera's view and where it is on the map, for visit (a trick at it): "
+     "takes a photo and returns x, y, the thing itself (an obstacle: to walk to it, use go_to_place). Name a thing "
+     "you can see, not a purpose. A thing already on the map comes from there, "
      "also out of view. Not found: name another thing, or turn and try again.",
      schema({"what": {"type": "string", "description": "the thing's name"}}, ["what"])),
-    ("go_to_place", "Walk to a place you can see that is not a thing to name: takes a photo, finds the place you "
-     "describe in it, and walks there with Nav2 (to a thing or wall in it: stops in front; far away: as far as the "
-     "map goes, then call again), arriving turned toward the most open way there, or toward what you say to face. "
+    ("go_to_place", "Walk to a thing or a place you can see: takes a photo, finds what you describe in it, and "
+     "walks there with Nav2 (to a thing or wall in it: stops in front; far away: as far as the map goes, then call "
+     "again), arriving turned toward the most open way there, or toward what you say to face. "
      "Needs walk first.",
      # facing not required: required, the 2B agent called go_to_place first 0 times in 10 (10 in 10 without), as it
      # had seen nothing to face yet (2026-11-04).
