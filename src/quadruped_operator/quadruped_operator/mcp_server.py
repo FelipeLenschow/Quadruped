@@ -484,15 +484,23 @@ class Robot(Node):
         if self.seen is None:
             return text(seen["content"][-1]["text"], True)
         image = next(c["data"] for c in seen["content"] if c["type"] == "image")
+        check = bool(self.cfg.get("vlm_check", True))
+        ask = (f'Is there any "{what}" in this image? If not, answer only: none. If yes, output its bbox_2d in JSON '
+               "format." if check else f"Locate {what} in this image. Output its bbox_2d in JSON format.")
         try:
-            said = self._vision(image, f"Locate {what} in this image. Output its bbox_2d in JSON format.")
+            said = self._vision(image, ask)
+            box = BOX.search(said)
+            if box is None:
+                return text(f"{what} not found in the photo (the vision model said: {' '.join(said.split())[:150]}); "
+                            "name another thing you can see, or turn and try again", True)
+            box = [float(v) for v in box.groups()]
+            if check:
+                ok, said = self._confirm(image, box, what)
+                if not ok:
+                    return text(f"{what} not found in the photo (the vision model's box, shown alone, is not one: "
+                                f"{said}); name another thing you can see, or turn and try again", True)
         except RuntimeError as e:
             return text(str(e), True)
-        box = BOX.search(said)
-        if box is None:
-            return text(f"{what} not found in the photo (the vision model said: {' '.join(said.split())[:150]}); "
-                        "name another thing you can see, or turn and try again", True)
-        box = [float(v) for v in box.groups()]
         res = self.locate(box=box, thousandths=True)
         if res["isError"]:
             return res
@@ -604,12 +612,32 @@ class Robot(Node):
         name = what[:1].lower() + what[1:]
         if not name.lower().startswith(DETERMINERS):
             name = "the " + name
-        said = self._vision(image, f"Point to {name} in this image. Output its point_2d in JSON format.")
+        none = " If it is not in the image, answer only: none." if self.cfg.get("vlm_check", True) else ""
+        said = self._vision(image, f"Point to {name} in this image.{none} Output its point_2d in JSON format.")
         found = POINT.search(said) or BOX.search(said)
         if found is None:
             return None, " ".join(said.split())[:150]
         v = [float(g) for g in found.groups()]
         return (v if len(v) == 2 else [(v[0] + v[2]) / 2, (v[1] + v[3]) / 2]), said
+
+    def _confirm(self, image, box, what):
+        """(whether the vision model, shown only the box (thousandths) cut from the photo, says it is `what`; what it
+        said). Asked for a box, Qwen-VL boxes something else when the thing is not in view."""
+        img = cv2.imdecode(np.frombuffer(base64.b64decode(image), np.uint8), cv2.IMREAD_COLOR)
+        h, w = img.shape[:2]
+        x1, y1, x2, y2 = (v * s / 1000.0 for v, s in zip(box, (w, h, w, h)))
+        mx, my = 0.15 * abs(x2 - x1) + 8, 0.15 * abs(y2 - y1) + 8
+        crop = img[max(0, int(min(y1, y2) - my)):min(h, int(max(y1, y2) + my)),
+                   max(0, int(min(x1, x2) - mx)):min(w, int(max(x1, x2) + mx))]
+        if crop.size == 0:
+            return False, "an empty box"
+        if min(crop.shape[:2]) < 64:
+            f = 64.0 / min(crop.shape[:2])
+            crop = cv2.resize(crop, (round(crop.shape[1] * f), round(crop.shape[0] * f)), interpolation=cv2.INTER_CUBIC)
+        _, buf = cv2.imencode(".jpg", crop)
+        said = self._vision(base64.b64encode(buf.tobytes()).decode(),
+                            f'Does this image show "{what}"? Answer only yes or no.')
+        return re.match(r"\W*yes\b", said, re.I) is not None, " ".join(said.split())[:80]
 
     def _seen_point(self, point, p):
         """(map point dict as locate's, metres to stop before it) for a point in look's last photo: locate's (lidar:

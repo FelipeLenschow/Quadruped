@@ -210,6 +210,8 @@ object_mapper:
 #   (at most map_ray_m) to approach m before the first wall or to the end of the mapped floor (no map: max_move_m that
 #   way). facing: a second point in the same photo, placed the same way, to face on arrival; without it, the most open
 #   way on /map within 90 deg of the way it walked (rays to the first wall, at most open_ray_m; unknown at half).
+#   vlm_check: find_something's and go_to_place's prompts let the vision model answer "none", and find_something's
+#   box is cut out and shown to it alone to confirm (false: the old prompts, which always give a box).
 #   locate: a box in look's last photo to a map point, from object_mapper's cloud, floor_z, floor_margin and
 #   max_depth_shift (no detector needed). Not listed to the agent (its own boxes are wrong), but callable for tests.
 #   tf_idle_s: TF is listened to only around tool calls and this long after the last (a Python TF listener costs
@@ -241,6 +243,7 @@ mcp:
   ollama: http://localhost:11434
   vlm_model: qwen3vl-2b-gpu
   vlm_ctx: 8192
+  vlm_check: true
 
 # --- Motor Physical Parameters ---
 motor:
