@@ -36,7 +36,8 @@ void RobotIO::init(const std::string& interface) {
   subscriber_.reset(new ChannelSubscriber<LowState>("rt/lowstate"));
   subscriber_->InitChannel([this](const void* msg) { on_low_state(msg); }, 1);
   vui_ = std::make_unique<LightClient>();
-  vui_->SetTimeout(5.0f);
+  // The light is only a color: a call with no reply must not hold up the driver's exit for long.
+  vui_->SetTimeout(1.0f);
   vui_->Init();
 }
 

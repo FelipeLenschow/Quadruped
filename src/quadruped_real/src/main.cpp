@@ -94,6 +94,9 @@ int main(int argc, char** argv) {
   loop.close();
   if (rclcpp::ok()) rclcpp::shutdown();
   // A policy loader may still be running; it is detached and owns nothing the exit needs.
-  std::fflush(nullptr);
+  // Only the outputs: fflush(nullptr) also takes stdin's lock, which the ENTER thread holds in a read that
+  // never ends when it reads std::cin (no /dev/tty, e.g. under ros2 launch with no terminal).
+  std::fflush(stdout);
+  std::fflush(stderr);
   std::_Exit(0);
 }

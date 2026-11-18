@@ -317,9 +317,12 @@ void DriverNode::light_worker() {
     const std::string color = *color_request_;
     color_request_.reset();
     lock.unlock();
-    if (loop_.robot().set_color(color, kColorHold) != 0 && !color_warned_) {
+    if (loop_.robot().set_color(color, kColorHold) != 0) {
+      // Refused or no reply: stop here. A color queued during the call would wait out the timeout again, and
+      // the destructor joins this thread, so the driver took two timeouts to exit (past ros2 launch's SIGTERM).
       color_warned_ = true;
       RCLCPP_WARN(get_logger(), "[RealDriver] The robot refused the light color (vui api 1007); the colors stay its own.");
+      return;
     }
     lock.lock();
   }
