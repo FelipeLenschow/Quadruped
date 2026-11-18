@@ -569,6 +569,51 @@ def ask_ollama_model(default, url="http://localhost:11434"):
     return answer or default
 
 
+AGENT_TASKS = os.path.join(REPO_DIR, "Tools", "agent_tasks.yaml")
+TRIALS_DIR = os.path.join(REPO_DIR, "logs", "thor")  # Tools/thor_trial.py's --root default
+
+
+def ask_agent_task():
+    """A task from Tools/agent_tasks.yaml by number, or a new prompt: {"id", "prompt", "success", "level"}."""
+    try:
+        with open(AGENT_TASKS) as f:
+            tasks = (yaml.safe_load(f) or {}).get("tasks", [])
+    except (OSError, yaml.YAMLError) as e:
+        print(f"[Launcher] {AGENT_TASKS} not read ({e}): a new prompt only.")
+        tasks = []
+    print()
+    for i, t in enumerate(tasks, 1):
+        setup = f"  ({t['setup']})" if t.get("setup") else ""
+        print(f"  [{i:2d}] {t['id']:4s} {t.get('level', ''):12s} {t['prompt']}{setup}")
+    print("  [N]  a new prompt (or type it here)")
+    while True:
+        answer = input(f"Task, number or N [{'1' if tasks else 'N'}]: ").strip() or ("1" if tasks else "N")
+        if answer.isdigit():
+            if 1 <= int(answer) <= len(tasks):
+                t = tasks[int(answer) - 1]
+                if t.get("setup"):
+                    print(f"  Set-up: {t['setup']}")
+                print(f"  Success: {t.get('success', '')}")
+                return {"id": str(t["id"]), "prompt": t["prompt"], "success": t.get("success", ""),
+                        "level": t.get("level", "")}
+            continue
+        prompt = answer if len(answer) > 1 else ""
+        while not prompt:
+            prompt = input("Prompt: ").strip()
+        tid = re.sub(r"[^A-Za-z0-9-]+", "-", input("Short id for the trial name [new]: ").strip()).strip("-")[:12]
+        success = input("Success criterion, for trial.json (Enter = none): ").strip()
+        return {"id": tid or "new", "prompt": prompt, "success": success, "level": ""}
+
+
+def next_trial_name(task_id, model):
+    """<task id>_<model>_<n> with the first n not in logs/thor/ (thor_trial.py never uses a name again)."""
+    short = re.sub(r"[^A-Za-z0-9-]+", "-", model.split("/")[-1]).strip("-")[:28] or "model"
+    n = 1
+    while os.path.exists(os.path.join(TRIALS_DIR, f"{task_id}_{short}_{n}")):
+        n += 1
+    return f"{task_id}_{short}_{n}"
+
+
 def stop_mcp_server(proc):
     if proc is None or proc.poll() is not None:
         return
@@ -770,7 +815,7 @@ def run_cli_menu():
         print("  [X] RQT Graph (REQUIRES DOCKER OR PY3.10)")
         print("  [X] TF2 Tree (REQUIRES DOCKER OR PY3.10)")
         print("  [X] Discovery Server (REQUIRES DOCKER OR PY3.10)")
-    print("  [A] LLM Agent (Ollama model drives the robot through mcp_server; tasks from the app's Chat tab)")
+    print("  [A] LLM Agent (Ollama model drives the robot through mcp_server: the app's Chat tab, or a recorded trial)")
 
     action_map = {
         "0": "repeat",
@@ -859,7 +904,7 @@ def run_cli_menu():
             print(f"\n[WARNING] Last action '{action}' is not available in Docker. Switching to MuJoCo.")
             action = "mujoco"
         
-        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server"]:
+        if not IS_DOCKER and action in ["mujoco", "gazebo", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "test_joints", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "teleop_keyboard", "teleop_joy", "teleop_sweep", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "agent_trial"]:
             if sys.version_info[:2] != (3, 10):
                 print(f"\n[ERROR] Last action '{action}' requires Python 3.10 or Docker. Aborting.")
                 sys.exit(1)
@@ -1372,6 +1417,45 @@ def run_cli_menu():
                       "classes": classes, "map_objects": map_objects}
 
     if action == "llm_agent":
+        print("\n--- LLM Agent ---")
+        print("  [1] Chat (tasks from the app's Chat tab)")
+        print("  [2] Recorded trial (one task: MCAP, agent log, map and camera videos; THOR_TESTS.md)")
+        if (input("Enter choice [1-2] (default 1): ").strip() or "1") == "2":
+            if requires_docker:
+                print("\n[ERROR] A recorded trial requires ROS 2 Humble (Python 3.10): run it inside DOCKER.")
+                sys.exit(1)
+            action = "agent_trial"
+
+    if action == "agent_trial":
+        print("\nNeeds the robot running ([6]). Each trial starts its own Nav2 ([N]: stop yours first), so that it")
+        print("starts with nothing mapped, and the cameras ([I]) when they do not run. Starts mcp_server for the")
+        print("trial if none runs here. Ollama must serve the model on this machine.")
+        model_def = "qwen3vl-2b-gpu" if IS_ROBOT else "qwen3.8:27b"
+        url = input("MCP server [http://127.0.0.1:8765/mcp]: ").strip() or "http://127.0.0.1:8765/mcp"
+        model = ask_ollama_model(model_def)
+        # Fixed for all models and set-ups (THOR_TESTS.md): the 8B needs it on the Orin NX.
+        ctx = input("Context tokens [16384]: ").strip() or "16384"
+        task = ask_agent_task()
+        demo = task["level"] == "demo"
+        minutes = input(f"Minutes, 0 = no limit [{0 if demo else 5}]: ").strip() or ("0" if demo else "5")
+        max_calls = input(f"Max tool calls [{200 if demo else 60}]: ").strip() or ("200" if demo else "60")
+        map_dir = os.path.join(REPO_DIR, "maps")
+        maps = sorted(f[:-5] for f in os.listdir(map_dir)
+                      if f.endswith(".yaml") and not f.endswith("_keepout.yaml")) if os.path.isdir(map_dir) else []
+        print("\nMap for each trial:")
+        print("  [0] A new map (SLAM from empty, as StreamVLN: nothing known at the start)")
+        for i, m in enumerate(maps):
+            print(f"  [{i + 1}] {m} (AMCL)")
+        pick = input(f"Enter choice [0-{len(maps)}] (default 0): ").strip() or "0"
+        chosen_map = maps[int(pick) - 1] if pick.isdigit() and 0 < int(pick) <= len(maps) else ""
+        # The same start pose each trial (THOR_TESTS.md), so it is given, not found by the localize skill.
+        initial_pose = (input("Robot start on the map, x,y,yaw [0,0,0]: ").strip() or "0,0,0") if chosen_map else ""
+        lidar = input("Also record the lidar clouds (to run SLAM again offline)? [y/N]: ").lower().strip() == "y"
+        sweep_opts = {"url": url, "model": model, "ctx": ctx, "task_id": task["id"], "prompt": task["prompt"],
+                      "success": task["success"], "minutes": minutes, "max_calls": max_calls, "lidar": lidar,
+                      "map": chosen_map, "initial_pose": initial_pose}
+
+    if action == "llm_agent":
         print("\nNeeds the robot running ([4], [5] or [6]), plus [N] for go_to and [I] for the camera. Starts")
         print("mcp_server for its run if none runs here. Ollama must serve the model on this machine.")
         # On the Jetson the model shares the 7 GB with the stack: a small one, and a context that fits beside it.
@@ -1474,7 +1558,7 @@ def main():
         print(f"[Launcher] Wireless path detected -> ROS_DISCOVERY_SERVER={discovery_server}")
         # The tools that list the whole graph (record -a, graph and topic pickers) need a super client.
         profile = write_fastdds_profile(discovery_local_ip, discovery_server if action in (
-            "mcap_record", "rqt_graph", "tf2_tree", "rviz", "foxglove", "plotjuggler") else None)
+            "mcap_record", "agent_trial", "rqt_graph", "tf2_tree", "rviz", "foxglove", "plotjuggler") else None)
         if profile:
             env["FASTRTPS_DEFAULT_PROFILES_FILE"] = profile
             print(f"[Launcher] FastDDS pinned to {discovery_local_ip} ({profile})")
@@ -1670,7 +1754,7 @@ def main():
             cmd.append("--headless")
         subprocess.run(cmd, env=env, cwd=module_path)
 
-    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "llm_agent"):
+    elif action in ("eval_policy", "mujoco", "gazebo", "isaac_sim", "real_deploy", "real_telemetry", "mujoco_twin", "gazebo_twin", "rviz", "foxglove", "console", "teleop_keyboard", "teleop_joy", "teleop_sweep", "sweep_report", "test_joints", "plotjuggler", "mcap_record", "mcap_replay_rosbag", "mcap_replay_interactive", "rqt_graph", "tf2_tree", "nav", "lio", "cameras", "discovery_server", "llm_agent", "agent_trial"):
         # Unified Driver Pipeline
         isaac_python = os.path.expanduser("~/env_isaacsim/bin/python")
         sys_python = sys.executable
@@ -1781,6 +1865,23 @@ def main():
                     f"--model={sweep_opts.get('model', 'qwen3.8:27b')}", f"--minutes={sweep_opts.get('minutes', '10')}",
                     f"--ctx={sweep_opts.get('ctx', '8192' if IS_ROBOT else '32768')}",
                     f"--keep={sweep_opts.get('keep', '12' if IS_ROBOT else '40')}"]
+
+        elif action == "agent_trial":
+            o = sweep_opts
+            # The vision model is the agent's model, as with [A] (THOR_TESTS.md: one model loaded).
+            mcp_proc = start_mcp_server(o["url"], env, "--ollama=http://localhost:11434", f"--vlm_model={o['model']}",
+                                        f"--vlm_ctx={o['ctx']}")
+            # The name at run time, so [0] Repeat gives the next trial of the same task.
+            name = next_trial_name(o["task_id"], o["model"])
+            print(f"[Launcher] Trial {name}: {o['prompt']}")
+            cmd = [sys_python, os.path.join(REPO_DIR, "Tools", "thor_trial.py"), name, o["prompt"],
+                   f"--model={o['model']}", f"--ctx={o['ctx']}", f"--minutes={o['minutes']}",
+                   f"--max_calls={o['max_calls']}", f"--task_id={o['task_id']}", f"--criterion={o['success']}",
+                   f"--mcp={o['url']}"] + (["--lidar"] if o.get("lidar") else [])
+            # Nav2 and the cameras as [N] and [I] start them: Gazebo on a PC, the real Go2 on the robot.
+            cmd += ["--sim"] if not IS_ROBOT else [f"--interface={sdk_network_interface() or ''}"]
+            if o.get("map"):
+                cmd += [f"--map={o['map']}", f"--initial_pose={o.get('initial_pose') or '0,0,0'}"]
 
         elif action == "lio":
             # Needs the real driver running (its real_sensors publishes the lidar and its IMU).

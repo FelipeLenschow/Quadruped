@@ -26,15 +26,27 @@ model sizes), so big dense models are slow.
       `--minutes` and `--max_calls` (for example 5 min, 60 calls).
 - [ ] **No operator answers:** `--auto`.
 
-A run:
+A run (on the robot, in the ROS 2 environment, with the driver [6] running): launcher **[A] → [2] Recorded
+trial**. It asks for the model, then a task from `Tools/agent_tasks.yaml` by number (the task set and the demo
+instructions below) or a new prompt, then the map: a new one (SLAM from empty, as StreamVLN) or a saved one with
+AMCL at a given start pose. It names the trial `<task>_<model>_<n>` and starts `mcp_server` with the agent's model
+as the vision model. Each trial starts its own Nav2 ([N]) and stops it at the end, so each trial starts with nothing
+mapped: stop your own [N] first (the trial refuses to start while one runs). It starts the cameras ([I]) too, when
+they do not run. **[0] Repeat** runs the next trial of the same task. By hand:
 
 ```
-ros2 topic pub --once /objects/clear std_msgs/msg/String "{}"
-python3 Tools/llm_host.py --auto --ctx 16384 --minutes 5 --max_calls 60 --model <model> "<task prompt>"
+python3 Tools/thor_trial.py <task>_<model>_<n> "<task prompt>" --model <model>
 ```
 
-Record an MCAP of each run (camera, `/robot_state`, `/objects`, `/cmd_vel`) and keep its `llm_host` log
-(`logs/agent/`). Then each video is also a data point, and its inputs can be given to other models later.
+It clears `/objects`, records an MCAP (camera, `/map`, `/tf`, `/plan`, `/objects`, `/cmd_vel`, `/robot_state`;
+`--lidar` adds the clouds), runs `llm_host.py --auto --ctx 16384 --minutes 5 --max_calls 60` (other limits for a
+demo: `--minutes 0 --max_calls 200`), asks for the result and makes the map video. All goes into
+`logs/thor/<name>/`: `trial.json`, `mcap/`, `agent/` (the log and the agent's photos), `map.mp4` (the map as it
+grows, the path, the plan, the camera, the agent's photos and tool calls), `camera.mp4` (the Go2's own camera,
+`/go2_camera/image/compressed`, at real time and its own rate, from the same start as `map.mp4`: for the corner of
+a demo video), `map_final.png`, `map.pgm`/`.yaml`.
+Then each video is also a data point, and its inputs can be given to other models later.
+`Tools/map_video.py logs/thor/<name>` makes the video again (for example `--speed 1` for a demo).
 
 ## 1. Demo videos
 
