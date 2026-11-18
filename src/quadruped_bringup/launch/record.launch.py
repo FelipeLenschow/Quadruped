@@ -28,8 +28,14 @@ def setup(context):
         path = f"{base}_{n}"
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     skip = [RAW_IMAGES] + ([] if on(context, "lidar") else [LIDAR_TOPICS]) + ([] if on(context, "camera") else [CAMERA_TOPICS])
-    exclude = ["-x", "^/(" + "|".join(skip) + ")$"]
-    return [ExecuteProcess(cmd=["ros2", "bag", "record", "-a", *exclude, "-s", "mcap", "-o", os.path.abspath(path)],
+    regex = "^/(" + "|".join(skip) + ")$"
+    # Humble: -a is all topics, -x the regex to leave out. Jazzy (the Thor's Docker) has no -x (the recorder ended at
+    # once: "unrecognized arguments: -x"): --exclude-regex; and its -a also records services, --all-topics does not.
+    if os.environ.get("ROS_DISTRO", "humble") == "humble":
+        select = ["-a", "-x", regex]
+    else:
+        select = ["--all-topics", "--exclude-regex", regex]
+    return [ExecuteProcess(cmd=["ros2", "bag", "record", *select, "-s", "mcap", "-o", os.path.abspath(path)],
                            output="screen", sigterm_timeout="10")]
 
 
