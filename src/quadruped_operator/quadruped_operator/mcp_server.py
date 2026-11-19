@@ -69,7 +69,8 @@ done and report the result. A human with a joystick or the phone app can always 
 poses for fun: sniff points the nose at an object, pee_left / pee_right lift a hind leg beside it (nothing is
 released), wiggle wags the body. To go to a thing or a place you see: go_to_place, with it in words (it stops in front
 of a thing). For a trick at a thing: find_something by its name, then visit the x, y that it gives. Both take their
-own photo, so call them directly; move is not for going somewhere."""
+own photo, so call them directly; move is not for going somewhere. Choose where to go from what you see, not from
+see_map."""
 # Not "to go to something you see: find_something, then visit or go_to the x, y": with that, and look's result naming
 # only find_something, the 27B agent went to a door with find_something and go_to, and Nav2 aborted (the x, y is the
 # lidar on the door: an obstacle), on the way to a room in the corridor (2026-11-18).
@@ -1181,11 +1182,15 @@ TOOLS = [
      "first, with their size. go_to one, then turn and look to see what lies beyond. None left: the room is mapped.",
      schema()),
     # Marks with their x, y in the text: a VLM reads which mark is meant from a drawing, not coordinates.
+    # Not "to plan a route: go_to a mark's x, y": with that, the 27B went from mark to mark down the corridor with
+    # go_to, past the side opening at its middle (in its photo and on the map), and never used go_to_place for
+    # "follow the corridor to the middle, then turn left" (trial new_qwen3-8-27b_13, 2026-11-19).
     ("see_map", "A drawing of the map around the robot (white: free floor, black: walls and obstacles, grey: not "
      "seen yet), turned so the robot is at the centre facing up, with numbered marks: where it started, the things "
      "find_something found, and the unexplored edges. The text gives each mark's x, y, distance and bearing (+ is "
-     "left). To plan a route, to see where the floor goes on, or to go back: go_to a start or unexplored mark's x, y "
-     "(a thing's x, y is the thing itself: go_to_place or visit it).",
+     "left). It shows where you are: where the corridors and openings go, and where you have been. It does not show "
+     "what is there, so do not choose where to go from it: look, and go_to_place. go_to a mark only to go back to "
+     "a place you cannot see, such as the start.",
      schema()),
     ("go_to", "Walk to a point on the map with Nav2, avoiding obstacles. Blocks until there.",
      schema({"x": {"type": "number"}, "y": {"type": "number"},
