@@ -179,6 +179,23 @@ DIGEST = "Earlier steps, as text (their photos were removed to free the context)
 DIGEST_LINES = 60
 
 
+# Ollama's own count, to decide if a request fits num_ctx: the text, and each image at a fixed ~768 tokens, whatever the
+# model really uses. Past num_ctx it drops the oldest messages after the system prompt, the task first, silently, and
+# the next answer reads everything again. Measured on the Thor (Ollama 0.40.16, qwen3.8:27b at ~232 real tokens a
+# photo, num_ctx 4096, 2026-11-19): with 5 photos (1200 tokens) it kept a word from the first message, with 6 (1430
+# real) it had dropped it. Trial new_qwen3-8-27b_27 at 13 photos: 9.3k real, ~16.3k by this count; from then on each
+# step lost the task message and took 27-30 s, where the cache made it 1-4 s. compact keeps both counts under
+# --compact_at.
+OLLAMA_IMAGE_TOKENS = 768
+
+
+def ollama_count(messages, tools):
+    """Ollama's estimate of a request (see OLLAMA_IMAGE_TOKENS); the text at 3 characters a token, on the high side."""
+    text = sum(len(m.get("content") or "") + sum(len(json.dumps(tc)) for tc in m.get("tool_calls") or [])
+               for m in messages) + len(json.dumps(tools))
+    return text // 3 + OLLAMA_IMAGE_TOKENS * sum(len(m.get("images") or []) for m in messages)
+
+
 def tokens(m):
     """A message's tokens, roughly: text at 3 characters a token (JSON is dense), photos as measured."""
     text = len(m.get("content") or "") + sum(len(json.dumps(tc)) for tc in m.get("tool_calls") or [])
@@ -567,6 +584,7 @@ def run_chat(io, mcp, args, tools, system, task, outcome=None):
     end = time.monotonic() + args.minutes * 60
     calls = 0
     used, known = 0, 0  # the context at the last answer, as Ollama counted it, and how many messages that covers
+    last_prompt = 0
     stats = outcome.setdefault("model", {"requests": 0, "prefill_s": 0.0, "decode_s": 0.0, "max_context": 0,
                                          "compactions": 0})
     while calls < args.max_calls and not io.stopped():
@@ -575,11 +593,14 @@ def run_chat(io, mcp, args, tools, system, task, outcome=None):
         if more is not None:
             messages.append({"role": "user", "content": more or KEEP_GOING})
         need = used + sum(tokens(m) for m in messages[known:])
-        if used and need > args.compact_at * args.ctx:
+        estimate = ollama_count(messages, tools)
+        if (used and need > args.compact_at * args.ctx) or estimate > args.compact_at * args.ctx:
             dropped = compact(messages, int(args.compact_at * args.ctx * 0.4))
             stats["compactions"] += 1
-            io.show("info", f"context {need} of {args.ctx} tokens: older steps made into text, {dropped} photos "
-                            "removed (the next answer reads the history again)")
+            io.show("info", f"context {max(need, estimate)} of {args.ctx} tokens ({need} real, {estimate} as Ollama "
+                            f"counts photos): older steps made into text, {dropped} photos removed (the next answer "
+                            "reads the history again)")
+            known = 0  # nothing of it is in Ollama's cache now
         io.status("thinking")
         t = time.monotonic()
         r = chat(args.ollama, args.model, messages, tools, args.think, args.ctx)
@@ -593,6 +614,13 @@ def run_chat(io, mcp, args, tools, system, task, outcome=None):
         stats["prefill_s"] = round(stats["prefill_s"] + step["prefill_s"], 2)
         stats["decode_s"] = round(stats["decode_s"] + step["decode_s"], 2)
         stats["max_context"] = max(stats["max_context"], step["context"])
+        if known and step["context"] < last_prompt - 50:
+            # Shorter than the last request with only messages added: Ollama dropped old ones (should not happen
+            # with the counts above).
+            stats["ollama_dropped"] = stats.get("ollama_dropped", 0) + 1
+            io.show("info", f"Ollama dropped old messages: the prompt was {step['context']} tokens, the last one "
+                            f"{last_prompt}")
+        last_prompt = step["context"]
         if LOG is not None:
             LOG.step(step)
         if io.stopped():
