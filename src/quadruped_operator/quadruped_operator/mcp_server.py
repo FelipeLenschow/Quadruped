@@ -73,11 +73,16 @@ done and report the result. A human with a joystick or the phone app can always 
 poses for fun: sniff points the nose at an object, pee_left / pee_right lift a hind leg beside it (nothing is
 released), wiggle wags the body. To go to a thing or a place you see: go_to_place, with it in words (it stops in front
 of a thing). For a trick at a thing: find_something by its name, then visit the x, y that it gives. Both take their
-own photo, so call them directly; move is not for going somewhere. Choose where to go from what you see, not from
-see_map; go_to_map_place is for a place out of view."""
+own photo, so call them directly; move is not for going somewhere. After each walk, call look and see_map together:
+the photo shows what is there, the map shows where the corridors and openings go, also beside and behind you, where
+the camera does not see. Go to what you see with go_to_place, and to a corridor or opening on the map with
+go_to_map_place."""
 # Not "to go to something you see: find_something, then visit or go_to the x, y": with that, and look's result naming
 # only find_something, the 27B agent went to a door with find_something and go_to, and Nav2 aborted (the x, y is the
 # lidar on the door: an obstacle), on the way to a room in the corridor (2026-11-18).
+# Not "choose where to go from what you see, not from see_map" (that was for run _13's mark-hopping with go_to, which
+# the agent no longer has): with it, the 27B walked through the crossing its task turned left at, again and again,
+# with the side corridor on the map but out of the camera's view (new_qwen3-8-27b_20, _26, _28, _32; 2026-11-19).
 
 
 def boxed(image_b64, box, label):
@@ -1414,14 +1419,14 @@ TOOLS = [
     ("see_map", "A drawing of the map around the robot (white: free floor, black: walls and obstacles, grey: not "
      "seen yet), turned so the robot is at the centre facing up, with numbered marks: where it started, the things "
      "find_something found, and the unexplored edges. The text gives each mark's x, y, distance and bearing (+ is "
-     "left). It shows where you are: where the corridors and openings go, and where you have been. It does not show "
-     "what is there, so do not choose where to go from it: look, and go_to_place. go_to_map_place is for a place you "
-     "cannot see, such as the start.",
+     "left) and direction. It shows where the corridors and openings go, also beside and behind you where the camera "
+     "does not see, and where you have been; not what things are (look for that). To go to a place on it: "
+     "go_to_map_place.",
      schema()),
     # Words, not the agent's own x, y: the 27B's go_to(3, 0.3) to "step through" a door was in the corridor's far
     # wall (trial new_qwen3-8-27b_15). go_to is not listed now.
-    ("go_to_map_place", "Walk to a place on the map that you cannot see from here (the start, a corridor or opening "
-     "you passed, an unexplored edge): describe it as it looks on see_map's drawing, or give a mark's number. It "
+    ("go_to_map_place", "Walk to a place on the map: a corridor or an opening (also beside or behind you), an "
+     "unexplored edge, or the start. Describe it as it looks on see_map's drawing, or give a mark's number. It "
      "finds it on the map and walks there with Nav2. Look when there. Needs walk first.",
      schema({"where": {"type": "string", "description": "the place on the map, in words, or a mark's number"}},
             ["where"])),
