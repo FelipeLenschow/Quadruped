@@ -605,13 +605,10 @@ class Robot(Node):
             b = (size / 2.0 - point[1] / 1000.0 * size) * 2.0 * radius / size
             c, s_ = math.cos(p[2]), math.sin(p[2])
             gx, gy = p[0] + s_ * a + c * b, p[1] - c * a + s_ * b
-        walked = math.atan2(gy - p[1], gx - p[0])
-        yaw = self._open_heading(gx, gy, walked)
-        yaw_deg = math.degrees(yaw if yaw is not None else walked)
         at = {"x": round(gx, 2), "y": round(gy, 2), "point_thousandths": [round(v) for v in point],
               "distance_m": round(math.hypot(gx - p[0], gy - p[1]), 1)}
         shown = self._note(json.dumps(at) + "; walking there", pointed(image, [(point, where)]))
-        moved = self._motion("go_to_map_place", self._go_to, gx, gy, yaw_deg)
+        moved = self._motion("go_to_map_place", self._go_to_open, gx, gy, at)
         out = text(json.dumps(at) + "; " + moved["content"][0]["text"]
                    + ("" if moved["isError"] else "; look to see where you are"), moved["isError"])
         if not shown:
@@ -811,29 +808,49 @@ class Robot(Node):
                     else:
                         yaw_deg = math.degrees(math.atan2(fat["y"] - gy, fat["x"] - gx))
                         at["facing"] = {"what": facing, "x": fat["x"], "y": fat["y"], "from": fat["from"]}
-            if yaw_deg is None:
-                # Facing the way it walked, at a corridor's side it faced the wall and move forward went into it
-                # (2026-11-04): "corridor" was the far wall seen through its door ("lidar, 22 points"), so facing
-                # what the point is on failed too. With facing required, the 2B agent called go_to_place first 0
-                # times in 10, against 10 in 10. Things go through find_something, or facing.
-                walked = math.atan2(gy - p[1], gx - p[0]) if p and math.hypot(gx - p[0], gy - p[1]) > 0.2 \
-                    else (p[2] if p else 0.0)
-                yaw = self._open_heading(gx, gy, walked)
-                if yaw is not None:
-                    yaw_deg = math.degrees(yaw)
-                    turn = math.degrees(math.atan2(math.sin(yaw - walked), math.cos(yaw - walked)))
-                    at["facing"] = (f"{why + ': ' if why else ''}the most open way there, {turn:+.0f} deg from the way "
-                                    "it walks")
+            # Without facing: the most open way, chosen on arrival (_go_to_open). Facing the way it walked, at a
+            # corridor's side it faced the wall and move forward went into it (2026-11-04): "corridor" was the far
+            # wall seen through its door ("lidar, 22 points"), so facing what the point is on failed too. With
+            # facing required, the 2B agent called go_to_place first 0 times in 10, against 10 in 10. Things go
+            # through find_something, or facing.
+            if yaw_deg is None and why:
+                at["facing"] = why
         except RuntimeError as e:
             return text(str(e), True)
         arrow = self._heading_arrow(gx, gy, math.radians(yaw_deg)) if yaw_deg is not None else None
         # The photo with its points before the walk: with the result, the app showed where it went only on arrival.
         shown = self._note(json.dumps(at) + "; walking there", pointed(image, marks, arrow))
-        moved = self._motion("go_to_place", self._go_to, gx, gy, yaw_deg)
+        if yaw_deg is None:
+            moved = self._motion("go_to_place", self._go_to_open, gx, gy, at)
+        else:
+            moved = self._motion("go_to_place", self._go_to, gx, gy, yaw_deg)
         out = text(json.dumps(at) + "; " + moved["content"][0]["text"], moved["isError"])
         if not shown:
             out["content"].append(pointed(image, marks, arrow))
         return out
+
+    def _go_to_open(self, x, y, at):
+        """_go_to (x, y) facing the way it walks, then, there, a turn to the most open way on /map (_open_heading),
+        written into at["facing"]. Chosen before the walk, the place was mostly not mapped yet: every way scored
+        about the same (rays through unknown count half and pass unmapped walls), and +40 deg won by 2%, into the
+        corridor's wall (new_qwen3-8-27b_20, 2026-11-19); on arrival the walls around are mapped."""
+        moved = self._go_to(x, y, None)
+        if moved["isError"] or self.stopping.is_set():
+            return moved
+        p = self.pose()
+        yaw = self._open_heading(p[0], p[1], p[2]) if p is not None and p[3] == "map" else None
+        if yaw is None:
+            return moved
+        turn = math.degrees(math.atan2(math.sin(yaw - p[2]), math.cos(yaw - p[2])))
+        if abs(turn) < 15.0:
+            at["facing"] = "the way it walked: the most open way there"
+            return moved
+        turned = self._go_to(p[0], p[1], math.degrees(yaw))
+        at["facing"] = f"the most open way there, {turn:+.0f} deg from the way it walked"
+        if turned["isError"]:
+            return text(moved["content"][0]["text"] + "; the turn there failed: " + turned["content"][0]["text"],
+                        True)
+        return text(moved["content"][0]["text"] + f"; then turned {turn:+.0f} deg there, to the most open way")
 
     def _heading_arrow(self, x, y, yaw):
         """Where go_to_place stops and the way it faces there, as an arrow in look's last photo: the floor from
@@ -935,7 +952,7 @@ class Robot(Node):
         """The heading at (x, y) toward the most open space on /map within 90 deg of yaw0, or None with no map. Each
         ray scores its length to the first wall (at most open_ray_m), its unknown cells at half: probably open (a
         corridor not mapped yet), not a wall. Scores are summed over +-15 deg, so a gap narrower than the robot does
-        not win, and a turn costs a little, so of equals the one nearest yaw0 wins."""
+        not win; yaw0 itself unless another way scores 15% more."""
         g = self.grid
         if g is None:
             return None
@@ -955,9 +972,12 @@ class Robot(Node):
                     break
                 score += res if v >= 0 else res / 2
             scores.append(score)
-        best = max((k for k in range(len(angles)) if abs(angles[k]) <= 90),
-                   key=lambda k: sum(scores[max(0, k - 3):k + 4]) - 0.002 * abs(angles[k]))
-        return yaw0 + math.radians(angles[best])
+        window = {angles[k]: sum(scores[max(0, k - 3):k + 4]) for k in range(len(angles)) if abs(angles[k]) <= 90}
+        best = max(window, key=lambda a: window[a] - 0.002 * abs(a))
+        # Ahead, unless another way is clearly more open: of nearly equal ways, a turn is a guess.
+        if window[best] < 1.15 * window[0]:
+            best = 0
+        return yaw0 + math.radians(best)
 
     def _map_ray(self, x, y, yaw):
         """(x, y, wall) where the line from (x, y) along yaw on /map meets the first wall (wall True), or leaves the
