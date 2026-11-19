@@ -640,6 +640,9 @@ class Robot(Node):
             dx, dy = gx - p[0], gy - p[1]
             point = [(size / 2.0 + m * (s_ * dx - c * dy)) * 1000.0 / size,
                      (size / 2.0 - m * (c * dx + s_ * dy)) * 1000.0 / size]
+            if mk["kind"] == "thing":  # the thing itself: stop in front of it, as go_to_place does
+                stop, d = float(self.cfg.get("approach", 0.6)), math.hypot(dx, dy)
+                gx, gy = (gx - stop * dx / d, gy - stop * dy / d) if d > stop else (p[0], p[1])
         else:
             try:
                 point, said = self._point(image, where, MAP_NOTE)
@@ -1464,9 +1467,12 @@ TOOLS = [
      schema()),
     # Words, not the agent's own x, y: the 27B's go_to(3, 0.3) to "step through" a door was in the corridor's far
     # wall (trial new_qwen3-8-27b_15). go_to is not listed now.
+    # The whole way in one walk, unlike go_to_place's 4 m: a point on the map is where it is, a floor point near the
+    # camera's horizon is not (go_to_place's "middle of the corridor" was 9.6 m off, new_qwen3-8-27b_20).
     ("go_to_map_place", "Walk to a place on the map: a corridor or an opening (also beside or behind you), an "
-     "unexplored edge, or the start. Describe it as it looks on see_map's drawing, or give a mark's number. It "
-     "finds it on the map and walks there with Nav2. Look when there. Needs walk first.",
+     "unexplored edge, the start, or a thing find_something found. Describe it as it looks on see_map's drawing, or "
+     "give a mark's number. It finds it on the map and walks the whole way there with Nav2, however far. Look when "
+     "there. Needs walk first.",
      schema({"where": {"type": "string", "description": "the place on the map, in words, or a mark's number"}},
             ["where"])),
     ("go_to", "Walk to a point on the map with Nav2, avoiding obstacles. Blocks until there.",

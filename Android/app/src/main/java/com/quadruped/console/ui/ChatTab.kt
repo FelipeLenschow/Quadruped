@@ -263,6 +263,20 @@ private fun ChatRow(e: ChatEvent, onImage: (ImageBitmap) -> Unit) {
         )
         "call" -> Text("→ ${e.text}", color = Palette.Accent, fontSize = 12.sp, fontFamily = Mono)
         "info" -> Text(e.text, Modifier.fillMaxWidth(), color = Palette.Muted, fontSize = 12.sp)
+        // The agent's own done(success, summary): its claim, apart from the operator's result (llm_host sends
+        // "success True: <summary>"). As a grey result line it was missed (trial new_qwen3-8-27b_35).
+        "done" -> {
+            val ok = e.text.startsWith("success True")
+            val tint = if (ok) Palette.Ok else Palette.Warn
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(tint.copy(alpha = 0.15f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(if (ok) "Agent says: done, task finished" else "Agent says: done, task not possible",
+                    color = tint, fontSize = 14.sp)
+                Text(e.text.substringAfter(": ", e.text), color = Palette.Text, fontSize = 13.sp)
+            }
+        }
         else -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             // result / error: a few lines, all on a tap.
             var open by remember { mutableStateOf(false) }

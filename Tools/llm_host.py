@@ -777,6 +777,7 @@ def main():
                 done = outcome["end"] == "done"
                 claim = f", success {outcome.get('success')}: {outcome.get('summary')}" if done else ""
                 io.end(f"run ended: {outcome['end']}{claim}")
+                time.sleep(5.0)  # the app's next polls get the end before this process (and its server) is gone
     except KeyboardInterrupt:
         print("\ninterrupted")
         outcome["end"] = "interrupted"
