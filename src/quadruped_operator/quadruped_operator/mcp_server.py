@@ -914,15 +914,24 @@ class Robot(Node):
                                                for f in near)
 
     def _go_to_open(self, x, y, at):
-        """_go_to (x, y) facing the way it walks, then, there, a turn to the most open way on /map (_open_heading),
-        written into at["facing"]. Chosen before the walk, the place was mostly not mapped yet: every way scored
-        about the same (rays through unknown count half and pass unmapped walls), and +40 deg won by 2%, into the
-        corridor's wall (new_qwen3-8-27b_20, 2026-11-19); on arrival the walls around are mapped."""
+        """_go_to (x, y) facing the way it walks; there, only with a wall ahead nearer than arrive_clear_m, a turn to
+        the most open way on /map (_open_heading), written into at["facing"]. Chosen before the walk, the place was
+        mostly not mapped yet: every way scored about the same (rays through unknown count half and pass unmapped
+        walls), and +40 deg won by 2%, into the corridor's wall (new_qwen3-8-27b_20, 2026-11-19); on arrival the walls
+        around are mapped. Not always the most open way: at a crossing every way is open, it turned +90 into a side
+        corridor, the agent then turned left by its task as if still facing along the corridor, and walked back
+        (new_qwen3-8-27b_34). "Ahead" stays the way it was going."""
         moved = self._go_to(x, y, None)
         if moved["isError"] or self.stopping.is_set():
             return moved
         p = self.pose()
-        yaw = self._open_heading(p[0], p[1], p[2]) if p is not None and p[3] == "map" else None
+        if p is None or p[3] != "map":
+            return moved
+        clear = self._clear_ahead(p, float(self.cfg.get("arrive_clear_m", 1.5)))
+        if clear is None:
+            at["facing"] = "the way it walked"
+            return moved
+        yaw = self._open_heading(p[0], p[1], p[2])
         if yaw is None:
             return moved
         turn = math.degrees(math.atan2(math.sin(yaw - p[2]), math.cos(yaw - p[2])))
@@ -930,11 +939,33 @@ class Robot(Node):
             at["facing"] = "the way it walked: the most open way there"
             return moved
         turned = self._go_to(p[0], p[1], math.degrees(yaw))
-        at["facing"] = f"the most open way there, {turn:+.0f} deg from the way it walked"
+        at["facing"] = f"a wall {clear:.1f} m ahead: the most open way there, {turn:+.0f} deg from the way it walked"
         if turned["isError"]:
             return text(moved["content"][0]["text"] + "; the turn there failed: " + turned["content"][0]["text"],
                         True)
-        return text(moved["content"][0]["text"] + f"; then turned {turn:+.0f} deg there, to the most open way")
+        return text(moved["content"][0]["text"] + f"; then turned {turn:+.0f} deg there (a wall {clear:.1f} m ahead), "
+                    "to the most open way")
+
+    def _clear_ahead(self, p, reach):
+        """Metres to the first wall on /map straight ahead of pose p, over the robot's width (three rays, 0.15 m
+        apart), or None with none within reach (unknown is not a wall)."""
+        g = self.grid
+        if g is None:
+            return None
+        w, h, res = g.info.width, g.info.height, g.info.resolution
+        ox, oy = g.info.origin.position.x, g.info.origin.position.y
+        c, s = math.cos(p[2]), math.sin(p[2])
+        nearest = None
+        for side in (-0.15, 0.0, 0.15):
+            x0, y0 = p[0] - s * side, p[1] + c * side
+            d = 0.0
+            while d < reach:
+                d += res / 2
+                i, j = int((x0 + d * c - ox) / res), int((y0 + d * s - oy) / res)
+                if 0 <= i < w and 0 <= j < h and g.data[j * w + i] >= 65:
+                    nearest = d if nearest is None else min(nearest, d)
+                    break
+        return nearest
 
     def _heading_arrow(self, x, y, yaw):
         """Where go_to_place stops and the way it faces there, as an arrow in look's last photo: the floor from
