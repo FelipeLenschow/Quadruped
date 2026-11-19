@@ -48,7 +48,8 @@ python3 Tools/thor_trial.py <task>_<model>_<n> "<task prompt>" --model <model>
 It clears `/objects`, records an MCAP (camera, `/map`, `/tf`, `/plan`, `/objects`, `/cmd_vel`, `/robot_state`;
 `--lidar` adds the clouds), runs `llm_host.py --auto --done_tool --ctx 16384 --minutes 5 --max_calls 60` (other
 limits for a demo: `--minutes 0 --max_calls 200`), shows how the run ended (`done` with the agent's own success and
-summary, or the time or call limit), asks for the real result and makes the map video. `trial.json` keeps both: the
+summary, or the time or call limit), starts the videos in the background (`video.log`) and asks for the real result
+while they are made. `trial.json` keeps both: the
 agent's claim (`agent`) and the operator's result (`success`, `failure`); a false claim of success is a result too. The app's Chat tab shows the
 trial as it runs (watch only: no answers), and its Stop ends the trial. All goes into
 `logs/thor/<name>/`: `trial.json`, `mcap/`, `agent/` (the log and the agent's photos), `map.mp4` (the map as it

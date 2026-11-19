@@ -222,6 +222,22 @@ def reachable_goal(grid, start, goal, clearance):
     return None
 
 
+def direction(bearing_deg):
+    """A bearing (deg, + is left) in words. The 27B read mark 3's bearing 113 (behind on the left) as "on the left",
+    walked on to find it ahead, and passed the turn of its task (new_qwen3-8-27b_26, 2026-11-19)."""
+    b = abs(bearing_deg)
+    side = "left" if bearing_deg > 0 else "right"
+    if b <= 22.5:
+        return "ahead"
+    if b <= 67.5:
+        return f"ahead-{side}"
+    if b <= 112.5:
+        return side
+    if b <= 157.5:
+        return f"behind-{side}"
+    return "behind"
+
+
 def yaw_of(q):
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
@@ -500,6 +516,7 @@ class Robot(Node):
                 b = math.atan2(dy, dx) - p[2]
                 item["distance_m"] = round(math.hypot(dx, dy), 1)
                 item["bearing_deg"] = round(math.degrees(math.atan2(math.sin(b), math.cos(b))))
+                item["direction"] = direction(item["bearing_deg"])
             out.append(item)
         out.sort(key=lambda o: o.get("distance_m", -o["size_m"]))
         explored = round(sum(1 for v in d if v >= 0) * res * res)
@@ -534,6 +551,7 @@ class Robot(Node):
             b = math.atan2(dy, dx) - p[2]
             mk.update(n=n, x=round(mk["x"], 2), y=round(mk["y"], 2), distance_m=round(math.hypot(dx, dy), 1),
                       bearing_deg=round(math.degrees(math.atan2(math.sin(b), math.cos(b)))))
+            mk["direction"] = direction(mk["bearing_deg"])
         # As far out as the marks and the mapped floor go, so the whole known map shows while it is small.
         info = g.info
         cells = np.asarray(g.data, np.int8).reshape(info.height, info.width)
@@ -557,7 +575,8 @@ class Robot(Node):
         # "not north": the 27B wrote "I'm facing roughly north (the arrow points up)" and lost left and right over
         # two long answers (54 s), as its marks moved between calls (new_qwen3-8-27b_20).
         out = {"view": f"the robot is the red arrow at the centre; up is the way it faces now, not north: the drawing "
-                       f"turns with the robot, so after a turn the marks are elsewhere (their bearings say where); "
+                       f"turns with the robot, so after a turn the marks are elsewhere (their direction says where: "
+                       f"behind means you passed it); "
                        f"{2 * radius:.0f} m across",
                "explored_m2": explored, "marks": marks}
         if not frontiers:

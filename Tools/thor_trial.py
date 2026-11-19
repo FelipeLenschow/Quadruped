@@ -398,15 +398,29 @@ def main():
         print(f"WARNING: llm_host ended with code {code} (MCP server or Ollama down?): see its output above")
     if not os.path.isfile(os.path.join(mcap_dir, "metadata.yaml")):
         print(f"WARNING: no metadata.yaml in {mcap_dir}: the MCAP may be cut (see record.log)")
+    # The videos start now, beside the question: they take minutes, and the operator is walking back to the lab.
+    # map_video reads only the task and utc_offset_s from trial.json, not the result. Its own session: a Ctrl+C at
+    # the question does not stop it.
+    video = [sys.executable, MAP_VIDEO, trial]
+    video_log = os.path.join(trial, "video.log")
+    maker = None
+    if not args.no_video:
+        maker = subprocess.Popen(video, stdout=open(video_log, "w"), stderr=subprocess.STDOUT, start_new_session=True)
+        print(f"making the videos in the background (log: {video_log}) ...")
     if not args.no_ask:
         info.update(ask_result(info["agent"]))
     save(path, info)
 
-    video = [sys.executable, MAP_VIDEO, trial]
-    if not args.no_video:
-        print("making the map video ...")
-        if subprocess.run(video).returncode != 0:
-            print("map video failed; later: " + " ".join(video))
+    if maker is not None:
+        try:
+            if maker.poll() is None:
+                print("waiting for the videos (Ctrl+C: leave them to finish on their own) ...")
+            if maker.wait() != 0:
+                print(f"map video failed (see {video_log}); again: " + " ".join(video))
+            else:
+                print("videos done: map.mp4, camera.mp4, map_final.png")
+        except KeyboardInterrupt:
+            print(f"\nthe videos go on in the background (log: {video_log})")
     print(f"\ntrial: {trial}")
 
 
