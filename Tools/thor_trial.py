@@ -31,6 +31,7 @@ the cameras are stopped. Needs rclpy (the ROS 2 environment) for the checks of s
 """
 
 import argparse
+import ctypes
 import glob
 import json
 import os
@@ -141,13 +142,26 @@ def clear_objects():
         return False
 
 
+def die_with_us(parent):
+    """In a child, before exec: the kernel sends it SIGINT when this script dies, also by SIGKILL. The launcher's third
+    Ctrl+C kills this script, its finally then never runs, and Nav2 and the recorder ran on in their own sessions:
+    the next trial refused to start ("a Nav2 runs already"), and the recorder was still writing the dead trial's MCAP
+    11 min later (new_qwen3-8-27b_15, 2026-11-19). SIGINT: ros2 launch then stops its nodes, ros2 bag closes the MCAP.
+    """
+    def setup():
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGINT)  # PR_SET_PDEATHSIG
+        if os.getppid() != parent:  # this script died before that call
+            os.kill(os.getpid(), signal.SIGINT)
+    return setup
+
+
 def launch(name, log_path, **launch_args):
     """ros2 launch quadruped_bringup <name> in its own session (the terminal's Ctrl+C goes to the agent only).
     Empty values are left out (ros2 launch rejects 'name:='), as in the launcher."""
     args = [f"{k}:={str(v).lower() if isinstance(v, bool) else v}" for k, v in launch_args.items()
             if v not in ("", None)]
     return subprocess.Popen(["ros2", "launch", "quadruped_bringup", name] + args, stdout=open(log_path, "w"),
-                            stderr=subprocess.STDOUT, start_new_session=True)
+                            stderr=subprocess.STDOUT, start_new_session=True, preexec_fn=die_with_us(os.getpid()))
 
 
 def stop_group(proc, name):
