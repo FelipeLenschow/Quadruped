@@ -26,6 +26,16 @@ cmd_vel:
   timeout: 0.5            # s
   robot_state_rate: 10.0  # Hz
 
+# nav_cmd_floor (nav.launch.py): Nav2's command, when not zero, at least min_linear m/s forward or sideways or
+# min_angular rad/s turning: the largest part is raised to its minimum and the others with it (the same curve).
+# Under zero_below of the minimum it is zero. MPPI slowed to a few cm/s near goals and the robot stepped in place;
+# in trial new_qwen3-8-27b_21 the policy moved at 60-110% of Nav2's commands from 0.06 m/s up, and turned at
+# 60-80% of 0.1-0.3 rad/s.
+nav_cmd:
+  min_linear: 0.15
+  min_angular: 0.3
+  zero_below: 0.1
+
 # --- Odometry (odom -> base, odom -> base_footprint TF) ---
 # auto: leg odometry (estimator velocity + IMU) when the estimator is on (the launcher's "Use State Estimator"),
 # the simulator's pose otherwise. The real robot has no simulator pose, so it is always leg odometry.

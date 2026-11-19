@@ -67,7 +67,8 @@ def setup(context):
     keepout_yaml = map_yaml[:-len(".yaml")] + "_keepout.yaml" if map_yaml else None
     keepout = bool(keepout_yaml and os.path.exists(keepout_yaml))
     params = nav2_params(sim, keepout, initial_pose)
-    to_mux = [("cmd_vel", "/cmd_vel/nav")]
+    # Through nav_cmd_floor (a minimum speed: under it the robot stepped in place) to twist_mux's /cmd_vel/nav.
+    to_mux = [("cmd_vel", "/cmd_vel/nav_raw")]
 
     actions = [
         Node(package="quadruped_perception", executable="lidar_filter", output="screen", parameters=[use_sim],
@@ -84,6 +85,7 @@ def setup(context):
              }]),
         Node(package="nav2_controller", executable="controller_server", output="log", parameters=[params],
              remappings=to_mux),
+        Node(package="quadruped_operator", executable="nav_cmd_floor", output="screen", emulate_tty=True),
         Node(package="nav2_planner", executable="planner_server", output="log", parameters=[params]),
         Node(package="nav2_behaviors", executable="behavior_server", output="log", parameters=[params],
              remappings=to_mux),

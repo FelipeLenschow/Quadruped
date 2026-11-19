@@ -43,5 +43,6 @@ setup(
         "auto_localize = quadruped_operator.auto_localize:main",
         "map_save = quadruped_operator.map_save:main",
         "mcp_server = quadruped_operator.mcp_server:main",
+        "nav_cmd_floor = quadruped_operator.nav_cmd_floor:main",
     ]},
 )
