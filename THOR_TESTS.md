@@ -23,7 +23,8 @@ model sizes), so big dense models are slow.
       of the map with numbered marks: the start, the things found, the unexplored edges) is in it since
       2026-11-19: trials before then had no map tool, so do not compare them with later ones. Also since
       2026-11-19 (after `new_qwen3-8-27b_15`): `go_to_map_place` (a place on that drawing, in words or by a mark's
-      number) in the list and `go_to` (x, y) out of it, and every goal is moved onto floor the robot can reach.
+      number) in the list and `go_to` (x, y) out of it, and a goal in a wall is moved back in front of it, toward
+      the robot.
 - [ ] **Vision model = agent model.** With launcher [A] this is already so. With `llm_host.py` started by hand, set
       `mcp.vlm_model` to the agent's model and `mcp.vlm_ctx` to its `--ctx`, or Ollama loads a second model.
 - [ ] **Limits:** `--ctx 16384` (the 8B needs it on the Orin NX), the same `--compact_at` (0.75), and for the ladder the same

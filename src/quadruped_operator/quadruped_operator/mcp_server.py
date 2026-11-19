@@ -190,44 +190,36 @@ def draw_map(grid, pose, radius, size, marks, trail):
 
 
 def reachable_goal(grid, start, goal, clearance):
-    """The point nearest goal on free floor connected to start (both map x, y) on grid, with clearance m to the walls
-    (so a gap in a wall smaller than 2 clearance does not connect); goal itself when it is on it. None when no such
-    floor is near start. A goal in a wall otherwise went to Nav2, whose planner tolerance (0.5 m) took the free cell
-    behind the wall: from the corridor, the robot walked back into the lab to reach the corridor's far wall from
-    there (trial new_qwen3-8-27b_15, 2026-11-19)."""
+    """goal (map x, y), or, when it is in a wall or nearer one than clearance m, the first point back along the line
+    to start (the robot) that is not: in front of the wall, on the robot's side. Free floor and space not seen yet
+    are left to Nav2 (it plans through the unknown: that is how the robot explores). None when the whole line is
+    against walls. A goal in a wall otherwise went to Nav2, whose planner tolerance (0.5 m) took the free cell behind
+    the wall: from the corridor, the robot walked back into the lab (trial new_qwen3-8-27b_15, 2026-11-19). Not
+    "only floor connected to the robot": with SLAM just started, the door 2 m ahead was not seen yet, and every
+    go_to_place to it was refused (new_qwen3-8-27b_18 and _19)."""
     info = grid.info
     res, w, h = info.resolution, info.width, info.height
     oyaw, o = origin_yaw(info), info.origin.position
     c, s = math.cos(oyaw), math.sin(oyaw)
-
-    def cell(x, y):  # (column, row), fractional
-        dx, dy = x - o.x, y - o.y
-        return (c * dx + s * dy) / res - 0.5, (-s * dx + c * dy) / res - 0.5
-
     cells = np.asarray(grid.data, np.int8).reshape(h, w)
-    free = ((cells >= 0) & (cells < 25)).astype(np.uint8)
     walls = (cells >= 65).astype(np.uint8)
     room = cv2.distanceTransform(1 - walls, cv2.DIST_L2, 3) * res  # m to the nearest wall cell
-    clear = (free > 0) & (room >= clearance)
-    n, labels = cv2.connectedComponents(clear.astype(np.uint8), connectivity=8)
-    # The robot's part: the clear cells within 0.5 m of it (its own cell may be nearer a wall than clearance).
-    sj, si = cell(*start)
-    r = int(math.ceil(0.5 / res))
-    i0, i1 = max(0, int(si) - r), min(h, int(si) + r + 1)
-    j0, j1 = max(0, int(sj) - r), min(w, int(sj) + r + 1)
-    near = labels[i0:i1, j0:j1]
-    ii, jj = np.mgrid[i0:i1, j0:j1]
-    near = near[((ii - si) ** 2 + (jj - sj) ** 2 <= r * r) & (near > 0)]
-    if near.size == 0:
-        return None
-    mine = np.isin(labels, np.unique(near))
-    gj, gi = cell(*goal)
-    if 0 <= int(round(gi)) < h and 0 <= int(round(gj)) < w and mine[int(round(gi)), int(round(gj))]:
+
+    def clear(x, y):
+        dx, dy = x - o.x, y - o.y
+        j, i = int(math.floor((c * dx + s * dy) / res)), int(math.floor((-s * dx + c * dy) / res))
+        return not (0 <= i < h and 0 <= j < w) or room[i, j] >= clearance
+
+    gx, gy = goal
+    if clear(gx, gy):
         return goal
-    rows, cols = np.nonzero(mine)
-    k = int(np.argmin((rows - gi) ** 2 + (cols - gj) ** 2))
-    u, v = (cols[k] + 0.5) * res, (rows[k] + 0.5) * res
-    return float(o.x + c * u - s * v), float(o.y + s * u + c * v)
+    d = math.hypot(start[0] - gx, start[1] - gy)
+    for k in range(1, int(d / (res / 2)) + 1):
+        t = k * (res / 2) / d
+        x, y = gx + (start[0] - gx) * t, gy + (start[1] - gy) * t
+        if clear(x, y):
+            return float(x), float(y)
+    return None
 
 
 def yaw_of(q):
@@ -570,7 +562,7 @@ class Robot(Node):
 
     def go_to_map_place(self, where):
         """The vision model's point for `where` on see_map's drawing (its own call, as go_to_place's: the agent's own
-        points miss), or a mark's number, then Nav2 there (_go_to moves it onto floor the robot can reach)."""
+        points miss), or a mark's number, then Nav2 there (_go_to moves it out of a wall)."""
         where = str(where).strip()
         if not where:
             return text("say where: the place on the map, in words, or a mark's number", True)
@@ -1127,15 +1119,13 @@ class Robot(Node):
         if p is not None and p[3] == "map" and self.grid is not None:
             reach = reachable_goal(self.grid, p[:2], (x, y), float(self.cfg.get("goal_clearance", 0.15)))
             if reach is None:
-                return text(f"({x:.2f}, {y:.2f}) is not on floor the robot can reach from here on the map (in or "
-                            "behind a wall, or not seen yet): go to a place you can see", True)
+                return text(f"({x:.2f}, {y:.2f}) is in a wall, and so is the way there from the robot", True)
             if math.hypot(reach[0] - x, reach[1] - y) > float(self.cfg.get("goal_snap_m", 1.0)):
-                return text(f"({x:.2f}, {y:.2f}) is in or behind a wall, or not seen yet: the nearest floor the robot "
-                            f"can reach is {math.hypot(reach[0] - x, reach[1] - y):.1f} m from it; go to a place you "
-                            "can see", True)
+                return text(f"({x:.2f}, {y:.2f}) is in a wall: the first point in front of it, toward the robot, is "
+                            f"{math.hypot(reach[0] - x, reach[1] - y):.1f} m back; go to a place you can see", True)
             if math.hypot(reach[0] - x, reach[1] - y) > 0.05:
-                moved_note = (f" ({x:.2f}, {y:.2f}) was in a wall or out of reach: went to ({reach[0]:.2f}, "
-                              f"{reach[1]:.2f}), the nearest floor it can reach;")
+                moved_note = (f" ({x:.2f}, {y:.2f}) was in a wall: went to ({reach[0]:.2f}, {reach[1]:.2f}) in front "
+                              "of it;")
                 x, y = reach
         if yaw_deg is None:
             yaw = math.atan2(y - p[1], x - p[0]) if p else 0.0
