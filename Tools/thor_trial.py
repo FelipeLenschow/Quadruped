@@ -4,7 +4,7 @@
     python3 Tools/thor_trial.py t11_qwen8b_1 "Go out of this room, turn left, and stop next to the fridge." \\
         --model qwen3-vl:8b
     python3 Tools/thor_trial.py demo_corridor_1 "<task>" --model <model> --minutes 0 --max_calls 200 --lidar
-    python3 Tools/thor_trial.py t07_30b_1 "<task>" --model <model> --keep 30         # unknown flags go to llm_host
+    python3 Tools/thor_trial.py t07_30b_1 "<task>" --model <model> --think         # unknown flags go to llm_host
 
 Run it on the robot, in the ROS 2 environment, with the driver ([6]) and the MCP server running. It:
   1. starts the cameras (camera.launch.py, as launcher [I], with no detection) if they do not run yet,
@@ -280,7 +280,7 @@ def ask_result(agent):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
-                                 epilog="Other arguments (--keep, --think, --mcp, --ollama ...) go to llm_host.py.")
+                                 epilog="Other arguments (--think, --compact_at, --mcp, --ollama ...) go to llm_host.py.")
     ap.add_argument("name", help="trial name, for example t11_qwen8b_1 (letters, digits, _ and -)")
     ap.add_argument("task", help="the task prompt, as a person says it")
     ap.add_argument("--model", required=True)

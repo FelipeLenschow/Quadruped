@@ -1863,8 +1863,7 @@ def main():
             cmd = [sys_python, os.path.abspath(os.path.join("Tools", "llm_host.py")), "--app"]
             cmd += [f"--mcp={sweep_opts.get('url', 'http://127.0.0.1:8765/mcp')}",
                     f"--model={sweep_opts.get('model', 'qwen3.8:27b')}", f"--minutes={sweep_opts.get('minutes', '10')}",
-                    f"--ctx={sweep_opts.get('ctx', '8192' if IS_ROBOT else '32768')}",
-                    f"--keep={sweep_opts.get('keep', '12' if IS_ROBOT else '40')}"]
+                    f"--ctx={sweep_opts.get('ctx', '8192' if IS_ROBOT else '32768')}"]
 
         elif action == "agent_trial":
             o = sweep_opts

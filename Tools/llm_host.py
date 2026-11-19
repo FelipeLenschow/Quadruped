@@ -142,12 +142,14 @@ class OllamaDown(RuntimeError):
 
 
 def chat(url, model, messages, tools, think, ctx):
+    """Ollama's whole answer: message, and the counts and times (prompt_eval_count is the whole context, cached or
+    not)."""
     body = {"model": model, "messages": messages, "tools": tools, "stream": False, "think": think,
             "options": {"num_ctx": ctx}}
     req = urllib.request.Request(f"{url}/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=600) as r:
-            return json.loads(r.read())["message"]
+            return json.loads(r.read())
     except (urllib.error.URLError, OSError) as e:
         raise OllamaDown(f"Ollama at {url} did not answer ({e}); on the robot: sudo systemctl start ollama")
 
@@ -161,17 +163,79 @@ def unload(url, model):
         r.read()
 
 
-def trim(messages, keep):
-    """System prompt, the task, and the last `keep` messages; photos only on the newest one."""
-    if len(messages) > keep + 2:
-        tail = messages[-keep:]
-        while tail and tail[0]["role"] == "tool":
-            tail = tail[1:]
-        messages[:] = messages[:2] + tail
-    with_images = [m for m in messages if m.get("images")]
-    for m in with_images[:-1]:
-        m.pop("images")
-        m["content"] += " (photo dropped)"
+# The history only grows, so Ollama reuses its cache for all of it: a step costs only its new messages. Any change
+# before the end makes Ollama read everything after it again, its photos through the vision encoder too. So when
+# the context is near full, the older steps are made into text lines, all in one change. The old way (the last
+# --keep messages, the newest photo only) changed it at every step, and kept no memory of what the photos showed:
+# the 27B turned and looked 7 times in a door recess, and twice turned away from the corridor it had seen
+# (trial new_qwen3-8-27b_12, 2026-11-18).
+# Measured on the Thor (Ollama 0.40.16, qwen3-vl:8b-instruct, 2026-11-19): one 640 x 360 photo is ~1090 tokens and
+# 2.4 s with the rest cached; with the oldest of 4 photos removed, 7.0 s for the same request. A smaller photo is
+# not cheaper: 320 x 180 was 1084 tokens too (Ollama scales each photo to its own size).
+PHOTO_TOKENS = 1100
+PHOTO_NOTE = "The photo from "
+DIGEST = "Earlier steps, as text (their photos were removed to free the context):"
+DIGEST_LINES = 60
+
+
+def tokens(m):
+    """A message's tokens, roughly: text at 3 characters a token (JSON is dense), photos as measured."""
+    text = len(m.get("content") or "") + sum(len(json.dumps(tc)) for tc in m.get("tool_calls") or [])
+    return text // 3 + PHOTO_TOKENS * len(m.get("images") or [])
+
+
+def short(text, n=160):
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[:n - 3] + "..."
+
+
+def digest_lines(old):
+    """old's steps as lines: each call with its result, what the agent said, the operator's messages; an earlier
+    digest's lines as they are. Photos are left out."""
+    lines, waiting = [], []
+    for m in old:
+        content = m.get("content") or ""
+        if m["role"] == "assistant":
+            if content.strip():
+                lines.append("you said: " + short(content))
+            for tc in m.get("tool_calls") or []:
+                f = tc["function"]
+                a = f.get("arguments") or {}
+                a = a if isinstance(a, str) else json.dumps(a)[1:-1]
+                waiting.append(len(lines))
+                lines.append(f"{f['name']}({a})")
+        elif m["role"] == "tool":
+            if waiting:
+                i = waiting.pop(0)
+                lines[i] += " -> " + short(content)
+        elif content.startswith(DIGEST):
+            lines += content.split("\n")[1:]
+        elif not content.startswith(PHOTO_NOTE):
+            lines.append("operator: " + short(content))
+    return lines
+
+
+def compact(messages, keep_tokens):
+    """messages[2:] (after the system prompt and the task): the newest steps, about keep_tokens of them, stay as
+    they are; the older ones become one digest message. Returns the number of photos removed."""
+    cut, kept = len(messages), 0
+    while cut > 2 and kept + tokens(messages[cut - 1]) <= keep_tokens:
+        cut -= 1
+        kept += tokens(messages[cut])
+    # Start the kept part at a step: not at a tool result or a photo whose call is in the digest.
+    while cut < len(messages) and (messages[cut]["role"] == "tool"
+                                   or (messages[cut].get("content") or "").startswith(PHOTO_NOTE)):
+        cut += 1
+    if cut >= len(messages):  # one step bigger than keep_tokens: keep it from its call
+        cut = max(i for i, m in enumerate(messages) if m["role"] == "assistant" or i < 3)
+    if cut <= 2:
+        return 0
+    old = messages[2:cut]
+    lines = digest_lines(old)
+    if len(lines) > DIGEST_LINES:
+        lines = [f"({len(lines) - DIGEST_LINES} older steps not shown)"] + lines[-DIGEST_LINES:]
+    messages[2:cut] = [{"role": "user", "content": "\n".join([DIGEST] + lines)}]
+    return sum(len(m.get("images") or []) for m in old)
 
 
 def for_model(content):
@@ -191,14 +255,16 @@ class RunLog:
         self.file = open(os.path.join(self.dir, "log.md"), "a", buffering=1)
         self.lock = threading.Lock()
         self.photos = 0
+        self.steps = open(os.path.join(self.dir, "steps.jsonl"), "a", buffering=1)
 
     def header(self, args, meta, tools):
         vision = meta.get("vision_model")
         vision = f"{vision}, context {meta.get('vision_ctx')}" if vision else "not given by the server"
         think = "on" if args.think else "off"
+        history = f"history to {args.compact_at:.0%} of the context, then the older steps as text"
         with self.lock:
             self.file.write(f"# Agent run {os.path.basename(self.dir)}\n\n"
-                            f"- model: {args.model}, context {args.ctx}, think {think}, keep {args.keep} messages\n"
+                            f"- model: {args.model}, context {args.ctx}, think {think}, {history}\n"
                             f"- vision model (find_something, go_to_place): {vision}\n"
                             f"- Ollama {args.ollama}, MCP {args.mcp}\n- tools: {', '.join(tools)}\n")
 
@@ -223,6 +289,12 @@ class RunLog:
                     f.write(raw)
                 line += f"\n\n  ![{name}]({name})\n"
             self.file.write(line + "\n")
+
+
+    def step(self, data):
+        """One model request: its counts and times, for E2's time per step (steps.jsonl)."""
+        with self.lock:
+            self.steps.write(json.dumps(data) + "\n")
 
 
 LOG = None
@@ -493,15 +565,35 @@ def run_chat(io, mcp, args, tools, system, task, outcome=None):
     messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
     end = time.monotonic() + args.minutes * 60
     calls = 0
+    used, known = 0, 0  # the context at the last answer, as Ollama counted it, and how many messages that covers
+    stats = outcome.setdefault("model", {"requests": 0, "prefill_s": 0.0, "decode_s": 0.0, "max_context": 0,
+                                         "compactions": 0})
     while calls < args.max_calls and not io.stopped():
         outcome["end"] = "max_calls"
         more = io.interjection()
         if more is not None:
             messages.append({"role": "user", "content": more or KEEP_GOING})
-        trim(messages, args.keep)
+        need = used + sum(tokens(m) for m in messages[known:])
+        if used and need > args.compact_at * args.ctx:
+            dropped = compact(messages, int(args.compact_at * args.ctx * 0.4))
+            stats["compactions"] += 1
+            io.show("info", f"context {need} of {args.ctx} tokens: older steps made into text, {dropped} photos "
+                            "removed (the next answer reads the history again)")
         io.status("thinking")
         t = time.monotonic()
-        reply = chat(args.ollama, args.model, messages, tools, args.think, args.ctx)
+        r = chat(args.ollama, args.model, messages, tools, args.think, args.ctx)
+        reply = r["message"]
+        used = r.get("prompt_eval_count", 0) + r.get("eval_count", 0)
+        step = {"t": round(time.time(), 2), "context": r.get("prompt_eval_count", 0),
+                "prefill_s": round(r.get("prompt_eval_duration", 0) / 1e9, 2), "decode_tokens": r.get("eval_count", 0),
+                "decode_s": round(r.get("eval_duration", 0) / 1e9, 2), "total_s": round(time.monotonic() - t, 2),
+                "photos": sum(len(m.get("images") or []) for m in messages)}
+        stats["requests"] += 1
+        stats["prefill_s"] = round(stats["prefill_s"] + step["prefill_s"], 2)
+        stats["decode_s"] = round(stats["decode_s"] + step["decode_s"], 2)
+        stats["max_context"] = max(stats["max_context"], step["context"])
+        if LOG is not None:
+            LOG.step(step)
         if io.stopped():
             outcome["end"] = "stopped"
             break
@@ -510,6 +602,7 @@ def run_chat(io, mcp, args, tools, system, task, outcome=None):
             io.show("said", f"[{time.monotonic() - t:.1f}s] {said}")
         todo = reply.get("tool_calls") or []
         messages.append({"role": "assistant", "content": reply.get("content") or "", "tool_calls": todo})
+        known = len(messages)
         if not todo:
             answer = io.answer()
             if answer is None or (not answer and args.minutes > 0 and time.monotonic() > end):
@@ -549,7 +642,7 @@ def run_chat(io, mcp, args, tools, system, task, outcome=None):
             messages.append({"role": "tool", "tool_name": name, "content": out})
             seen = [c["data"] for c in images if for_model(c)]
             if seen:
-                messages.append({"role": "user", "content": f"The photo from {name}.", "images": seen})
+                messages.append({"role": "user", "content": f"{PHOTO_NOTE}{name}.", "images": seen})
             if io.stopped():
                 outcome["end"] = "stopped"
                 break
@@ -576,7 +669,8 @@ def main():
     ap.add_argument("--max_calls", type=int, default=200, help="tool calls in one chat")
     ap.add_argument("--think", action="store_true", help="let the model think first (slower)")
     ap.add_argument("--ctx", type=int, default=32768, help="model context in tokens")
-    ap.add_argument("--keep", type=int, default=40, help="recent messages kept in context")
+    ap.add_argument("--compact_at", type=float, default=0.75,
+                    help="when the context reaches this share of --ctx, the older steps become text (photos removed)")
     ap.add_argument("--auto", action="store_true", help="never wait for the operator: always tell it to keep going")
     ap.add_argument("--keep_loaded", action="store_true", help="leave the model in Ollama's memory on exit")
     ap.add_argument("--serve", action="store_true",

@@ -474,6 +474,8 @@ class Robot(Node):
         p = self.pose()
         if p is None or p[3] != "map":
             return text(f"robot position on the map unknown ({self.map_error}): is navigation running?", True)
+        if self.start is None:  # _track records it only 0.5 s after TF opens; a first call can come before that
+            self.start = p[:3]
         frontiers, explored = self._frontiers(g, p)
         marks = []
         if self.start is not None:

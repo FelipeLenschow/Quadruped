@@ -24,7 +24,7 @@ model sizes), so big dense models are slow.
       2026-11-19: trials before then had no map tool, so do not compare them with later ones.
 - [ ] **Vision model = agent model.** With launcher [A] this is already so. With `llm_host.py` started by hand, set
       `mcp.vlm_model` to the agent's model and `mcp.vlm_ctx` to its `--ctx`, or Ollama loads a second model.
-- [ ] **Limits:** `--ctx 16384` (the 8B needs it on the Orin NX), the same `--keep`, and for the ladder the same
+- [ ] **Limits:** `--ctx 16384` (the 8B needs it on the Orin NX), the same `--compact_at` (0.75), and for the ladder the same
       `--minutes` and `--max_calls` (for example 5 min, 60 calls).
 - [ ] **No operator answers:** `--auto`.
 - [ ] **The agent ends the task itself:** `--done_tool` (`thor_trial.py` sets it). The model gets one more tool,
