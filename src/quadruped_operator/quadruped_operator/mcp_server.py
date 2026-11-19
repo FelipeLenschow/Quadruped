@@ -298,6 +298,9 @@ class Robot(Node):
         # them again.
         self.start = None
         self.trail = []
+        # The marks the last see_map showed ({n: mark}), for go_to_map_place's "mark N": its own view is newer, and
+        # the same number can be another place there (/map grew, or SLAM moved; new_qwen3-8-27b_33).
+        self.shown_marks = None
         self.create_timer(0.5, self._track)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel/llm", 10)
         self.skill_client = self.create_client(Skill, "/skill")
@@ -322,7 +325,7 @@ class Robot(Node):
         self.visits = {k: v for k, v in self.visits.items() if k in ids}
 
     def _clear_cb(self, msg):
-        self.start, self.trail = None, []
+        self.start, self.trail, self.shown_marks = None, [], None
         if self.found:
             self.found = []
             self._publish_found()
@@ -551,6 +554,7 @@ class Robot(Node):
         if p is None or p[3] != "map":
             return text(f"robot position on the map unknown ({self.map_error}): is navigation running?", True)
         data, out, _ = self._map_view(g, p)
+        self.shown_marks = {mk["n"]: mk for mk in out["marks"]}
         return {"content": [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"},
                             {"type": "text", "text": json.dumps(out)}], "isError": False}
 
@@ -623,9 +627,13 @@ class Robot(Node):
         number = (re.search(r"(?:\bmark\s*(?:number\s*)?|#)(\d+)\b", where, re.I)
                   or re.fullmatch(r"(?:the\s+)?(?:number\s*)?(\d+)", where, re.I))
         if number:
-            mk = next((m for m in view["marks"] if m["n"] == int(number.group(1))), None)
+            if self.shown_marks is None:
+                return text("no marks yet: call see_map, then give a mark's number from it", True)
+            mk = self.shown_marks.get(int(number.group(1)))
             if mk is None:
-                return text(f"no mark {number.group(1)} on the map now: call see_map", True)
+                last = max(self.shown_marks, default=0)
+                return text(f"no mark {number.group(1)} in your last see_map (marks 1 to {last}): call see_map again",
+                            True)
             gx, gy = mk["x"], mk["y"]
             m = size / 2.0 / radius  # its point in the drawing, for the person
             c, s_ = math.cos(p[2]), math.sin(p[2])
