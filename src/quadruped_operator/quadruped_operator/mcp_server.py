@@ -802,6 +802,7 @@ class Robot(Node):
                             "name a thing near it, or turn and try again", True)
             at, stop = self._seen_point(point, p)
             gx, gy = at["x"], at["y"]
+            tx, ty = gx, gy  # what it goes to, before stopping short of it
             if stop and p is not None:  # a thing or a wall: in front of it, not into it
                 d = math.hypot(gx - p[0], gy - p[1])
                 gx, gy = (gx - stop * (gx - p[0]) / d, gy - stop * (gy - p[1]) / d) if d > stop else (p[0], p[1])
@@ -839,7 +840,14 @@ class Robot(Node):
         arrow = self._heading_arrow(gx, gy, math.radians(yaw_deg)) if yaw_deg is not None else None
         # The photo with its points before the walk: with the result, the app showed where it went only on arrival.
         shown = self._note(json.dumps(at) + "; walking there", pointed(image, marks, arrow))
-        if yaw_deg is None:
+        if yaw_deg is None and (stop or "walks" in at):
+            # A thing or a wall, or not there yet: face it. Turned to the most open way, the robot 1.5 m from the
+            # 2780 sign (4 m of 8, then -50 deg down the corridor) had it at the edge of its next photo
+            # (new_qwen3-8-27b_27).
+            yaw_deg = math.degrees(math.atan2(ty - gy, tx - gx)) if math.hypot(tx - gx, ty - gy) > 0.05 else None
+            at["facing"] = "toward it"
+            moved = self._motion("go_to_place", self._go_to, gx, gy, yaw_deg)
+        elif yaw_deg is None:
             moved = self._motion("go_to_place", self._go_to_open, gx, gy, at)
         else:
             moved = self._motion("go_to_place", self._go_to, gx, gy, yaw_deg)
@@ -1058,6 +1066,16 @@ class Robot(Node):
         cam = s["pts"] @ rot.T + t
         uv = project(info, cam) if len(cam) else np.zeros((0, 2))  # NaN outside the view: never inside
         inside = (uv[:, 0] >= x1) & (uv[:, 0] < x2) & (uv[:, 1] >= y1) & (uv[:, 1] < y2)
+        if box is not None:
+            # The middle of the box first: at its edge, a nearer thing in the same line of sight (the lidar is lower
+            # and more forward than the camera) won the nearest cluster. The 2780 sign's box touched the corner of
+            # the corridor in front of it: 5.5 m, while the sign was at ~8.5 m, where go_to_place's point at the
+            # box's middle put it (new_qwen3-8-27b_27, 2026-11-19).
+            mx, my = (x2 - x1) / 4, (y2 - y1) * 0.15
+            middle = (inside & (uv[:, 0] >= x1 + mx) & (uv[:, 0] < x2 - mx)
+                      & (uv[:, 1] >= y1 + my) & (uv[:, 1] < y2 - my))
+            if np.count_nonzero(middle) >= 3:
+                inside = middle
         origin, cam_rot = s["origin"], s["cam_rot"]
         if np.count_nonzero(inside) >= 3:
             # The nearest cluster in the box, so the wall behind the object does not count (as object_mapper).
