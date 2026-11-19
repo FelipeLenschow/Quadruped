@@ -876,7 +876,10 @@ class Robot(Node):
     def _vision(self, image, prompt):
         """The vision model's answer about the photo alone (its own call: in the agent's context its boxes and
         points miss); RuntimeError when Ollama does not answer."""
-        body = {"model": self.cfg.get("vlm_model", "qwen3vl-2b-gpu"), "stream": False,
+        # think false: a thinking model (qwen3.8:27b) otherwise thinks first, inside num_predict: 18 s, and the
+        # point cut off at '{"point_2d": [540,' (go_to_place failed, trial new_qwen3-8-27b_14); without, 1.8 s and the
+        # point. A model that cannot think takes it too (qwen3-vl:2b-instruct, Ollama 0.40.16).
+        body = {"model": self.cfg.get("vlm_model", "qwen3vl-2b-gpu"), "stream": False, "think": False,
                 "options": {"num_ctx": int(self.cfg.get("vlm_ctx", 8192)), "temperature": 0, "num_predict": 200},
                 "messages": [{"role": "user", "images": [image], "content": prompt}]}
         url = self.cfg.get("ollama", "http://localhost:11434").rstrip("/") + "/api/chat"
