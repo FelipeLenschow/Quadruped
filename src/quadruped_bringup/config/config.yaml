@@ -254,6 +254,9 @@ mcp:
   frontier_min_m: 0.6
   frontier_clearance: 0.2
   frontiers_max: 8
+  openings_m: 6.0       # go_to_place / go_to_map_place results: the unexplored edges within this, at least
+  openings_min_m: 1.0   # this wide, the widest openings_max of them, nearest first, with direction words
+  openings_max: 3
   map_view_min_m: 3.0   # see_map: half the view, at least / at most (the known map and the marks set it)
   map_view_max_m: 15.0
   map_image_px: 512

@@ -469,8 +469,9 @@ class Robot(Node):
             return text(f"no frontiers: the map is closed ({explored} m2 explored)")
         return text(json.dumps({"explored_m2": explored, "frontiers": out}))
 
-    def _frontiers(self, g, p):
-        """(the frontiers, nearest first, at most frontiers_max; the m2 explored). p: the pose on g, or None."""
+    def _frontiers(self, g, p, keep=0):
+        """(the frontiers, nearest first, at most frontiers_max (keep=None: all); the m2 explored). p: the pose on g,
+        or None."""
         w, h, res = g.info.width, g.info.height, g.info.resolution
         ox, oy = g.info.origin.position.x, g.info.origin.position.y
         d = g.data
@@ -520,7 +521,7 @@ class Robot(Node):
             out.append(item)
         out.sort(key=lambda o: o.get("distance_m", -o["size_m"]))
         explored = round(sum(1 for v in d if v >= 0) * res * res)
-        return out[:int(self.cfg.get("frontiers_max", 8))], explored
+        return (out if keep is None else out[:int(self.cfg.get("frontiers_max", 8))]), explored
 
     def see_map(self):
         g = self.grid
@@ -629,7 +630,7 @@ class Robot(Node):
         shown = self._note(json.dumps(at) + "; walking there", pointed(image, [(point, where)]))
         moved = self._motion("go_to_map_place", self._go_to_open, gx, gy, at)
         out = text(json.dumps(at) + "; " + moved["content"][0]["text"]
-                   + ("" if moved["isError"] else "; look to see where you are"), moved["isError"])
+                   + ("" if moved["isError"] else "; look to see where you are") + self._openings(), moved["isError"])
         if not shown:
             out["content"].append(pointed(image, [(point, where)]))
         return out
@@ -851,10 +852,29 @@ class Robot(Node):
             moved = self._motion("go_to_place", self._go_to_open, gx, gy, at)
         else:
             moved = self._motion("go_to_place", self._go_to, gx, gy, yaw_deg)
-        out = text(json.dumps(at) + "; " + moved["content"][0]["text"], moved["isError"])
+        out = text(json.dumps(at) + "; " + moved["content"][0]["text"] + self._openings(), moved["isError"])
         if not shown:
             out["content"].append(pointed(image, marks, arrow))
         return out
+
+    def _openings(self):
+        """"; openings near: left 1.5 m (6 m wide), ..." from /map where the robot stands now: the widest unexplored
+        edges within openings_m, at most openings_max, nearest first; "" with none or no map. The camera sees only
+        ahead, and the agent seldom calls see_map while it walks: three times it walked through the crossing its task
+        turned left at, with the side corridor on the map (new_qwen3-8-27b_20, _26, _28)."""
+        g = self.grid
+        p = self.pose()
+        if g is None or p is None or p[3] != "map":
+            return ""
+        near, _ = self._frontiers(g, p, keep=None)
+        near = [f for f in near if f.get("distance_m", 99.0) <= float(self.cfg.get("openings_m", 6.0))
+                and f["size_m"] >= float(self.cfg.get("openings_min_m", 1.0))]
+        near = sorted(near, key=lambda f: -f["size_m"])[:int(self.cfg.get("openings_max", 3))]
+        if not near:
+            return ""
+        near.sort(key=lambda f: f["distance_m"])
+        return "; openings near: " + ", ".join(f"{f['direction']} {f['distance_m']:g} m ({f['size_m']:g} m wide)"
+                                               for f in near)
 
     def _go_to_open(self, x, y, at):
         """_go_to (x, y) facing the way it walks, then, there, a turn to the most open way on /map (_open_heading),
