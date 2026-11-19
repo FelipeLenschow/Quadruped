@@ -826,6 +826,12 @@ class Robot(Node):
                     marks.append((face, f"facing: {facing}"))
                     if math.hypot(fat["x"] - gx, fat["y"] - gy) < 0.2:
                         why = f"{facing} is where it stops"
+                    elif p is not None and math.hypot(gx - p[0], gy - p[1]) > 0.3 \
+                            and (fat["x"] - gx) * (gx - p[0]) + (fat["y"] - gy) * (gy - p[1]) < 0:
+                        # Behind the end of the walk: never a thing to face there. "The corridor stretching ahead"
+                        # was the floor near the robot; faced on arrival, 4 m into the corridor, it turned the robot
+                        # back, and the agent walked back to the lab (new_qwen3-8-27b_31).
+                        why = f"{facing} is behind where it stops"
                     else:
                         yaw_deg = math.degrees(math.atan2(fat["y"] - gy, fat["x"] - gx))
                         at["facing"] = {"what": facing, "x": fat["x"], "y": fat["y"], "from": fat["from"]}
@@ -846,7 +852,7 @@ class Robot(Node):
             # 2780 sign (4 m of 8, then -50 deg down the corridor) had it at the edge of its next photo
             # (new_qwen3-8-27b_27).
             yaw_deg = math.degrees(math.atan2(ty - gy, tx - gx)) if math.hypot(tx - gx, ty - gy) > 0.05 else None
-            at["facing"] = "toward it"
+            at["facing"] = (why + ": " if why else "") + "toward it"
             moved = self._motion("go_to_place", self._go_to, gx, gy, yaw_deg)
         elif yaw_deg is None:
             moved = self._motion("go_to_place", self._go_to_open, gx, gy, at)
