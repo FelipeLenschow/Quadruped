@@ -212,6 +212,7 @@ object_mapper:
 #   (at most map_ray_m) to approach m before the first wall or to the end of the mapped floor (no map: max_move_m that
 #   way). facing: a second point in the same photo, placed the same way, to face on arrival; without it, the most open
 #   way on /map within 90 deg of the way it walked (rays to the first wall, at most open_ray_m; unknown at half).
+#   At most place_max_m toward the point in one call (go_to_place's tool text says 4 m: change both together).
 #   vlm_check: find_something's and go_to_place's prompts let the vision model answer "none", and find_something's
 #   box is cut out and shown to it alone to confirm (false: the old prompts, which always give a box).
 #   locate: a box in look's last photo to a map point, from object_mapper's cloud, floor_z, floor_margin and
@@ -229,6 +230,7 @@ mcp:
   visit_radius: 1.0
   max_move_m: 2.0
   map_ray_m: 15.0
+  place_max_m: 4.0
   open_ray_m: 5.0
   arrive_tolerance: 0.3
   nav_standoff: 0.8

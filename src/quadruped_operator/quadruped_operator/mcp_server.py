@@ -554,7 +554,11 @@ class Robot(Node):
             if mk["n"] not in drawn:
                 mk["in_view"] = False
         data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
-        out = {"view": f"the robot is the red arrow at the centre, facing up; {2 * radius:.0f} m across",
+        # "not north": the 27B wrote "I'm facing roughly north (the arrow points up)" and lost left and right over
+        # two long answers (54 s), as its marks moved between calls (new_qwen3-8-27b_20).
+        out = {"view": f"the robot is the red arrow at the centre; up is the way it faces now, not north: the drawing "
+                       f"turns with the robot, so after a turn the marks are elsewhere (their bearings say where); "
+                       f"{2 * radius:.0f} m across",
                "explored_m2": explored, "marks": marks}
         if not frontiers:
             out["note"] = "no unexplored edges: the map is closed"
@@ -574,7 +578,10 @@ class Robot(Node):
             return text(f"robot position on the map unknown ({self.map_error}): is navigation running?", True)
         data, view, (radius, size) = self._map_view(g, p)
         image = base64.b64encode(data).decode()
-        number = re.fullmatch(r"(?:the\s+)?(?:mark\s*)?(?:number\s*)?#?(\d+)", where, re.I)
+        # "mark 3" or "#3" anywhere, or the number alone: the 27B wrote "the large unexplored area to the upper right,
+        # mark 3", the vision model then pointed into grey 13.5 m away, not at mark 3 (3.6 m; new_qwen3-8-27b_20).
+        number = (re.search(r"(?:\bmark\s*(?:number\s*)?|#)(\d+)\b", where, re.I)
+                  or re.fullmatch(r"(?:the\s+)?(?:number\s*)?(\d+)", where, re.I))
         if number:
             mk = next((m for m in view["marks"] if m["n"] == int(number.group(1))), None)
             if mk is None:
@@ -782,6 +789,14 @@ class Robot(Node):
             if stop and p is not None:  # a thing or a wall: in front of it, not into it
                 d = math.hypot(gx - p[0], gy - p[1])
                 gx, gy = (gx - stop * (gx - p[0]) / d, gy - stop * (gy - p[1]) / d) if d > stop else (p[0], p[1])
+            # At most place_max_m toward it, then the agent looks again. A floor point near the horizon is metres
+            # per pixel: "the middle of the corridor ahead" was 9.6 m, at the far end, past the junction the task
+            # turned at (new_qwen3-8-27b_20).
+            far = float(self.cfg.get("place_max_m", 4.0))
+            d = math.hypot(gx - p[0], gy - p[1]) if p is not None else 0.0
+            if d > far:
+                gx, gy = p[0] + (gx - p[0]) * far / d, p[1] + (gy - p[1]) * far / d
+                at["walks"] = f"{far:g} m of the {d:.1f} m toward it: look again there"
             at["point_thousandths"] = [round(c) for c in point]
             marks, yaw_deg, why = [(point, where)], None, ""
             if facing:
@@ -1347,8 +1362,8 @@ TOOLS = [
      "also out of view. Not found: name another thing, or turn and try again.",
      schema({"what": {"type": "string", "description": "the thing's name"}}, ["what"])),
     ("go_to_place", "Walk to a thing or a place you can see: takes a photo, finds what you describe in it, and "
-     "walks there with Nav2 (to a thing or wall in it: stops in front; far away: as far as the map goes, then call "
-     "again), arriving turned toward the most open way there, or toward what you say to face. "
+     "walks there with Nav2 (to a thing or wall in it: stops in front; more than 4 m away: 4 m toward it, then look "
+     "and call again), arriving turned toward the most open way there, or toward what you say to face. "
      "Needs walk first.",
      # facing not required: required, the 2B agent called go_to_place first 0 times in 10 (10 in 10 without), as it
      # had seen nothing to face yet (2026-11-04).
