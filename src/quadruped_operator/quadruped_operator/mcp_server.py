@@ -44,6 +44,7 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from quadruped_common.config_loader import load_config
+from quadruped_common.map_files import FREE, OCCUPIED, origin_yaw, trinary
 from quadruped_interfaces.srv import Skill
 from quadruped_perception.camera_lidar_check import pixel_ray, project, xyz
 from quadruped_perception.lidar_filter import rotation
@@ -108,6 +109,81 @@ def for_user(img):
             "annotations": {"audience": ["user"]}}
 
 
+MAP_GREY = 150  # not seen yet; free floor is white, walls black
+MARK_COLORS = {"start": (60, 170, 60), "thing": (0, 140, 255), "unexplored": (215, 120, 0)}  # BGR
+
+
+def draw_map(grid, pose, radius, size, marks, trail):
+    """grid: OccupancyGrid; pose: (x, y, yaw) on it. The map radius m around the robot, size x size px, turned so the
+    robot is at the centre facing up; marks (dicts with n, kind, x, y and for a thing label) as numbered circles,
+    trail (x, y points) as a line. Returns (the BGR image, the marks drawn)."""
+    info = grid.info
+    res, w, h = info.resolution, info.width, info.height
+    scale = size / 2.0 / radius  # px per m
+    c, s = math.cos(pose[2]), math.sin(pose[2])
+
+    def px(x, y):
+        dx, dy = x - pose[0], y - pose[1]
+        # left (-s dx + c dy) is -u, forward (c dx + s dy) is -v
+        return size / 2.0 + scale * (s * dx - c * dy), size / 2.0 - scale * (c * dx + s * dy)
+
+    oyaw, o = origin_yaw(info), info.origin.position
+    oc, os_ = math.cos(oyaw), math.sin(oyaw)
+
+    def cell(j, i):  # a cell's centre (column j, row i) on the map
+        u, v = (j + 0.5) * res, (i + 0.5) * res
+        return o.x + oc * u - os_ * v, o.y + os_ * u + oc * v
+
+    tri = trinary(np.asarray(grid.data, np.int8).reshape(h, w))
+    gray = np.full(tri.shape, MAP_GREY, np.uint8)
+    gray[tri == FREE] = 255
+    # Wider walls when a cell is less than a pixel: nearest-neighbour sampling would drop most 5 cm walls.
+    k = int(math.ceil(1.0 / (res * scale)))
+    walls = (tri == OCCUPIED).astype(np.uint8)
+    if k > 1:
+        walls = cv2.dilate(walls, np.ones((k, k), np.uint8))
+    gray[walls > 0] = 0
+    src = np.float32([[0, 0], [1, 0], [0, 1]])
+    dst = np.float32([px(*cell(j, i)) for j, i in src])
+    img = cv2.warpAffine(gray, cv2.getAffineTransform(src, dst), (size, size), flags=cv2.INTER_NEAREST,
+                         borderValue=MAP_GREY)
+    img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    if len(trail) > 1:
+        pts = np.int32([px(x, y) for x, y in trail]).reshape(-1, 1, 2)
+        cv2.polylines(img, [pts], False, (230, 170, 80), 2, cv2.LINE_AA)
+    m = size / 2.0  # the robot: a red arrow facing up
+    cv2.fillPoly(img, [np.int32([[m, m - 14], [m - 8, m + 8], [m, m + 3], [m + 8, m + 8]])], (0, 0, 230), cv2.LINE_AA)
+
+    font, drawn = cv2.FONT_HERSHEY_SIMPLEX, []
+    for mk in marks:
+        u, v = px(mk["x"], mk["y"])
+        if not (8 <= u <= size - 8 and 8 <= v <= size - 8):
+            continue
+        u, v = int(round(u)), int(round(v))
+        cv2.circle(img, (u, v), 12, MARK_COLORS[mk["kind"]], -1, cv2.LINE_AA)
+        cv2.circle(img, (u, v), 12, (255, 255, 255), 1, cv2.LINE_AA)
+        n = str(mk["n"])
+        (tw, th), _ = cv2.getTextSize(n, font, 0.55, 2)
+        cv2.putText(img, n, (u - tw // 2, v + th // 2), font, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+        if mk.get("label"):
+            for color, width in (((255, 255, 255), 4), ((0, 0, 0), 1)):
+                cv2.putText(img, mk["label"], (u + 15, v + 5), font, 0.45, color, width, cv2.LINE_AA)
+        drawn.append(mk["n"])
+
+    def tag(t, x, y):
+        for color, width in (((255, 255, 255), 4), ((0, 0, 230), 1)):
+            cv2.putText(img, t, (x, y), font, 0.5, color, width, cv2.LINE_AA)
+    tag("ahead", size // 2 - 22, 16)
+    tag("left", 4, size // 2 + 5)
+    tag("right", size - 44, size // 2 + 5)
+    bar = next((b for b in (0.5, 1, 2, 5, 10) if b * scale >= 40), 10)
+    x0, y0 = 10, size - 12
+    cv2.line(img, (x0, y0), (x0 + int(bar * scale), y0), (0, 0, 230), 3)
+    tag(f"{bar:g} m", x0, y0 - 8)
+    return img, drawn
+
+
 def yaw_of(q):
     return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
@@ -158,6 +234,12 @@ class Robot(Node):
         self.create_subscription(String, "/objects/clear", self._clear_cb, 1)
         self.grid = None
         self.create_subscription(OccupancyGrid, "/map", self._map_cb, latched)
+        # see_map: where the robot started (the first position on the map) and the way it walked since, read only
+        # while TF is open for a tool call (the robot moves only in one). /objects/clear (thor_trial sends it) starts
+        # them again.
+        self.start = None
+        self.trail = []
+        self.create_timer(0.5, self._track)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel/llm", 10)
         self.skill_client = self.create_client(Skill, "/skill")
         try:
@@ -181,9 +263,21 @@ class Robot(Node):
         self.visits = {k: v for k, v in self.visits.items() if k in ids}
 
     def _clear_cb(self, msg):
+        self.start, self.trail = None, []
         if self.found:
             self.found = []
             self._publish_found()
+
+    def _track(self):
+        if self.tf_listener is None:
+            return
+        p = self._pose()
+        if p is None or p[3] != "map":
+            return
+        if self.start is None:
+            self.start = p[:3]
+        if not self.trail or math.hypot(p[0] - self.trail[-1][0], p[1] - self.trail[-1][1]) > 0.1:
+            self.trail.append(p[:2])
 
     def mapper_on(self):
         """object_mapper publishes /objects (this node's own publisher, for find_something, does not count)."""
@@ -315,6 +409,14 @@ class Robot(Node):
         g = self.grid
         if g is None:
             return text("no /map yet: is navigation (SLAM) running?", True)
+        p = self.pose()
+        out, explored = self._frontiers(g, p if p is not None and p[3] == "map" else None)
+        if not out:
+            return text(f"no frontiers: the map is closed ({explored} m2 explored)")
+        return text(json.dumps({"explored_m2": explored, "frontiers": out}))
+
+    def _frontiers(self, g, p):
+        """(the frontiers, nearest first, at most frontiers_max; the m2 explored). p: the pose on g, or None."""
         w, h, res = g.info.width, g.info.height, g.info.resolution
         ox, oy = g.info.origin.position.x, g.info.origin.position.y
         d = g.data
@@ -337,8 +439,6 @@ class Robot(Node):
             x = i % w
             if 0 < x < w - 1 and free(i) and -1 in (d[i - 1], d[i + 1], d[i - w], d[i + w]) and not near_wall(i):
                 edge.add(i)
-        p = self.pose()
-        p = p if p is not None and p[3] == "map" else None
         min_cells = float(self.cfg.get("frontier_min_m", 0.6)) / res
         out = []
         while edge:
@@ -365,9 +465,55 @@ class Robot(Node):
             out.append(item)
         out.sort(key=lambda o: o.get("distance_m", -o["size_m"]))
         explored = round(sum(1 for v in d if v >= 0) * res * res)
-        if not out:
-            return text(f"no frontiers: the map is closed ({explored} m2 explored)")
-        return text(json.dumps({"explored_m2": explored, "frontiers": out[:int(self.cfg.get("frontiers_max", 8))]}))
+        return out[:int(self.cfg.get("frontiers_max", 8))], explored
+
+    def see_map(self):
+        g = self.grid
+        if g is None:
+            return text("no /map yet: is navigation (SLAM) running?", True)
+        p = self.pose()
+        if p is None or p[3] != "map":
+            return text(f"robot position on the map unknown ({self.map_error}): is navigation running?", True)
+        frontiers, explored = self._frontiers(g, p)
+        marks = []
+        if self.start is not None:
+            marks.append({"kind": "start", "x": self.start[0], "y": self.start[1]})
+        # find_something's things; object_mapper's too when it runs (then /objects is its, and found is apart).
+        for o in self.found + (self.objects if self.mapper_on() else []):
+            marks.append({"kind": "thing", "label": o["label"], "x": o["x"], "y": o["y"]})
+        for f in frontiers:
+            marks.append({"kind": "unexplored", "x": f["x"], "y": f["y"], "size_m": f["size_m"]})
+        for n, mk in enumerate(marks, 1):
+            dx, dy = mk["x"] - p[0], mk["y"] - p[1]
+            b = math.atan2(dy, dx) - p[2]
+            mk.update(n=n, x=round(mk["x"], 2), y=round(mk["y"], 2), distance_m=round(math.hypot(dx, dy), 1),
+                      bearing_deg=round(math.degrees(math.atan2(math.sin(b), math.cos(b)))))
+        # As far out as the marks and the mapped floor go, so the whole known map shows while it is small.
+        info = g.info
+        cells = np.asarray(g.data, np.int8).reshape(info.height, info.width)
+        rows, cols = np.nonzero(cells >= 0)
+        far = 0.0
+        if len(rows):
+            oyaw, o = origin_yaw(info), info.origin.position
+            u, v = (cols + 0.5) * info.resolution, (rows + 0.5) * info.resolution
+            x = o.x + math.cos(oyaw) * u - math.sin(oyaw) * v
+            y = o.y + math.sin(oyaw) * u + math.cos(oyaw) * v
+            far = float(np.max(np.maximum(np.abs(x - p[0]), np.abs(y - p[1]))))
+        far = max([far] + [mk["distance_m"] for mk in marks])
+        radius = min(max(far + 0.5, float(self.cfg.get("map_view_min_m", 3.0))),
+                     float(self.cfg.get("map_view_max_m", 15.0)))
+        size = int(self.cfg.get("map_image_px", 512))
+        img, drawn = draw_map(g, p, radius, size, marks, self.trail + [p[:2]])
+        for mk in marks:
+            if mk["n"] not in drawn:
+                mk["in_view"] = False
+        data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+        out = {"view": f"the robot is the red arrow at the centre, facing up; {2 * radius:.0f} m across",
+               "explored_m2": explored, "marks": marks}
+        if not frontiers:
+            out["note"] = "no unexplored edges: the map is closed"
+        return {"content": [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"},
+                            {"type": "text", "text": json.dumps(out)}], "isError": False}
 
     def go_to(self, x, y, yaw_deg=None):
         return self._motion("go_to", self._go_to, float(x), float(y), yaw_deg)
@@ -1031,6 +1177,13 @@ TOOLS = [
      schema({"label": {"type": "string", "description": "only labels containing this, e.g. 'cone'"}})),
     ("frontiers", "Unexplored edges of the map: places where seen free floor meets space not seen yet, nearest "
      "first, with their size. go_to one, then turn and look to see what lies beyond. None left: the room is mapped.",
+     schema()),
+    # Marks with their x, y in the text: a VLM reads which mark is meant from a drawing, not coordinates.
+    ("see_map", "A drawing of the map around the robot (white: free floor, black: walls and obstacles, grey: not "
+     "seen yet), turned so the robot is at the centre facing up, with numbered marks: where it started, the things "
+     "find_something found, and the unexplored edges. The text gives each mark's x, y, distance and bearing (+ is "
+     "left). To plan a route, to see where the floor goes on, or to go back: go_to a start or unexplored mark's x, y "
+     "(a thing's x, y is the thing itself: go_to_place or visit it).",
      schema()),
     ("go_to", "Walk to a point on the map with Nav2, avoiding obstacles. Blocks until there.",
      schema({"x": {"type": "number"}, "y": {"type": "number"},

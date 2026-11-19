@@ -19,7 +19,9 @@ model sizes), so big dense models are slow.
       (`list_objects`, `go_to_object`, `visit` by id) are then not offered; the agent uses `look`, `find_something`
       and `go_to_place`, and the VLM does all the perception.
 - [ ] **System prompt:** `INSTRUCTIONS` in `mcp_server.py`, as committed. No tuning for one model.
-- [ ] **Tools:** the `TOOLS` list in `mcp_server.py` and `vlm_check: true` in `config.yaml`.
+- [ ] **Tools:** the `TOOLS` list in `mcp_server.py` and `vlm_check: true` in `config.yaml`. `see_map` (a drawing
+      of the map with numbered marks: the start, the things found, the unexplored edges) is in it since
+      2026-11-19: trials before then had no map tool, so do not compare them with later ones.
 - [ ] **Vision model = agent model.** With launcher [A] this is already so. With `llm_host.py` started by hand, set
       `mcp.vlm_model` to the agent's model and `mcp.vlm_ctx` to its `--ctx`, or Ollama loads a second model.
 - [ ] **Limits:** `--ctx 16384` (the 8B needs it on the Orin NX), the same `--keep`, and for the ladder the same
