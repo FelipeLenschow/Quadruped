@@ -45,8 +45,8 @@ FUN = """You are the robot dog. Have fun with the traffic cones in this room, on
 1. list_objects to see the cones you know about. Pick one whose "done" list is empty, or the one done longest ago.
 2. visit it with trick sniff. Sometimes (about half the time) then visit it again with pee_left or pee_right.
 3. If no cone is left to visit, look for more. The camera sees only ahead and the map shows walls, not cones:
-   call frontiers and go_to the nearest one; if none is left, go_to the middle of a part of the room you have not
-   stood in yet. There, move turn_left 90 four times, with list_objects after each turn.
+   call see_map and go_to_map_place the nearest unexplored mark (its number); if none is left, go_to_map_place a
+   part of the room you have not stood in yet. There, move turn_left 90 four times, with list_objects after each turn.
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
 Keep each message short: one line on what you do next, then the tool call."""
 
@@ -56,14 +56,15 @@ your own:
 1. look. Pick a thing on the floor in the photo that you have not visited yet.
 2. find_something by its name, then visit the x, y that it gives with trick sniff. Sometimes (about
    half the time) then visit the same x, y with pee_left or pee_right.
-3. Then move turn_left 90 and look again. After four turns with nothing new, call frontiers and go_to the nearest.
+3. Then move turn_left 90 and look again. After four turns with nothing new, call see_map and go_to_map_place the
+   nearest unexplored mark (its number).
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
 Keep each message short: one line on what you do next, then the tool call."""
 
 # Without object detection or find_something: explore and describe what the camera sees.
 EXPLORE = """You are the robot dog. Explore this room on your own:
-1. call frontiers and go_to the nearest one; if none is left, go_to the middle of a part of the room you have not
-   stood in yet.
+1. call see_map and go_to_map_place the nearest unexplored mark (its number); if none is left, go_to_map_place a
+   part of the room you have not stood in yet.
 2. There, move turn_left 90 four times, with look after each turn, and say in one line what you see.
 Call skill walk first if you are not walking. If a call fails, read why and try something else.
 Keep each message short: one line on what you do next, then the tool call."""

@@ -53,6 +53,10 @@ PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 # The running tool call's way to send a notification before its result (notifications/message, its data a text and
 # an image for the person): set by Handler._stream for the thread it runs in, absent with a JSON response.
 NOTES = threading.local()
+# go_to_map_place's vision question starts with this: without it, Qwen3-VL 8B pointed right at 4 of 12 places on
+# see_map drawings (often "none", or the robot), with it 11 of 12 (4B 11, 2B 10; 2026-11-19).
+MAP_NOTE = ("This is a map seen from above: white is free floor, black is walls, grey is not seen yet. The red arrow "
+            "is the robot, facing up; the green circle is where it started; the blue line is the way it walked. ")
 DETERMINERS = ("the ", "a ", "an ", "this ", "that ", "these ", "those ", "my ", "your ", "his ", "her ", "its ",
                "our ", "their ")
 SKILLS = ["walk", "stand", "sit", "lie", "wiggle", "localize"]
@@ -70,7 +74,7 @@ poses for fun: sniff points the nose at an object, pee_left / pee_right lift a h
 released), wiggle wags the body. To go to a thing or a place you see: go_to_place, with it in words (it stops in front
 of a thing). For a trick at a thing: find_something by its name, then visit the x, y that it gives. Both take their
 own photo, so call them directly; move is not for going somewhere. Choose where to go from what you see, not from
-see_map."""
+see_map; go_to_map_place is for a place out of view."""
 # Not "to go to something you see: find_something, then visit or go_to the x, y": with that, and look's result naming
 # only find_something, the 27B agent went to a door with find_something and go_to, and Nav2 aborted (the x, y is the
 # lidar on the door: an obstacle), on the way to a room in the corridor (2026-11-18).
@@ -183,6 +187,47 @@ def draw_map(grid, pose, radius, size, marks, trail):
     cv2.line(img, (x0, y0), (x0 + int(bar * scale), y0), (0, 0, 230), 3)
     tag(f"{bar:g} m", x0, y0 - 8)
     return img, drawn
+
+
+def reachable_goal(grid, start, goal, clearance):
+    """The point nearest goal on free floor connected to start (both map x, y) on grid, with clearance m to the walls
+    (so a gap in a wall smaller than 2 clearance does not connect); goal itself when it is on it. None when no such
+    floor is near start. A goal in a wall otherwise went to Nav2, whose planner tolerance (0.5 m) took the free cell
+    behind the wall: from the corridor, the robot walked back into the lab to reach the corridor's far wall from
+    there (trial new_qwen3-8-27b_15, 2026-11-19)."""
+    info = grid.info
+    res, w, h = info.resolution, info.width, info.height
+    oyaw, o = origin_yaw(info), info.origin.position
+    c, s = math.cos(oyaw), math.sin(oyaw)
+
+    def cell(x, y):  # (column, row), fractional
+        dx, dy = x - o.x, y - o.y
+        return (c * dx + s * dy) / res - 0.5, (-s * dx + c * dy) / res - 0.5
+
+    cells = np.asarray(grid.data, np.int8).reshape(h, w)
+    free = ((cells >= 0) & (cells < 25)).astype(np.uint8)
+    walls = (cells >= 65).astype(np.uint8)
+    room = cv2.distanceTransform(1 - walls, cv2.DIST_L2, 3) * res  # m to the nearest wall cell
+    clear = (free > 0) & (room >= clearance)
+    n, labels = cv2.connectedComponents(clear.astype(np.uint8), connectivity=8)
+    # The robot's part: the clear cells within 0.5 m of it (its own cell may be nearer a wall than clearance).
+    sj, si = cell(*start)
+    r = int(math.ceil(0.5 / res))
+    i0, i1 = max(0, int(si) - r), min(h, int(si) + r + 1)
+    j0, j1 = max(0, int(sj) - r), min(w, int(sj) + r + 1)
+    near = labels[i0:i1, j0:j1]
+    ii, jj = np.mgrid[i0:i1, j0:j1]
+    near = near[((ii - si) ** 2 + (jj - sj) ** 2 <= r * r) & (near > 0)]
+    if near.size == 0:
+        return None
+    mine = np.isin(labels, np.unique(near))
+    gj, gi = cell(*goal)
+    if 0 <= int(round(gi)) < h and 0 <= int(round(gj)) < w and mine[int(round(gi)), int(round(gj))]:
+        return goal
+    rows, cols = np.nonzero(mine)
+    k = int(np.argmin((rows - gi) ** 2 + (cols - gj) ** 2))
+    u, v = (cols[k] + 0.5) * res, (rows[k] + 0.5) * res
+    return float(o.x + c * u - s * v), float(o.y + s * u + c * v)
 
 
 def yaw_of(q):
@@ -475,6 +520,12 @@ class Robot(Node):
         p = self.pose()
         if p is None or p[3] != "map":
             return text(f"robot position on the map unknown ({self.map_error}): is navigation running?", True)
+        data, out, _ = self._map_view(g, p)
+        return {"content": [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"},
+                            {"type": "text", "text": json.dumps(out)}], "isError": False}
+
+    def _map_view(self, g, p):
+        """see_map's drawing of g around pose p: (the JPEG, its text as a dict, (radius m, size px))."""
         if self.start is None:  # _track records it only 0.5 s after TF opens; a first call can come before that
             self.start = p[:3]
         frontiers, explored = self._frontiers(g, p)
@@ -515,8 +566,58 @@ class Robot(Node):
                "explored_m2": explored, "marks": marks}
         if not frontiers:
             out["note"] = "no unexplored edges: the map is closed"
-        return {"content": [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"},
-                            {"type": "text", "text": json.dumps(out)}], "isError": False}
+        return data, out, (radius, size)
+
+    def go_to_map_place(self, where):
+        """The vision model's point for `where` on see_map's drawing (its own call, as go_to_place's: the agent's own
+        points miss), or a mark's number, then Nav2 there (_go_to moves it onto floor the robot can reach)."""
+        where = str(where).strip()
+        if not where:
+            return text("say where: the place on the map, in words, or a mark's number", True)
+        g = self.grid
+        if g is None:
+            return text("no /map yet: is navigation (SLAM) running?", True)
+        p = self.pose()
+        if p is None or p[3] != "map":
+            return text(f"robot position on the map unknown ({self.map_error}): is navigation running?", True)
+        data, view, (radius, size) = self._map_view(g, p)
+        image = base64.b64encode(data).decode()
+        number = re.fullmatch(r"(?:the\s+)?(?:mark\s*)?(?:number\s*)?#?(\d+)", where, re.I)
+        if number:
+            mk = next((m for m in view["marks"] if m["n"] == int(number.group(1))), None)
+            if mk is None:
+                return text(f"no mark {number.group(1)} on the map now: call see_map", True)
+            gx, gy = mk["x"], mk["y"]
+            m = size / 2.0 / radius  # its point in the drawing, for the person
+            c, s_ = math.cos(p[2]), math.sin(p[2])
+            dx, dy = gx - p[0], gy - p[1]
+            point = [(size / 2.0 + m * (s_ * dx - c * dy)) * 1000.0 / size,
+                     (size / 2.0 - m * (c * dx + s_ * dy)) * 1000.0 / size]
+        else:
+            try:
+                point, said = self._point(image, where, MAP_NOTE)
+            except RuntimeError as e:
+                return text(str(e), True)
+            if point is None:
+                return text(f"{where} not found on the map (the vision model said: {said}); say it another way, "
+                            "or call see_map", True)
+            # Thousandths of the drawing to the map: draw_map's px() turned back.
+            a = (point[0] / 1000.0 * size - size / 2.0) * 2.0 * radius / size
+            b = (size / 2.0 - point[1] / 1000.0 * size) * 2.0 * radius / size
+            c, s_ = math.cos(p[2]), math.sin(p[2])
+            gx, gy = p[0] + s_ * a + c * b, p[1] - c * a + s_ * b
+        walked = math.atan2(gy - p[1], gx - p[0])
+        yaw = self._open_heading(gx, gy, walked)
+        yaw_deg = math.degrees(yaw if yaw is not None else walked)
+        at = {"x": round(gx, 2), "y": round(gy, 2), "point_thousandths": [round(v) for v in point],
+              "distance_m": round(math.hypot(gx - p[0], gy - p[1]), 1)}
+        shown = self._note(json.dumps(at) + "; walking there", pointed(image, [(point, where)]))
+        moved = self._motion("go_to_map_place", self._go_to, gx, gy, yaw_deg)
+        out = text(json.dumps(at) + "; " + moved["content"][0]["text"]
+                   + ("" if moved["isError"] else "; look to see where you are"), moved["isError"])
+        if not shown:
+            out["content"].append(pointed(image, [(point, where)]))
+        return out
 
     def go_to(self, x, y, yaw_deg=None):
         return self._motion("go_to", self._go_to, float(x), float(y), yaw_deg)
@@ -756,7 +857,7 @@ class Robot(Node):
         except OSError:
             return False
 
-    def _point(self, image, what):
+    def _point(self, image, what, context=""):
         """(the vision model's point in thousandths for `what` in the photo, a box's centre for a box, or None when it
         gives neither; what it said)."""
         # Lower case, with an article: from the lab door, the robot's 2B said "There are none." to "corridor" and to
@@ -765,7 +866,7 @@ class Robot(Node):
         if not name.lower().startswith(DETERMINERS):
             name = "the " + name
         none = " If it is not in the image, answer only: none." if self.cfg.get("vlm_check", True) else ""
-        said = self._vision(image, f"Point to {name} in this image.{none} Output its point_2d in JSON format.")
+        said = self._vision(image, f"{context}Point to {name} in this image.{none} Output its point_2d in JSON format.")
         found = POINT.search(said) or BOX.search(said)
         if found is None:
             return None, " ".join(said.split())[:150]
@@ -1022,6 +1123,20 @@ class Robot(Node):
         if not self.nav.wait_for_server(timeout_sec=2.0):
             return text("Nav2 is not running (launcher [N])", True)
         p = self.pose()
+        moved_note = ""
+        if p is not None and p[3] == "map" and self.grid is not None:
+            reach = reachable_goal(self.grid, p[:2], (x, y), float(self.cfg.get("goal_clearance", 0.15)))
+            if reach is None:
+                return text(f"({x:.2f}, {y:.2f}) is not on floor the robot can reach from here on the map (in or "
+                            "behind a wall, or not seen yet): go to a place you can see", True)
+            if math.hypot(reach[0] - x, reach[1] - y) > float(self.cfg.get("goal_snap_m", 1.0)):
+                return text(f"({x:.2f}, {y:.2f}) is in or behind a wall, or not seen yet: the nearest floor the robot "
+                            f"can reach is {math.hypot(reach[0] - x, reach[1] - y):.1f} m from it; go to a place you "
+                            "can see", True)
+            if math.hypot(reach[0] - x, reach[1] - y) > 0.05:
+                moved_note = (f" ({x:.2f}, {y:.2f}) was in a wall or out of reach: went to ({reach[0]:.2f}, "
+                              f"{reach[1]:.2f}), the nearest floor it can reach;")
+                x, y = reach
         if yaw_deg is None:
             yaw = math.atan2(y - p[1], x - p[0]) if p else 0.0
         else:
@@ -1053,9 +1168,10 @@ class Robot(Node):
             short = math.hypot(x - p[0], y - p[1]) if p and obj is None else 0.0
             if short > float(self.cfg.get("arrive_tolerance", 0.3)):
                 return text(f"stopped {short:.2f} m short of {target}: it is in or against an obstacle, the nearest "
-                            f"free spot is as far as Nav2 goes, and a new goal there stops here again;{where}")
-            return text(f"arrived at {target};{where}")
-        return text(f"{target}: {NAV_STATUS.get(status, f'status {status}')};{where}", True)
+                            "free spot is as far as Nav2 goes, and a new goal there stops here again;"
+                            f"{moved_note}{where}")
+            return text(f"arrived at {target};{moved_note}{where}")
+        return text(f"{target}: {NAV_STATUS.get(status, f'status {status}')};{moved_note}{where}", True)
 
     def _visit(self, o, trick):
         p = self.pose()
@@ -1182,7 +1298,8 @@ TOOLS = [
      "distance and bearing from the robot (degrees, + is left), and the skills already done at each.",
      schema({"label": {"type": "string", "description": "only labels containing this, e.g. 'cone'"}})),
     ("frontiers", "Unexplored edges of the map: places where seen free floor meets space not seen yet, nearest "
-     "first, with their size. go_to one, then turn and look to see what lies beyond. None left: the room is mapped.",
+     "first, with their size. To go to one: go_to_map_place, then look to see what lies beyond. None left: the room "
+     "is mapped.",
      schema()),
     # Marks with their x, y in the text: a VLM reads which mark is meant from a drawing, not coordinates.
     # Not "to plan a route: go_to a mark's x, y": with that, the 27B went from mark to mark down the corridor with
@@ -1192,9 +1309,16 @@ TOOLS = [
      "seen yet), turned so the robot is at the centre facing up, with numbered marks: where it started, the things "
      "find_something found, and the unexplored edges. The text gives each mark's x, y, distance and bearing (+ is "
      "left). It shows where you are: where the corridors and openings go, and where you have been. It does not show "
-     "what is there, so do not choose where to go from it: look, and go_to_place. go_to a mark only to go back to "
-     "a place you cannot see, such as the start.",
+     "what is there, so do not choose where to go from it: look, and go_to_place. go_to_map_place is for a place you "
+     "cannot see, such as the start.",
      schema()),
+    # Words, not the agent's own x, y: the 27B's go_to(3, 0.3) to "step through" a door was in the corridor's far
+    # wall (trial new_qwen3-8-27b_15). go_to is not listed now.
+    ("go_to_map_place", "Walk to a place on the map that you cannot see from here (the start, a corridor or opening "
+     "you passed, an unexplored edge): describe it as it looks on see_map's drawing, or give a mark's number. It "
+     "finds it on the map and walks there with Nav2. Look when there. Needs walk first.",
+     schema({"where": {"type": "string", "description": "the place on the map, in words, or a mark's number"}},
+            ["where"])),
     ("go_to", "Walk to a point on the map with Nav2, avoiding obstacles. Blocks until there.",
      schema({"x": {"type": "number"}, "y": {"type": "number"},
              "yaw_deg": {"type": "number", "description": "heading on arrival; default: facing the way it walked"}},
@@ -1250,9 +1374,10 @@ TOOLS = [
              "thousandths": {"type": "boolean", "description": "box or point in thousandths, not pixels"}})),
 ]
 OBJECT_TOOLS = {"list_objects", "go_to_object"}
-# Callable, but not listed: with locate offered, the agent sent its own boxes, and inside its context the 2B
-# model's boxes are wrong (find_something asks for the box alone).
-UNLISTED = {"locate"}
+# Callable (tests, other clients), but not listed: with locate offered, the agent sent its own boxes, and inside its
+# context the 2B model's boxes are wrong (find_something asks for the box alone). go_to: the agent's own x, y missed
+# the same way (a door's "other side" in a wall, trial new_qwen3-8-27b_15); go_to_place and go_to_map_place take words.
+UNLISTED = {"locate", "go_to"}
 VISIT_AT_POINT = ("visit", "Walk to a point on the map (an object seen in a photo), take the trick's pose there and do "
                   "the trick: sniff (nose at it), pee_left / pee_right (it beside that hind leg), wiggle (facing "
                   "it). Needs walk first.",
