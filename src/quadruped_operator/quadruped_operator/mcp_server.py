@@ -467,7 +467,8 @@ class Robot(Node):
         out, explored = self._frontiers(g, p if p is not None and p[3] == "map" else None)
         if not out:
             return text(f"no frontiers: the map is closed ({explored} m2 explored)")
-        return text(json.dumps({"explored_m2": explored, "frontiers": out}))
+        return text(json.dumps({"explored_m2": explored,
+                                "frontiers": [{k: v for k, v in f.items() if k != "parts"} for f in out]}))
 
     def _frontiers(self, g, p, keep=0):
         """(the frontiers, nearest first, at most frontiers_max (keep=None: all); the m2 explored). p: the pose on g,
@@ -518,6 +519,20 @@ class Robot(Node):
                 item["distance_m"] = round(math.hypot(dx, dy), 1)
                 item["bearing_deg"] = round(math.degrees(math.atan2(math.sin(b), math.cos(b))))
                 item["direction"] = direction(item["bearing_deg"])
+                # Its parts by direction (_openings): a crossing is one edge, centred ahead, that goes left and right.
+                parts = {}
+                blind = float(self.cfg.get("openings_blind_m", 0.8))  # the floor the lidar does not see around it
+                for i in cells:
+                    ex, ey = ox + (i % w + 0.5) * res - p[0], oy + (i // w + 0.5) * res - p[1]
+                    if math.hypot(ex, ey) < blind:
+                        continue
+                    eb = math.degrees(math.atan2(ey, ex) - p[2])
+                    part = parts.setdefault(direction(math.degrees(math.atan2(math.sin(math.radians(eb)),
+                                                                              math.cos(math.radians(eb))))), [0, 99.0])
+                    part[0] += 1
+                    part[1] = min(part[1], math.hypot(ex, ey))
+                item["parts"] = [{"direction": k, "size_m": round(n * res, 1), "distance_m": round(dist, 1)}
+                                 for k, (n, dist) in parts.items()]
             out.append(item)
         out.sort(key=lambda o: o.get("distance_m", -o["size_m"]))
         explored = round(sum(1 for v in d if v >= 0) * res * res)
@@ -872,9 +887,12 @@ class Robot(Node):
         p = self.pose()
         if g is None or p is None or p[3] != "map":
             return ""
-        near, _ = self._frontiers(g, p, keep=None)
-        near = [f for f in near if f.get("distance_m", 99.0) <= float(self.cfg.get("openings_m", 6.0))
-                and f["size_m"] >= float(self.cfg.get("openings_min_m", 1.0))]
+        edges, _ = self._frontiers(g, p, keep=None)
+        # Each edge by its parts in each direction: the crossing at the middle of a corridor was "ahead 1.8 m (26.4 m
+        # wide)", its centre; the agent turned left at once, into a wall, 2 m short of it (new_qwen3-8-27b_32).
+        near = [part for f in edges for part in f.get("parts", [])
+                if part["distance_m"] <= float(self.cfg.get("openings_m", 6.0))
+                and part["size_m"] >= float(self.cfg.get("openings_min_m", 1.0))]
         near = sorted(near, key=lambda f: -f["size_m"])[:int(self.cfg.get("openings_max", 3))]
         if not near:
             return ""
