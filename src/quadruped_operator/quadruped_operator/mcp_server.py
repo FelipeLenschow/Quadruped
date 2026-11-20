@@ -1413,10 +1413,17 @@ class Robot(Node):
                 and math.hypot(at["x"] - p[0], at["y"] - p[1]) > stop + 0.3:
             dx, dy = at["x"] - p[0], at["y"] - p[1]
             d = math.hypot(dx, dy)
-            moved = self._motion("go to what the watcher saw", self._go_to, at["x"] - stop * dx / d,
-                                 at["y"] - stop * dy / d, math.degrees(math.atan2(dy, dx)))
-            msg += (f"; walked up to it, {stop:g} m in front, facing it" if not moved["isError"]
-                    else "; walking up to it failed: " + moved["content"][0]["text"])
+            # At most place_max_m, as go_to_place: the OM2780 sign 8 m away was where the map was not seen yet, Nav2
+            # found no plan and drove the robot back to the lab door before it gave up (new_qwen3-8-27b-think_20).
+            go = min(d - stop, float(self.cfg.get("place_max_m", 4.0)))
+            moved = self._motion("go to what the watcher saw", self._go_to, p[0] + go * dx / d, p[1] + go * dy / d,
+                                 math.degrees(math.atan2(dy, dx)))
+            if moved["isError"]:
+                msg += "; walking up to it failed: " + moved["content"][0]["text"]
+            elif go < d - stop:
+                msg += f"; walked {go:.1f} m of the {d:.1f} m toward it, facing it: look again there"
+            else:
+                msg += f"; walked up to it, {stop:g} m in front, facing it"
             p = self.pose()
         if at is not None and p is not None:
             d = math.hypot(at["x"] - p[0], at["y"] - p[1])
@@ -1426,7 +1433,7 @@ class Robot(Node):
         if p is not None:
             msg += f"; now at x={p[0]:.2f} y={p[1]:.2f}"
         msg += "; the photo is the camera frame that stopped it" + self._openings()
-        if "walked up to it" in msg:
+        if "walked up to it" in msg or "toward it, facing it" in msg:
             msg = msg.replace("the photo is the camera frame that stopped it",
                               "the first photo is the camera frame that stopped it, the second what it sees now")
             now = self.look()
