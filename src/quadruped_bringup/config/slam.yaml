@@ -27,8 +27,10 @@ slam_toolbox:
 
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.2
-    minimum_travel_heading: 0.2
+    # 0: scans are added standing too (every minimum_time_interval). With 0.2, the map at a trial's start was one
+    # sparse L1 scan until the robot had moved (new_qwen3-8-27b-think_6).
+    minimum_travel_distance: 0.0
+    minimum_travel_heading: 0.0
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.1

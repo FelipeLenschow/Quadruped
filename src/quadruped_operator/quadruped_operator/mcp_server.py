@@ -27,7 +27,6 @@ import urllib.error
 import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -41,7 +40,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
 from rclpy.utilities import remove_ros_args
-from sensor_msgs.msg import CameraInfo, CompressedImage, LaserScan, PointCloud2
+from sensor_msgs.msg import CameraInfo, CompressedImage, PointCloud2
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -294,12 +293,10 @@ class Robot(Node):
         self.create_subscription(String, "/objects", self._objects_cb, latched)
         self.found_pub = self.create_publisher(String, "/objects", latched)
         self.create_subscription(String, "/objects/clear", self._clear_cb, 1)
-        # /map as SLAM gives it, and the cells _open_ahead found open in front of the robot (map-frame cell keys,
-        # world-aligned so they survive /map growing); self.grid is the two together.
-        self.raw_grid, self.open_cells, self.patched = None, set(), (None, 0, None)
+        # /map_open (map_open: /map with the space ahead the lidar sees open, as the app shows it), else /map.
+        self.raw_grid, self.open_grid = None, None
         self.create_subscription(OccupancyGrid, "/map", self._map_cb, latched)
-        self.scan, self.scan_time = None, 0.0
-        self.create_subscription(LaserScan, "/scan", self._scan_cb, qos_profile_sensor_data)
+        self.create_subscription(OccupancyGrid, "/map_open", self._map_open_cb, latched)
         # see_map: where the robot started (the first position on the map) and the way it walked since, read only
         # while TF is open for a tool call (the robot moves only in one). /objects/clear (thor_trial sends it) starts
         # them again.
@@ -326,65 +323,12 @@ class Robot(Node):
     def _map_cb(self, msg):
         self.raw_grid = msg
 
-    def _scan_cb(self, msg):
-        self.scan, self.scan_time = msg, time.monotonic()
+    def _map_open_cb(self, msg):
+        self.open_grid = msg
 
     @property
     def grid(self):
-        """/map with the open_cells that SLAM left unknown made free (see _open_ahead)."""
-        raw = self.raw_grid
-        if raw is None or not self.open_cells:
-            return raw
-        if self.patched[0] is not raw or self.patched[1] != len(self.open_cells):
-            info = raw.info
-            w, h, res = info.width, info.height, info.resolution
-            ox, oy = info.origin.position.x, info.origin.position.y
-            cells = np.array(raw.data, np.int8)
-            keys = np.array(list(self.open_cells), float)
-            i = np.floor(((keys[:, 0] + 0.5) * res - ox) / res).astype(int)  # each key's cell centre
-            j = np.floor(((keys[:, 1] + 0.5) * res - oy) / res).astype(int)
-            ok = (i >= 0) & (i < w) & (j >= 0) & (j < h)
-            k = j[ok] * w + i[ok]
-            cells[k[cells[k] < 0]] = 0
-            self.patched = (raw, len(self.open_cells), SimpleNamespace(header=raw.header, info=info,
-                                                                       data=cells.tolist()))
-        return self.patched[2]
-
-    def _open_ahead(self, p):
-        """A beam with no return is inf in /scan, which SLAM skips: in a long corridor the L1 saw both walls but
-        nothing ahead, and /map kept an unknown V in front of the robot (go_to_place then walked 1 m at a time, "as
-        far as the map goes", new_qwen3-8-27b-think_3). Anywhere, the unknown cells along each beam in front
-        (open_ahead_deg each side) are kept as free up to open_ahead_m when no beam within 3 deg of it returned
-        nearer (the L1 fills under half the beams of one scan: a missing beam beside an obstacle is not open), never
-        past a wall SLAM saw."""
-        s, g = self.scan, self.raw_grid
-        if s is None or g is None or time.monotonic() - self.scan_time > 0.5 or not s.ranges:
-            return
-        reach = float(self.cfg.get("open_ahead_m", 3.0))
-        half = math.radians(float(self.cfg.get("open_ahead_deg", 30.0)))
-        r = np.asarray(s.ranges, float)
-        a = s.angle_min + np.arange(len(r)) * s.angle_increment
-        a = (a + math.pi) % (2 * math.pi) - math.pi
-        near = np.isfinite(r) & (r >= s.range_min) & (r < reach)
-        spread = max(1, int(round(math.radians(3.0) / abs(s.angle_increment))))
-        near = np.convolve(np.r_[near[-spread:], near, near[:spread]], np.ones(2 * spread + 1), "valid") > 0
-        beams = a[(np.abs(a) <= half) & ~near]
-        if not len(beams):
-            return
-        info = g.info
-        w, h, res = info.width, info.height, info.resolution
-        ox, oy = info.origin.position.x, info.origin.position.y
-        d = np.arange(0.3, reach, res / 2)
-        yaw = p[2] + beams[:, None]
-        x, y = p[0] + d[None, :] * np.cos(yaw), p[1] + d[None, :] * np.sin(yaw)
-        i, j = np.floor((x - ox) / res).astype(int), np.floor((y - oy) / res).astype(int)
-        inside = (i >= 0) & (i < w) & (j >= 0) & (j < h)
-        cells = np.asarray(g.data, np.int8)
-        v = np.where(inside, cells[np.clip(j, 0, h - 1) * w + np.clip(i, 0, w - 1)], -1)
-        before_wall = np.cumsum(v >= 65, axis=1) == 0  # each beam stops at a wall SLAM saw
-        keep = before_wall & (v < 0)
-        self.open_cells.update(zip(np.floor(x[keep] / res).astype(int).tolist(),
-                                   np.floor(y[keep] / res).astype(int).tolist()))
+        return self.open_grid if self.open_grid is not None else self.raw_grid
 
     def _objects_cb(self, msg):
         self.objects = json.loads(msg.data).get("objects", [])
@@ -393,7 +337,7 @@ class Robot(Node):
 
     def _clear_cb(self, msg):
         self.start, self.trail, self.shown_marks = None, [], None
-        self.open_cells, self.patched = set(), (None, 0, None)  # a new trial's SLAM starts a new map
+        self.open_grid = None  # a new trial's SLAM starts a new map (and map_open with it)
         if self.found:
             self.found = []
             self._publish_found()
@@ -408,7 +352,6 @@ class Robot(Node):
             self.start = p[:3]
         if not self.trail or math.hypot(p[0] - self.trail[-1][0], p[1] - self.trail[-1][1]) > 0.1:
             self.trail.append(p[:2])
-        self._open_ahead(p)
 
     def mapper_on(self):
         """object_mapper publishes /objects (this node's own publisher, for find_something, does not count)."""
@@ -1387,13 +1330,17 @@ class Robot(Node):
                     said = self._vision(small_b64, WATCH_ASK.format(task=what))
                     box["frames"] += 1
                     box["say"](f"frame {box['frames']}: " + " ".join(said.split())[:100])
-                    if not re.match(r"\W*stop\b", said, re.I) or done.is_set():
+                    if not wants_stop(said) or done.is_set():
                         continue
                     found = POINT.search(said)
                     point = [float(v) for v in found.groups()] if found else None
-                    full_b64 = base64.b64encode(cv2.imencode(".jpg", img)[1].tobytes()).decode()
+                    # At look's width, not the camera's: the camera's full frame took 11 s (new_qwen3-8-27b-think_6).
+                    full = int(self.cfg.get("image_width", 640))
+                    big = cv2.resize(img, (full, round(img.shape[0] * full / img.shape[1])),
+                                     interpolation=cv2.INTER_AREA) if img.shape[1] > full else img
+                    full_b64 = base64.b64encode(cv2.imencode(".jpg", big)[1].tobytes()).decode()
                     again = self._vision(full_b64, WATCH_ASK.format(task=what))
-                    ok = re.match(r"\W*stop\b", again, re.I) is not None
+                    ok = wants_stop(again)
                     box["say"](f"frame {box['frames']} on the full frame: " + " ".join(again.split())[:100])
                 except RuntimeError as e:
                     box["error"] = str(e)
@@ -1408,7 +1355,8 @@ class Robot(Node):
                         at, _ = self._seen_point(point, p)
                     except RuntimeError:
                         at = None
-                said = re.sub(r"```\w*|\{[^}]*\}|\[[^\]]*\]", " ", said)
+                why = re.search(r'"(?:reason|why)"\s*:\s*"([^"]*)"', said, re.I)
+                said = why.group(1) if why else re.sub(r"```\w*|\{[^}]*\}|\[[^\]]*\]", " ", said)
                 said = " ".join(re.sub(r"^\W*stop\W*", "", said, flags=re.I).split())[:150]
                 box["seen"] = {"what": what, "said": said, "point": point, "at": at, "frames": box["frames"],
                                "image": base64.b64encode(data).decode()}
@@ -1646,6 +1594,15 @@ def schema(props=None, required=()):
 TASK = {"type": "string", "description": "what you are doing now and why, in a sentence (what you look for, where "
         "you turn). A watcher checks the camera while it walks, and stops the walk when the task is done, when what "
         "you look for is in view, or when it is going wrong; you then get that photo and why"}
+def wants_stop(said):
+    """The watcher's answer: stop (True) or go on. "stop, ..." or JSON with a true stop: the 27B also answered
+    {"stop": true, "reason": ...} and {"stop": "no", "go on": "yes"} (new_qwen3-8-27b-think_6)."""
+    m = re.search(r'"stop"\s*:\s*"?(\w+)', said, re.I)
+    if m:
+        return m.group(1).lower() in ("true", "yes", "1")
+    return re.match(r"\W*stop\b", said, re.I) is not None
+
+
 # The watcher's question for each camera frame during a walk (_watch), with the agent's task.
 WATCH_ASK = ("The robot is walking. Its task now: {task}\nShould it stop because of what this photo shows: the task "
              "is done, what it looks for is in view, or it is going wrong? If yes, answer stop, why in a few words, "

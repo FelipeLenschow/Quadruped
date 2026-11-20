@@ -33,6 +33,9 @@ model sizes), so big dense models are slow.
       agent (with `--think`) plans.
       From `new_qwen3-8-27b-think_4` on (the watcher crashed on every walk before), the agent's map counts the
       unknown cells ahead (±30°) as free up to 3 m along beams with no return in `/scan`.
+      From `new_qwen3-8-27b-think_7` on, that map is `map_open`'s `/map_open` (the app and Nav2's global costmap use
+      it too), and SLAM adds scans while the robot stands (`minimum_travel_*: 0`), so the map at the start is not one
+      sparse scan.
 - [ ] **Vision model = agent model.** With launcher [A] this is already so. With `llm_host.py` started by hand, set
       `mcp.vlm_model` to the agent's model and `mcp.vlm_ctx` to its `--ctx`, or Ollama loads a second model.
 - [ ] **Limits:** `--ctx 16384` (the 8B needs it on the Orin NX), the same `--compact_at` (0.75), and for the ladder the same

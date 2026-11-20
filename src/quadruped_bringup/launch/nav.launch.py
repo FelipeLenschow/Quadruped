@@ -30,9 +30,10 @@ def merge(base, over):
             base[k] = v
 
 
-def nav2_params(sim, keepout, initial_pose):
+def nav2_params(sim, keepout, initial_pose, slam):
     """nav2.yaml for this run: the real_robot overrides off sim, the keepout filter only when there is a mask,
-    AMCL's start pose."""
+    AMCL's start pose, and with SLAM the global costmap on map_open's /map_open (one map for Nav2, the app and the
+    LLM agent)."""
     with open(paths.config("nav2.yaml")) as f:
         params = yaml.safe_load(f)
     real = params.pop("real_robot", {})
@@ -44,6 +45,8 @@ def nav2_params(sim, keepout, initial_pose):
             p["filters"] = ["keepout_filter"]
             p["keepout_filter"] = {"plugin": "nav2_costmap_2d::KeepoutFilter", "enabled": True,
                                    "filter_info_topic": "/costmap_filter_info"}
+    if slam:
+        params["global_costmap"]["global_costmap"]["ros__parameters"]["static_layer"]["map_topic"] = "/map_open"
     amcl = params["amcl"]["ros__parameters"]
     amcl["set_initial_pose"] = initial_pose is not None
     if initial_pose is not None:
@@ -66,7 +69,7 @@ def setup(context):
     map_yaml = map_file(map_name) if map_name else None
     keepout_yaml = map_yaml[:-len(".yaml")] + "_keepout.yaml" if map_yaml else None
     keepout = bool(keepout_yaml and os.path.exists(keepout_yaml))
-    params = nav2_params(sim, keepout, initial_pose)
+    params = nav2_params(sim, keepout, initial_pose, slam=map_yaml is None)
     # Through nav_cmd_floor (a minimum speed: under it the robot stepped in place) to twist_mux's /cmd_vel/nav.
     to_mux = [("cmd_vel", "/cmd_vel/nav_raw")]
 
@@ -123,6 +126,12 @@ def setup(context):
         if initial_pose is None and flag(context, "auto_localize"):
             actions.append(Node(package="quadruped_operator", executable="auto_localize", output="screen",
                                 emulate_tty=True))
+
+    if map_yaml is None:
+        # /map with the space ahead the lidar sees open (SLAM skips beams with no return): the map of Nav2's global
+        # costmap (nav2_params), the app and the LLM agent.
+        actions.append(Node(package="quadruped_perception", executable="map_open", output="screen", emulate_tty=True,
+                            parameters=[use_sim]))
 
     if flag(context, "rviz"):
         view = os.path.join(get_package_share_directory("nav2_bringup"), "rviz", "nav2_default_view.rviz")

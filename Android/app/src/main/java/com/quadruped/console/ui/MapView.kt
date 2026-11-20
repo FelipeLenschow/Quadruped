@@ -66,6 +66,8 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private const val MAP = "/map"
+// map_open's: /map with the space ahead the lidar sees open (as the LLM agent's tools see it); /map without SLAM.
+private const val MAP_OPEN = "/map_open"
 private const val SCAN = "/scan"
 private const val PLAN = "/plan"
 private const val GOAL = "/goal_pose"
@@ -153,13 +155,14 @@ fun MapView(modifier: Modifier = Modifier) {
 
     DisposableEffect(Unit) {
         onDispose {
-            listOf(MAP, SCAN, PLAN, SAVE_RESULT, OBJECTS, "/tf", "/tf_static").forEach { NativeLink.unsubscribe(it) }
+            listOf(MAP, MAP_OPEN, SCAN, PLAN, SAVE_RESULT, OBJECTS, "/tf", "/tf_static").forEach { NativeLink.unsubscribe(it) }
         }
     }
     LaunchedEffect(Unit) {
         var saveCount = NativeLink.latestCount(SAVE_RESULT)
         while (true) {
             NativeLink.subscribe(MAP, MsgType.OCCUPANCY_GRID, reliable = true, transientLocal = true)
+            NativeLink.subscribe(MAP_OPEN, MsgType.OCCUPANCY_GRID, reliable = true, transientLocal = true)
             NativeLink.subscribe("/tf_static", MsgType.TF_MESSAGE, reliable = true, transientLocal = true)
             NativeLink.subscribe("/tf", MsgType.TF_MESSAGE, reliable = false)
             NativeLink.subscribe(SCAN, MsgType.LASER_SCAN, reliable = false)
@@ -176,10 +179,11 @@ fun MapView(modifier: Modifier = Modifier) {
                 saveResultAt = now
             }
 
-            val n = NativeLink.latestCount(MAP)
+            val shown = if (NativeLink.latestCount(MAP_OPEN) > 0) MAP_OPEN else MAP
+            val n = NativeLink.latestCount(shown) + if (shown == MAP_OPEN) 1_000_000_000L else 0L
             if (n != mapCount) {
-                val v = NativeLink.latestValues(MAP)
-                val cells = NativeLink.latestBytes(MAP)
+                val v = NativeLink.latestValues(shown)
+                val cells = NativeLink.latestBytes(shown)
                 if (v != null && cells != null && cells.size == v[0].toInt() * v[1].toInt() && cells.isNotEmpty()) {
                     grid = withContext(Dispatchers.Default) { gridBitmap(v, cells) }
                 }

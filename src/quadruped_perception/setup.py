@@ -27,5 +27,6 @@ setup(
         "object_detector = quadruped_perception.object_detector:main",
         "object_mapper = quadruped_perception.object_mapper:main",
         "object_check = quadruped_perception.object_check:main",
+        "map_open = quadruped_perception.map_open:main",
     ]},
 )
