@@ -39,7 +39,7 @@ controller_server:
       vx_std: 0.2
       vy_std: 0.2
       wz_std: 0.4
-      vx_max: 0.6
+      vx_max: 0.7
       vx_min: -0.3
       vy_max: 0.3
       wz_max: 1.0
@@ -249,7 +249,7 @@ real_robot:
     ros__parameters:
       FollowPath:
         batch_size: 1000
-        vx_max: 0.3
+        vx_max: 0.7   # 0.3 until 2026-11-20
         vx_min: -0.2
         vy_max: 0.2
         wz_max: 0.6
