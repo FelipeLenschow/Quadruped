@@ -14,6 +14,7 @@ import array
 import math
 import signal
 
+import cv2
 import numpy as np
 import rclpy
 from nav_msgs.msg import OccupancyGrid
@@ -40,20 +41,34 @@ def open_beams(ranges, angle_min, angle_increment, range_min, reach, half_rad, s
     return a[(np.abs(a) <= half_rad) & ~near]
 
 
-def open_cells(grid, x0, y0, yaw, beams, reach):
+def walls_of(grid):
+    """The grid's walls (>= 65), one cell thicker each way, flat: a beam slipped through the corner gaps of a
+    diagonal wall one cell thick, and filled the far side of the lab wall (new_qwen3-8-27b-think_16)."""
+    info = grid.info
+    walls = (np.asarray(grid.data, np.int8) >= 65).astype(np.uint8).reshape(info.height, info.width)
+    return cv2.dilate(walls, np.ones((3, 3), np.uint8)).ravel().astype(bool)
+
+
+def open_cells(grid, x0, y0, yaw, beams, reach, walls=None):
     """World cell keys (floor(x / res), floor(y / res)) of the unknown cells along the beams from (x0, y0) facing
-    yaw, from 0.3 m to reach, each beam ending at the first wall on the grid (OccupancyGrid-like)."""
+    yaw, out to reach, each beam ending at the first wall (walls_of(grid), or given)."""
     info = grid.info
     w, h, res = info.width, info.height, info.resolution
     ox, oy = info.origin.position.x, info.origin.position.y
-    d = np.arange(0.3, reach, res / 2)
+    if walls is None:
+        walls = walls_of(grid)
+    # From the robot itself, not 0.3 m out: at the lab door the wall was nearer, and the lidar sees nothing that
+    # near, so those beams had no return and went on through it (_16).
+    d = np.arange(res / 2, reach, res / 2)
     ang = yaw + np.asarray(beams)[:, None]
     x, y = x0 + d[None, :] * np.cos(ang), y0 + d[None, :] * np.sin(ang)
     i, j = np.floor((x - ox) / res).astype(int), np.floor((y - oy) / res).astype(int)
     inside = (i >= 0) & (i < w) & (j >= 0) & (j < h)
     cells = np.asarray(grid.data, np.int8)
-    v = np.where(inside, cells[np.clip(j, 0, h - 1) * w + np.clip(i, 0, w - 1)], -1)
-    keep = (np.cumsum(v >= 65, axis=1) == 0) & (v < 0)
+    k = np.clip(j, 0, h - 1) * w + np.clip(i, 0, w - 1)
+    v = np.where(inside, cells[k], -1)
+    wall = inside & walls[k]
+    keep = (np.cumsum(wall, axis=1) == 0) & (v < 0)
     return set(zip(np.floor(x[keep] / res).astype(int).tolist(), np.floor(y[keep] / res).astype(int).tolist()))
 
 
@@ -79,7 +94,7 @@ class MapOpen(Node):
         self.reach = float(cfg.get("open_ahead_m", 5.0))
         self.half = math.radians(float(cfg.get("open_ahead_deg", 90.0)))
         self.period = float(cfg.get("publish_s", 1.0))
-        self.grid, self.keys, self.dirty = None, set(), False
+        self.grid, self.walls, self.keys, self.dirty = None, None, set(), False
         self.tf_buffer = Buffer(cache_time=Duration(seconds=10.0))
         self.tf_listener = TransformListener(self.tf_buffer, self)
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -91,7 +106,7 @@ class MapOpen(Node):
                                f"+-{math.degrees(self.half):.0f} deg) -> /map_open")
 
     def _map_cb(self, msg):
-        self.grid, self.dirty = msg, True
+        self.grid, self.walls, self.dirty = msg, walls_of(msg), True
 
     def _scan_cb(self, msg):
         if self.grid is None:
@@ -110,7 +125,7 @@ class MapOpen(Node):
             return
         q = tf.rotation
         yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        new = open_cells(self.grid, tf.translation.x, tf.translation.y, yaw, beams, self.reach) - self.keys
+        new = open_cells(self.grid, tf.translation.x, tf.translation.y, yaw, beams, self.reach, self.walls) - self.keys
         if new:
             self.keys |= new
             self.dirty = True
