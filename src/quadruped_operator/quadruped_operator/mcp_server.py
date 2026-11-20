@@ -510,10 +510,19 @@ class Robot(Node):
                         return True
             return False
 
+        # Only free space as wide as the robot has edges: one beam's strip of free cells through a doorway (map_open,
+        # SLAM) made an "unexplored" mark at its end, which the agent took for the opening to turn left at, 2 m before
+        # the crossing (new_qwen3-8-27b-think_11). Morphological opening: what a frontier_width_m disc cannot cover
+        # goes.
+        k = max(1, int(round(float(self.cfg.get("frontier_width_m", 0.6)) / res))) | 1
+        wide = cv2.morphologyEx(((np.asarray(d, np.int8) >= 0) & (np.asarray(d, np.int8) < 25)).astype(np.uint8)
+                                .reshape(h, w), cv2.MORPH_OPEN,
+                                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))).ravel().tolist()
         edge = set()
         for i in range(w, w * (h - 1)):
             x = i % w
-            if 0 < x < w - 1 and free(i) and -1 in (d[i - 1], d[i + 1], d[i - w], d[i + w]) and not near_wall(i):
+            if 0 < x < w - 1 and wide[i] and free(i) and -1 in (d[i - 1], d[i + 1], d[i - w], d[i + w]) \
+                    and not near_wall(i):
                 edge.add(i)
         min_cells = float(self.cfg.get("frontier_min_m", 0.6)) / res
         out = []
