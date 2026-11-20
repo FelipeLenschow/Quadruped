@@ -1119,12 +1119,16 @@ class Robot(Node):
         info = self.seen["info"]
         ray = self.seen["cam_rot"] @ pixel_ray(info, point[0] * info.width / 1000, point[1] * info.height / 1000)
         yaw = math.atan2(ray[1], ray[0])
-        hit = self._map_ray(p[0], p[1], yaw)
+        # From the camera where the photo was taken, as the ray's direction is: from the robot now, the walk watcher's
+        # line started some metres further on (it checks a frame while the robot walks), passed beside the 2780
+        # pillar about 4 m away and found a wall at 8.1 m (new_qwen3-8-27b-think_20).
+        cx, cy = float(self.seen["origin"][0]), float(self.seen["origin"][1])
+        hit = self._map_ray(cx, cy, yaw)
         stop = 0.0
         if hit is None:
             # Before 2026-11-04 refused ("above the floor where the lidar sees nothing"): "the end of the corridor".
             step = float(self.cfg.get("max_move_m", 2.0))
-            x, y = p[0] + step * math.cos(yaw), p[1] + step * math.sin(yaw)
+            x, y = cx + step * math.cos(yaw), cy + step * math.sin(yaw)
             source = f"too far for the lidar and no map that way: {step:.1f} m toward it; call again to go on"
         else:
             x, y, wall = hit
@@ -1465,7 +1469,7 @@ class Robot(Node):
             d = math.hypot(at["x"] - p[0], at["y"] - p[1])
             b = math.degrees(math.atan2(at["y"] - p[1], at["x"] - p[0]) - p[2])
             b = (b + 180.0) % 360.0 - 180.0
-            msg += f", {direction(b)} {d:.1f} m from here (x={at['x']:.2f} y={at['y']:.2f})"
+            msg += f", {direction(b)} {d:.1f} m from here (x={at['x']:.2f} y={at['y']:.2f}; {at.get('from', '')})"
         if p is not None:
             msg += f"; now at x={p[0]:.2f} y={p[1]:.2f}"
         msg += "; the photo is the camera frame that stopped it" + self._openings()
