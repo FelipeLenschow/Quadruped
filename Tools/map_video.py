@@ -53,7 +53,8 @@ COLORS = {UNKNOWN: (128, 128, 128), FREE: (250, 250, 250), OCCUPIED: (0, 0, 0)}
 PATH, PLAN_C, GOAL, ROBOT, OBJ = (220, 120, 20), (40, 170, 40), (200, 40, 200), (40, 40, 230), (0, 140, 255)
 KIND_COLORS = {"you": (255, 255, 255), "call": (120, 220, 255), "said": (140, 255, 140), "error": (90, 90, 255),
                "done": (255, 200, 90),
-               "note": (200, 200, 200), "info": (200, 200, 200)}
+               "note": (200, 200, 200), "info": (200, 200, 200), "watcher": (80, 180, 255)}
+WATCHER_SHOWN_S = 6.0  # a walk watcher's answer stays on the camera panel this long (it checks about every 2 s)
 BG, TEXT = (32, 32, 32), (235, 235, 235)
 
 
@@ -300,6 +301,8 @@ class Renderer:
         self.cam_i, self.cam_img = None, None
         self.ph_i, self.ph_img = None, None
         self.task = next((e[2] for e in events if e[1] == "you"), "")
+        self.watch = [e for e in events if e[1] == "watcher"]  # on the camera panel, not in the caption
+        self.watch_t = [e[0] for e in self.watch]
 
     def px(self, x, y):
         return int(round((x - self.x0) * self.ppm)), int(round((self.y1 - y) * self.ppm))
@@ -363,6 +366,11 @@ class Renderer:
             self.cam_img = (cv2.imdecode(np.frombuffer(b.cam[i], np.uint8), cv2.IMREAD_REDUCED_COLOR_2)
                             if i >= 0 else None)
         put(panel, "camera" if b.cam else "camera: not recorded", (int(6 * fs), int(17 * fs)), 0.5 * fs, TEXT)
+        w = latest(self.watch_t, t)
+        if w >= 0 and t - self.watch_t[w] < WATCHER_SHOWN_S:
+            said = self.watch[w][2].split(":", 1)[-1].strip()  # "watcher go_to_place: frame 3: go on"
+            put(panel, f"watcher: {said}", (int(70 * fs), int(17 * fs)), 0.5 * fs, KIND_COLORS["watcher"],
+                P - int(76 * fs))
         panel[label:label + h] = fit(self.cam_img, P, h)
         i = latest(self.ph_t, t)
         if i != self.ph_i:
@@ -385,7 +393,7 @@ class Renderer:
         put(cap, f"{self.clock(t)}  x{self.speed:g}   {self.title}   task: {self.task}", (int(8 * fs), line - 4),
             0.55 * fs, TEXT, self.W - int(16 * fs), 1)
         n = bisect.bisect_right(self.ev_t, t)
-        shown = [e for e in self.events[:n] if e[1] != "you" or e[2] != self.task][-3:]
+        shown = [e for e in self.events[:n] if (e[1] != "you" or e[2] != self.task) and e[1] != "watcher"][-3:]
         for k, (te, kind, text) in enumerate(shown):
             first = text.split("\n", 1)[0]
             lead = {"call": "-> ", "said": "agent: ", "you": "you: "}.get(kind, "")

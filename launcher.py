@@ -1435,6 +1435,8 @@ def run_cli_menu():
         model = ask_ollama_model(model_def)
         # Fixed for all models and set-ups (THOR_TESTS.md): the 8B needs it on the Orin NX.
         ctx = input("Context tokens [16384]: ").strip() or "16384"
+        # The agent thinks before each step (slower); the watcher during walks never does (mcp_server _watch).
+        think = input("Let the agent think first (slower)? [y/N]: ").lower().strip() == "y"
         task = ask_agent_task()
         demo = task["level"] == "demo"
         minutes = input(f"Minutes, 0 = no limit [{0 if demo else 5}]: ").strip() or ("0" if demo else "5")
@@ -1453,7 +1455,7 @@ def run_cli_menu():
         lidar = input("Also record the lidar clouds (to run SLAM again offline)? [y/N]: ").lower().strip() == "y"
         sweep_opts = {"url": url, "model": model, "ctx": ctx, "task_id": task["id"], "prompt": task["prompt"],
                       "success": task["success"], "minutes": minutes, "max_calls": max_calls, "lidar": lidar,
-                      "map": chosen_map, "initial_pose": initial_pose}
+                      "think": think, "map": chosen_map, "initial_pose": initial_pose}
 
     if action == "llm_agent":
         print("\nNeeds the robot running ([4], [5] or [6]), plus [N] for go_to and [I] for the camera. Starts")
@@ -1871,12 +1873,12 @@ def main():
             mcp_proc = start_mcp_server(o["url"], env, "--ollama=http://localhost:11434", f"--vlm_model={o['model']}",
                                         f"--vlm_ctx={o['ctx']}")
             # The name at run time, so [0] Repeat gives the next trial of the same task.
-            name = next_trial_name(o["task_id"], o["model"])
+            name = next_trial_name(o["task_id"], o["model"] + ("-think" if o.get("think") else ""))
             print(f"[Launcher] Trial {name}: {o['prompt']}")
             cmd = [sys_python, os.path.join(REPO_DIR, "Tools", "thor_trial.py"), name, o["prompt"],
                    f"--model={o['model']}", f"--ctx={o['ctx']}", f"--minutes={o['minutes']}",
                    f"--max_calls={o['max_calls']}", f"--task_id={o['task_id']}", f"--criterion={o['success']}",
-                   f"--mcp={o['url']}"] + (["--lidar"] if o.get("lidar") else [])
+                   f"--mcp={o['url']}"] + (["--lidar"] if o.get("lidar") else []) + (["--think"] if o.get("think") else [])
             # Nav2 and the cameras as [N] and [I] start them: Gazebo on a PC, the real Go2 on the robot.
             cmd += ["--sim"] if not IS_ROBOT else [f"--interface={sdk_network_interface() or ''}"]
             if o.get("map"):

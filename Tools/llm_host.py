@@ -654,7 +654,9 @@ def run_chat(io, mcp, args, tools, system, task, outcome=None):
             io.status(f"calling {name}")
             def note(data, name=name):
                 """Before the result: go_to_place's photo with its points, before Nav2 has the goal."""
-                if isinstance(data, dict):
+                if isinstance(data, dict) and data.get("kind") == "watcher":
+                    log("watcher", data.get("text", ""), name)  # each walk watcher answer: the log, not the app
+                elif isinstance(data, dict):
                     image = data.get("image") or {}
                     io.show("note", data.get("text", ""), name, [image["data"]] if image.get("data") else [])
 

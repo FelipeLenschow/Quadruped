@@ -1263,6 +1263,15 @@ class Robot(Node):
         if not task:
             return self._motion(what, fn, *args), None
         done, box = threading.Event(), {}
+        # Each answer as a note, kind watcher: the host logs it (log.md, the video's camera panel), not the app. NOTES
+        # is this HTTP thread's.
+        send = getattr(NOTES, "send", None)
+
+        def said(msg):
+            if send is not None:
+                with contextlib.suppress(OSError):
+                    send({"text": msg, "kind": "watcher"})
+        box["say"] = said
         t = threading.Thread(target=self._watch, args=(task, done, box), daemon=True)
         t.start()
         try:
@@ -1307,6 +1316,7 @@ class Robot(Node):
                 try:
                     said = self._vision(small_b64, WATCH_ASK.format(task=what))
                     box["frames"] += 1
+                    box["say"](f"frame {box['frames']}: " + " ".join(said.split())[:100])
                     if not re.match(r"\W*stop\b", said, re.I) or done.is_set():
                         continue
                     found = POINT.search(said)
@@ -1314,6 +1324,7 @@ class Robot(Node):
                     full_b64 = base64.b64encode(cv2.imencode(".jpg", img)[1].tobytes()).decode()
                     again = self._vision(full_b64, WATCH_ASK.format(task=what))
                     ok = re.match(r"\W*stop\b", again, re.I) is not None
+                    box["say"](f"frame {box['frames']} on the full frame: " + " ".join(again.split())[:100])
                 except RuntimeError as e:
                     box["error"] = str(e)
                     return
@@ -1739,9 +1750,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
 
+        lock = threading.Lock()  # the walk watcher's notes come from its own thread
+
         def event(body):
-            self.wfile.write(b"data: " + json.dumps(body).encode() + b"\n\n")
-            self.wfile.flush()
+            with lock:
+                self.wfile.write(b"data: " + json.dumps(body).encode() + b"\n\n")
+                self.wfile.flush()
 
         NOTES.send = lambda data: event({"jsonrpc": "2.0", "method": "notifications/message",
                                          "params": {"level": "info", "logger": "go2", "data": data}})
