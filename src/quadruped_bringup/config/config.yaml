@@ -274,8 +274,9 @@ mcp:
 # and kept an unknown V ahead in corridors. Nav2's global costmap, the app and mcp_server use this map; map_save
 # saves /map.
 map_open:
-  open_ahead_m: 3.0
-  open_ahead_deg: 30.0
+  open_ahead_m: 5.0      # 3 m until 2026-11-20
+  open_ahead_deg: 90.0   # 30 until 2026-11-20; not behind: there the L1 sees little past the body (the start map was
+                         # empty behind the robot), so no return there is not seen, not open
   publish_s: 1.0
 
 # --- Motor Physical Parameters ---
