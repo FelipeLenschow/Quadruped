@@ -1398,14 +1398,25 @@ class Robot(Node):
                     stop, why, point, kind = watch_answer(said)
                     if not stop or done.is_set():
                         continue
-                    # At look's width, not the camera's: the camera's full frame took 11 s (new_qwen3-8-27b-think_6).
-                    full = int(self.cfg.get("image_width", 640))
-                    big = cv2.resize(img, (full, round(img.shape[0] * full / img.shape[1])),
-                                     interpolation=cv2.INTER_AREA) if img.shape[1] > full else img
-                    full_b64 = base64.b64encode(cv2.imencode(".jpg", big)[1].tobytes()).decode()
-                    again = self._vision(full_b64, WATCH_ASK.format(task=what), WATCH_SCHEMA, until_go_on=True)
-                    ok = watch_answer(again)[0]
-                    box["say"](f"frame {box['frames']} on the full frame: " + " ".join(again.split())[:100])
+                    # The claim checked, not the question asked again: the 9B without thinking answered the same
+                    # question on the 640 px frame like a coin, and let the OM2780 pillar it saw go by
+                    # (new_qwen3-5-9b_4). With a point: is what it said there, on the camera's full frame cut around
+                    # it (_confirm; a sign's digits are a few pixels in the small frame). Without one ("the middle point
+                    # reached"): the same yes/no about the frame at look's width.
+                    claim = " ".join(why.split())[:150] or "what the task looks for"
+                    if point:
+                        full_b64 = base64.b64encode(cv2.imencode(".jpg", img)[1].tobytes()).decode()
+                        near_box = [max(0.0, point[0] - 150), max(0.0, point[1] - 150),
+                                    min(1000.0, point[0] + 150), min(1000.0, point[1] + 150)]
+                        ok, again = self._confirm(full_b64, near_box, claim)
+                    else:
+                        full = int(self.cfg.get("image_width", 640))
+                        big = cv2.resize(img, (full, round(img.shape[0] * full / img.shape[1])),
+                                         interpolation=cv2.INTER_AREA) if img.shape[1] > full else img
+                        again = self._vision(base64.b64encode(cv2.imencode(".jpg", big)[1].tobytes()).decode(),
+                                             f'Does this photo show this: "{claim}"? Answer only yes or no.')
+                        ok = re.match(r"\W*yes\b", again, re.I) is not None
+                    box["say"](f"frame {box['frames']} checked, \"{claim[:60]}\": " + " ".join(again.split())[:40])
                 except RuntimeError as e:
                     box["error"] = str(e)
                     return
