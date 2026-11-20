@@ -197,6 +197,33 @@ def draw_map(grid, pose, radius, size, marks, trail):
     return img, drawn
 
 
+def inside_map(grid, start, goal, margin=0.3):
+    """goal (map x, y), or, when it is off the grid (or nearer its edge than margin m), the last point back along the
+    line to start that is on it: Nav2 refuses a goal outside the global costmap ("Goal Coordinates ... was outside
+    bounds"), and two go_to_map_place walks to "ahead" and "right", the drawing's edge 5 m out with SLAM just started,
+    ended at once with the robot where it was (new_qwen3-5-9b_7). None when start is off the grid too."""
+    info = grid.info
+    res, w, h = info.resolution, info.width, info.height
+    oyaw, o = origin_yaw(info), info.origin.position
+    c, s = math.cos(oyaw), math.sin(oyaw)
+
+    def on(x, y):
+        dx, dy = x - o.x, y - o.y
+        u, v = c * dx + s * dy, -s * dx + c * dy  # along the grid's columns and rows, m
+        return margin <= u <= w * res - margin and margin <= v <= h * res - margin
+
+    if on(*goal):
+        return goal
+    d = math.hypot(goal[0] - start[0], goal[1] - start[1])
+    steps = int(d / (res / 2))
+    for k in range(steps, -1, -1):
+        t = k / steps if steps else 0.0
+        x, y = start[0] + (goal[0] - start[0]) * t, start[1] + (goal[1] - start[1]) * t
+        if on(x, y):
+            return float(x), float(y)
+    return None
+
+
 def stand_near(grid, start, target, approach, room_m):
     """(x, y, metres from target) of where to stand to face target: a free cell with room_m to the nearest wall,
     reachable from start (the robot) through such cells, as near approach m from target as there is; when nothing
@@ -1530,6 +1557,11 @@ class Robot(Node):
         p = self.pose()
         moved_note = ""
         if p is not None and p[3] == "map" and self.grid is not None:
+            edge = inside_map(self.grid, p[:2], (x, y))
+            if edge is not None and math.hypot(edge[0] - x, edge[1] - y) > 0.05:
+                moved_note = (f" ({x:.2f}, {y:.2f}) was past the edge of the map: went to ({edge[0]:.2f}, "
+                              f"{edge[1]:.2f}), as far as the map goes that way;")
+                x, y = edge
             reach = reachable_goal(self.grid, p[:2], (x, y), float(self.cfg.get("goal_clearance", 0.15)))
             if reach is None:
                 return text(f"({x:.2f}, {y:.2f}) is in a wall, and so is the way there from the robot", True)
@@ -1537,8 +1569,8 @@ class Robot(Node):
                 return text(f"({x:.2f}, {y:.2f}) is in a wall: the first point in front of it, toward the robot, is "
                             f"{math.hypot(reach[0] - x, reach[1] - y):.1f} m back; go to a place you can see", True)
             if math.hypot(reach[0] - x, reach[1] - y) > 0.05:
-                moved_note = (f" ({x:.2f}, {y:.2f}) was in a wall: went to ({reach[0]:.2f}, {reach[1]:.2f}) in front "
-                              "of it;")
+                moved_note += (f" ({x:.2f}, {y:.2f}) was in a wall: went to ({reach[0]:.2f}, {reach[1]:.2f}) in "
+                               "front of it;")
                 x, y = reach
         if yaw_deg is None:
             yaw = math.atan2(y - p[1], x - p[0]) if p else 0.0
