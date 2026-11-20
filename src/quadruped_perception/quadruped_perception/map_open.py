@@ -92,7 +92,7 @@ class MapOpen(Node):
     def __init__(self, cfg):
         super().__init__("map_open")
         self.reach = float(cfg.get("open_ahead_m", 5.0))
-        self.half = math.radians(float(cfg.get("open_ahead_deg", 90.0)))
+        self.half = math.radians(float(cfg.get("open_ahead_deg", 60.0)))
         self.period = float(cfg.get("publish_s", 1.0))
         self.grid, self.walls, self.keys, self.dirty = None, None, set(), False
         self.tf_buffer = Buffer(cache_time=Duration(seconds=10.0))

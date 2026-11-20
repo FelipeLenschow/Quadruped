@@ -277,8 +277,9 @@ mcp:
 # saves /map.
 map_open:
   open_ahead_m: 5.0      # 3 m until 2026-11-20
-  open_ahead_deg: 90.0   # 30 until 2026-11-20; not behind: there the L1 sees little past the body (the start map was
-                         # empty behind the robot), so no return there is not seen, not open
+  open_ahead_deg: 60.0   # not to the sides or behind: there the L1 sees little (body), and no return there is not
+                         # seen, not open: at 90 the start filled a strip 5 m out left past the lab wall, and the agent
+                         # walked to it (new_qwen3-8-27b-think_19); 30 until 2026-11-20
   publish_s: 1.0
 
 # --- Motor Physical Parameters ---
