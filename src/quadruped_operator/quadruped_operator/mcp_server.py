@@ -126,10 +126,11 @@ MAP_GREY = 150  # not seen yet; free floor is white, walls black
 MARK_COLORS = {"start": (60, 170, 60), "thing": (0, 140, 255), "unexplored": (215, 120, 0)}  # BGR
 
 
-def draw_map(grid, pose, radius, size, marks, trail):
+def draw_map(grid, pose, radius, size, marks, trail, words=True):
     """grid: OccupancyGrid; pose: (x, y, yaw) on it. The map radius m around the robot, size x size px, turned so the
     robot is at the centre facing up; marks (dicts with n, kind, x, y and for a thing label) as numbered circles,
-    trail (x, y points) as a line. Returns (the BGR image, the marks drawn)."""
+    trail (x, y points) as a line; words: "ahead", "left", "right" at the edges and the scale bar's length. Returns
+    (the BGR image, the marks drawn)."""
     info = grid.info
     res, w, h = info.resolution, info.width, info.height
     scale = size / 2.0 / radius  # px per m
@@ -187,13 +188,15 @@ def draw_map(grid, pose, radius, size, marks, trail):
     def tag(t, x, y):
         for color, width in (((255, 255, 255), 4), ((0, 0, 230), 1)):
             cv2.putText(img, t, (x, y), font, 0.5, color, width, cv2.LINE_AA)
-    tag("ahead", size // 2 - 22, 16)
-    tag("left", 4, size // 2 + 5)
-    tag("right", size - 44, size // 2 + 5)
+    if words:
+        tag("ahead", size // 2 - 22, 16)
+        tag("left", 4, size // 2 + 5)
+        tag("right", size - 44, size // 2 + 5)
     bar = next((b for b in (0.5, 1, 2, 5, 10) if b * scale >= 40), 10)
     x0, y0 = 10, size - 12
     cv2.line(img, (x0, y0), (x0 + int(bar * scale), y0), (0, 0, 230), 3)
-    tag(f"{bar:g} m", x0, y0 - 8)
+    if words:
+        tag(f"{bar:g} m", x0, y0 - 8)
     return img, drawn
 
 
@@ -651,8 +654,9 @@ class Robot(Node):
         return {"content": [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"},
                             {"type": "text", "text": json.dumps(out)}], "isError": False}
 
-    def _map_view(self, g, p):
-        """see_map's drawing of g around pose p: (the JPEG, its text as a dict, (radius m, size px))."""
+    def _map_view(self, g, p, words=True):
+        """see_map's drawing of g around pose p: (the JPEG, its text as a dict, (radius m, size px)); words: draw_map's.
+        """
         if self.start is None:  # _track records it only 0.5 s after TF opens; a first call can come before that
             self.start = p[:3]
         frontiers, explored = self._frontiers(g, p)
@@ -685,7 +689,7 @@ class Robot(Node):
         radius = min(max(far + 0.5, float(self.cfg.get("map_view_min_m", 3.0))),
                      float(self.cfg.get("map_view_max_m", 15.0)))
         size = int(self.cfg.get("map_image_px", 512))
-        img, drawn = draw_map(g, p, radius, size, marks, self.trail + [p[:2]])
+        img, drawn = draw_map(g, p, radius, size, marks, self.trail + [p[:2]], words)
         for mk in marks:
             if mk["n"] not in drawn:
                 mk["in_view"] = False
@@ -713,7 +717,9 @@ class Robot(Node):
         p = self.pose()
         if p is None or p[3] != "map":
             return text(f"robot position on the map unknown ({self.map_error}): is navigation running?", True)
-        data, view, (radius, size) = self._map_view(g, p)
+        # Without its words: asked for "ahead" and "right", the vision model pointed at those words on the drawing's
+        # edges, past the map (new_qwen3-5-9b_7).
+        data, view, (radius, size) = self._map_view(g, p, words=False)
         image = base64.b64encode(data).decode()
         # "mark 3" or "#3" anywhere, or the number alone: the 27B wrote "the large unexplored area to the upper right,
         # mark 3", the vision model then pointed into grey 13.5 m away, not at mark 3 (3.6 m; new_qwen3-8-27b_20).
