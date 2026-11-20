@@ -260,9 +260,8 @@ mcp:
   openings_m: 6.0       # go_to_place / go_to_map_place results: the unexplored edges within this, at least
   openings_min_m: 1.0   # this wide, the widest openings_max of them, nearest first, with direction words
   openings_max: 3
-  open_ahead_m: 3.0     # the agent's map: nothing in /scan ahead within this, with a wall within open_side_m
-  open_side_m: 3.0      # on each side (a corridor), makes the unknown cells along the beams
-  open_ahead_deg: 30.0  # ahead (this many deg each side) free: SLAM skips beams with no return
+  open_ahead_m: 3.0     # the agent's map: unknown cells along the beams ahead with no return in /scan
+  open_ahead_deg: 30.0  # within open_ahead_m (none within 3 deg) made free: SLAM skips such beams
   map_view_min_m: 3.0   # see_map: half the view, at least / at most (the known map and the marks set it)
   map_view_max_m: 15.0
   map_image_px: 512

@@ -351,27 +351,23 @@ class Robot(Node):
         return self.patched[2]
 
     def _open_ahead(self, p):
-        """In a long corridor the L1 sees both walls but nothing ahead: no return, inf in /scan, which SLAM skips, so
-        /map kept an unknown V in front of the robot down the corridor (go_to_place then walked 1 m at a time, "as
-        far as the map goes", new_qwen3-8-27b-think_3). With nothing ahead within open_ahead_m and a wall within
-        open_side_m on each side, the unknown cells along the beams in front without a return within open_ahead_m
-        are kept as free (never a wall SLAM saw)."""
+        """A beam with no return is inf in /scan, which SLAM skips: in a long corridor the L1 saw both walls but
+        nothing ahead, and /map kept an unknown V in front of the robot (go_to_place then walked 1 m at a time, "as
+        far as the map goes", new_qwen3-8-27b-think_3). Anywhere, the unknown cells along each beam in front
+        (open_ahead_deg each side) are kept as free up to open_ahead_m when no beam within 3 deg of it returned
+        nearer (the L1 fills under half the beams of one scan: a missing beam beside an obstacle is not open), never
+        past a wall SLAM saw."""
         s, g = self.scan, self.raw_grid
         if s is None or g is None or time.monotonic() - self.scan_time > 0.5 or not s.ranges:
             return
         reach = float(self.cfg.get("open_ahead_m", 3.0))
-        side = float(self.cfg.get("open_side_m", 3.0))
         half = math.radians(float(self.cfg.get("open_ahead_deg", 30.0)))
         r = np.asarray(s.ranges, float)
         a = s.angle_min + np.arange(len(r)) * s.angle_increment
         a = (a + math.pi) % (2 * math.pi) - math.pi
         near = np.isfinite(r) & (r >= s.range_min) & (r < reach)
-        if (near & (np.abs(a) <= math.radians(15.0))).any():
-            return  # something ahead
-        walls = np.isfinite(r) & (r >= s.range_min) & (r < side)
-        if not (walls & (a > math.radians(45)) & (a < math.radians(135))).any() \
-                or not (walls & (a < -math.radians(45)) & (a > -math.radians(135))).any():
-            return  # not between two walls
+        spread = max(1, int(round(math.radians(3.0) / abs(s.angle_increment))))
+        near = np.convolve(np.r_[near[-spread:], near, near[:spread]], np.ones(2 * spread + 1), "valid") > 0
         beams = a[(np.abs(a) <= half) & ~near]
         if not len(beams):
             return
