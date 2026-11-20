@@ -227,6 +227,9 @@ object_mapper:
 #   box is cut out and shown to it alone to confirm (false: the old prompts, which always give a box).
 #   locate: a box in look's last photo to a map point, from object_mapper's cloud, floor_z, floor_margin and
 #   max_depth_shift (no detector needed). Not listed to the agent (its own boxes are wrong), but callable for tests.
+#   task (go_to_place, go_to_map_place): while Nav2 walks, the newest camera frame, watch_width px wide, goes to the
+#   vision model (the agent's own, no thinking: 1.8 s a frame with the 27B on the Thor) with the agent's task: should
+#   it stop for what it shows? A stop is asked again on the full frame, then the walk stops.
 #   tf_idle_s: TF is listened to only around tool calls and this long after the last (a Python TF listener costs
 #   ~20% of an Orin Nano core at the robot's 100 /tf messages per second).
 mcp:
@@ -264,6 +267,7 @@ mcp:
   vlm_model: qwen3vl-2b-gpu
   vlm_ctx: 8192
   vlm_check: true
+  watch_width: 384
 
 # --- Motor Physical Parameters ---
 motor:

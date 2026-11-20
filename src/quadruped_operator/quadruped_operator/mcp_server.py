@@ -25,6 +25,7 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
@@ -76,7 +77,8 @@ of a thing). For a trick at a thing: find_something by its name, then visit the 
 own photo, so call them directly; move is not for going somewhere. After each walk, call look and see_map together:
 the photo shows what is there, the map shows where the corridors and openings go, also beside and behind you, where
 the camera does not see. Go to what you see with go_to_place, and to a corridor or opening on the map with
-go_to_map_place."""
+go_to_map_place. Give each walk its task: what you are doing now, in a sentence. A watcher checks the camera
+while it walks, and stops it when what it sees matters for that task."""
 # Not "to go to something you see: find_something, then visit or go_to the x, y": with that, and look's result naming
 # only find_something, the 27B agent went to a door with find_something and go_to, and Nav2 aborted (the x, y is the
 # lidar on the door: an obstacle), on the way to a room in the corridor (2026-11-18).
@@ -608,7 +610,7 @@ class Robot(Node):
             out["note"] = "no unexplored edges: the map is closed"
         return data, out, (radius, size)
 
-    def go_to_map_place(self, where):
+    def go_to_map_place(self, where, task=""):
         """The vision model's point for `where` on see_map's drawing (its own call, as go_to_place's: the agent's own
         points miss), or a mark's number, then Nav2 there (_go_to moves it out of a wall)."""
         where = str(where).strip()
@@ -659,7 +661,9 @@ class Robot(Node):
         at = {"x": round(gx, 2), "y": round(gy, 2), "point_thousandths": [round(v) for v in point],
               "distance_m": round(math.hypot(gx - p[0], gy - p[1]), 1)}
         shown = self._note(json.dumps(at) + "; walking there", pointed(image, [(point, where)]))
-        moved = self._motion("go_to_map_place", self._go_to_open, gx, gy, at)
+        moved, spotted = self._walk(task, "go_to_map_place", self._go_to_open, gx, gy, at)
+        if spotted:
+            return self._spotted(json.dumps(at), spotted)
         out = text(json.dumps(at) + "; " + moved["content"][0]["text"]
                    + ("" if moved["isError"] else "; look to see where you are") + self._openings(), moved["isError"])
         if not shown:
@@ -811,7 +815,7 @@ class Robot(Node):
         res["content"].append(boxed(image, box, self._label(what)))
         return res
 
-    def go_to_place(self, where, facing=""):
+    def go_to_place(self, where, facing="", task=""):
         """look, the vision model's point for `where` in that photo, then Nav2 there (see _seen_point), arriving
         turned toward the point for `facing` when given, else toward the most open way there (_open_heading). Each
         point is asked on its own, as find_something's box: in the agent's own tool call the 2B model's points for
@@ -884,11 +888,13 @@ class Robot(Node):
             # (new_qwen3-8-27b_27).
             yaw_deg = math.degrees(math.atan2(ty - gy, tx - gx)) if math.hypot(tx - gx, ty - gy) > 0.05 else None
             at["facing"] = (why + ": " if why else "") + "toward it"
-            moved = self._motion("go_to_place", self._go_to, gx, gy, yaw_deg)
+            moved, spotted = self._walk(task, "go_to_place", self._go_to, gx, gy, yaw_deg)
         elif yaw_deg is None:
-            moved = self._motion("go_to_place", self._go_to_open, gx, gy, at)
+            moved, spotted = self._walk(task, "go_to_place", self._go_to_open, gx, gy, at)
         else:
-            moved = self._motion("go_to_place", self._go_to, gx, gy, yaw_deg)
+            moved, spotted = self._walk(task, "go_to_place", self._go_to, gx, gy, yaw_deg)
+        if spotted:
+            return self._spotted(json.dumps(at), spotted)
         out = text(json.dumps(at) + "; " + moved["content"][0]["text"] + self._openings(), moved["isError"])
         if not shown:
             out["content"].append(pointed(image, marks, arrow))
@@ -1248,6 +1254,116 @@ class Robot(Node):
         out[:2] += d * min(float(shift), self.max_shift)
         return out
 
+    def _walk(self, task, what, fn, *args):
+        """(_motion's result, what _watch saw or None): with the agent's task, a watcher (the vision model, no
+        thinking) checks the camera while Nav2 walks, and stops the walk when what it sees matters for the task. The
+        agent thinks between walks; looking only after each, the 27B passed the OM2780 sign it was sent to find
+        (new_qwen3-8-27b_36)."""
+        task = str(task or "").strip()
+        if not task:
+            return self._motion(what, fn, *args), None
+        done, box = threading.Event(), {}
+        t = threading.Thread(target=self._watch, args=(task, done, box), daemon=True)
+        t.start()
+        try:
+            moved = self._motion(what, fn, *args)
+        finally:
+            done.set()
+            t.join(10.0)
+        if "seen" not in box and "frames" in box:
+            moved = text(moved["content"][0]["text"] + f"; the watcher saw nothing to stop for ({box['frames']} camera "
+                         "frames checked)" + (f"; {box['error']}" if "error" in box else ""), moved["isError"])
+        return moved, box.get("seen")
+
+    def _watch(self, what, done, box):
+        """While done is not set and a Nav2 goal runs: the newest frame, small, to the vision model with the agent's
+        task (`what`): should the robot stop for what it shows (the task done, what it looks for, going wrong)? A
+        stop is asked again on the full frame (a door sign's digits are a few pixels in the small one); then its
+        point goes on the map (as go_to_place's) and the goal is canceled. Into box: frames, and seen (why, the point
+        or None, its map place, the frame) or error."""
+        cam = self.cfg.get("camera") or "front"
+        width = int(self.cfg.get("watch_width", 384))
+        got, infos, clouds = deque(maxlen=1), deque(maxlen=1), deque(maxlen=3)
+        g = self.look_group
+        subs = [self.create_subscription(CompressedImage, f"/camera/{cam}/image_raw/compressed", got.append,
+                                         qos_profile_sensor_data, callback_group=g),
+                self.create_subscription(CameraInfo, f"/camera/{cam}/camera_info", infos.append, 2, callback_group=g),
+                self.create_subscription(PointCloud2, self.cloud_topic, clouds.append, qos_profile_sensor_data,
+                                         callback_group=g)]
+        box["frames"] = 0
+        try:
+            while not done.is_set():
+                if self.goal is None or not got:
+                    time.sleep(0.05)
+                    continue
+                image = got.pop()
+                info, near = (infos[-1] if infos else None), list(clouds)
+                img = cv2.imdecode(np.frombuffer(bytes(image.data), np.uint8), cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+                small = cv2.resize(img, (width, round(img.shape[0] * width / img.shape[1])),
+                                   interpolation=cv2.INTER_AREA) if img.shape[1] > width else img
+                small_b64 = base64.b64encode(cv2.imencode(".jpg", small)[1].tobytes()).decode()
+                try:
+                    said = self._vision(small_b64, WATCH_ASK.format(task=what))
+                    box["frames"] += 1
+                    if not re.match(r"\W*stop\b", said, re.I) or done.is_set():
+                        continue
+                    found = POINT.search(said)
+                    point = [float(v) for v in found.groups()] if found else None
+                    full_b64 = base64.b64encode(cv2.imencode(".jpg", img)[1].tobytes()).decode()
+                    again = self._vision(full_b64, WATCH_ASK.format(task=what))
+                    ok = re.match(r"\W*stop\b", again, re.I) is not None
+                except RuntimeError as e:
+                    box["error"] = str(e)
+                    return
+                if not ok or done.is_set():
+                    continue
+                p = self.pose()
+                data, mime, sent = self._shrink(bytes(image.data), image.format)
+                at = None
+                if point and not self._keep_for_locate(image, info, near, sent):
+                    try:
+                        at, _ = self._seen_point(point, p)
+                    except RuntimeError:
+                        at = None
+                said = re.sub(r"```\w*|\{[^}]*\}|\[[^\]]*\]", " ", said)
+                said = " ".join(re.sub(r"^\W*stop\W*", "", said, flags=re.I).split())[:150]
+                box["seen"] = {"what": what, "said": said, "point": point, "at": at, "frames": box["frames"],
+                               "image": base64.b64encode(data).decode()}
+                self.stopping.set()
+                goal = self.goal
+                if goal is not None:
+                    self.wait(goal.cancel_goal_async(), 2.0)
+                return
+        except Exception as e:  # said in the result: a watcher that died in silence looks like one that saw nothing
+            box["error"] = f"the watcher failed: {e}"
+        finally:
+            for sub in subs:
+                self.destroy_subscription(sub)
+
+    def _spotted(self, at_text, s):
+        """The result of a walk the watcher stopped: why, where what it pointed at is from here, and the frame that
+        stopped it (its point drawn). No turn toward it: the agent decides what next."""
+        what, at = s["what"], s["at"]
+        marked = pointed(s["image"], [(s["point"], s["said"][:40])] if s["point"] else [])  # for the person
+        shown = self._note(f"the watcher stopped the walk: {s['said']}", marked)
+        msg = f"{at_text}; stopped by the watcher: {s['said'].rstrip('.') or 'no reason given'}"
+        p = self.pose()
+        if at is not None and p is not None:
+            d = math.hypot(at["x"] - p[0], at["y"] - p[1])
+            b = math.degrees(math.atan2(at["y"] - p[1], at["x"] - p[0]) - p[2])
+            b = (b + 180.0) % 360.0 - 180.0
+            msg += f", {direction(b)} {d:.1f} m from here (x={at['x']:.2f} y={at['y']:.2f})"
+        if p is not None:
+            msg += f"; now at x={p[0]:.2f} y={p[1]:.2f}"
+        msg += "; the photo is the camera frame that stopped it" + self._openings()
+        out = text(msg)
+        out["content"].insert(0, {"type": "image", "data": s["image"], "mimeType": "image/jpeg"})
+        if not shown:
+            out["content"].append(marked)
+        return out
+
     def _motion(self, what, fn, *args):
         if not self.motion.acquire(blocking=False):
             return text("busy with another motion; wait or call stop", True)
@@ -1445,6 +1561,14 @@ def schema(props=None, required=()):
     return {"type": "object", "properties": props or {}, "required": list(required)}
 
 
+TASK = {"type": "string", "description": "what you are doing now and why, in a sentence (what you look for, where "
+        "you turn). A watcher checks the camera while it walks, and stops the walk when the task is done, when what "
+        "you look for is in view, or when it is going wrong; you then get that photo and why"}
+# The watcher's question for each camera frame during a walk (_watch), with the agent's task.
+WATCH_ASK = ("The robot is walking. Its task now: {task}\nShould it stop because of what this photo shows: the task "
+             "is done, what it looks for is in view, or it is going wrong? If yes, answer stop, why in a few words, "
+             "and the point_2d of what it is, in JSON. If not, answer only: go on.")
+
 TOOLS = [
     ("get_state", "The robot's mode, posture, safety flags and position on the map.", schema()),
     ("list_objects", "Objects seen by the camera and placed on the map, nearest first: id, label, position, "
@@ -1473,8 +1597,8 @@ TOOLS = [
      "unexplored edge, the start, or a thing find_something found. Describe it as it looks on see_map's drawing, or "
      "give a mark's number. It finds it on the map and walks the whole way there with Nav2, however far. Look when "
      "there. Needs walk first.",
-     schema({"where": {"type": "string", "description": "the place on the map, in words, or a mark's number"}},
-            ["where"])),
+     schema({"where": {"type": "string", "description": "the place on the map, in words, or a mark's number"},
+             "task": TASK}, ["where"])),
     ("go_to", "Walk to a point on the map with Nav2, avoiding obstacles. Blocks until there.",
      schema({"x": {"type": "number"}, "y": {"type": "number"},
              "yaw_deg": {"type": "number", "description": "heading on arrival; default: facing the way it walked"}},
@@ -1519,8 +1643,8 @@ TOOLS = [
      # facing not required: required, the 2B agent called go_to_place first 0 times in 10 (10 in 10 without), as it
      # had seen nothing to face yet (2026-11-04).
      schema({"where": {"type": "string", "description": "the place, in words"},
-             "facing": {"type": "string", "description": "optional: a thing or place in the same view to face there"}},
-            ["where"])),
+             "facing": {"type": "string", "description": "optional: a thing or place in the same view to face there"},
+             "task": TASK}, ["where"])),
     ("locate", "Where something in the last look photo is on the map, for visit or go_to: give its box [x1, y1, x2, "
      "y2] (or a point x, y) in pixels of that photo, or in thousandths of its width and height with thousandths "
      "true (Qwen-VL boxes are in thousandths). Uses the lidar inside the box, or the floor under it.",
