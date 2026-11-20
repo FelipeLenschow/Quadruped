@@ -27,6 +27,7 @@ import urllib.error
 import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -40,7 +41,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
 from rclpy.utilities import remove_ros_args
-from sensor_msgs.msg import CameraInfo, CompressedImage, PointCloud2
+from sensor_msgs.msg import CameraInfo, CompressedImage, LaserScan, PointCloud2
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -293,8 +294,12 @@ class Robot(Node):
         self.create_subscription(String, "/objects", self._objects_cb, latched)
         self.found_pub = self.create_publisher(String, "/objects", latched)
         self.create_subscription(String, "/objects/clear", self._clear_cb, 1)
-        self.grid = None
+        # /map as SLAM gives it, and the cells _open_ahead found open in front of the robot (map-frame cell keys,
+        # world-aligned so they survive /map growing); self.grid is the two together.
+        self.raw_grid, self.open_cells, self.patched = None, set(), (None, 0, None)
         self.create_subscription(OccupancyGrid, "/map", self._map_cb, latched)
+        self.scan, self.scan_time = None, 0.0
+        self.create_subscription(LaserScan, "/scan", self._scan_cb, qos_profile_sensor_data)
         # see_map: where the robot started (the first position on the map) and the way it walked since, read only
         # while TF is open for a tool call (the robot moves only in one). /objects/clear (thor_trial sends it) starts
         # them again.
@@ -319,7 +324,71 @@ class Robot(Node):
         self.state_time = time.monotonic()
 
     def _map_cb(self, msg):
-        self.grid = msg
+        self.raw_grid = msg
+
+    def _scan_cb(self, msg):
+        self.scan, self.scan_time = msg, time.monotonic()
+
+    @property
+    def grid(self):
+        """/map with the open_cells that SLAM left unknown made free (see _open_ahead)."""
+        raw = self.raw_grid
+        if raw is None or not self.open_cells:
+            return raw
+        if self.patched[0] is not raw or self.patched[1] != len(self.open_cells):
+            info = raw.info
+            w, h, res = info.width, info.height, info.resolution
+            ox, oy = info.origin.position.x, info.origin.position.y
+            cells = np.array(raw.data, np.int8)
+            keys = np.array(list(self.open_cells), float)
+            i = np.floor(((keys[:, 0] + 0.5) * res - ox) / res).astype(int)  # each key's cell centre
+            j = np.floor(((keys[:, 1] + 0.5) * res - oy) / res).astype(int)
+            ok = (i >= 0) & (i < w) & (j >= 0) & (j < h)
+            k = j[ok] * w + i[ok]
+            cells[k[cells[k] < 0]] = 0
+            self.patched = (raw, len(self.open_cells), SimpleNamespace(header=raw.header, info=info,
+                                                                       data=cells.tolist()))
+        return self.patched[2]
+
+    def _open_ahead(self, p):
+        """In a long corridor the L1 sees both walls but nothing ahead: no return, inf in /scan, which SLAM skips, so
+        /map kept an unknown V in front of the robot down the corridor (go_to_place then walked 1 m at a time, "as
+        far as the map goes", new_qwen3-8-27b-think_3). With nothing ahead within open_ahead_m and a wall within
+        open_side_m on each side, the unknown cells along the beams in front without a return within open_ahead_m
+        are kept as free (never a wall SLAM saw)."""
+        s, g = self.scan, self.raw_grid
+        if s is None or g is None or time.monotonic() - self.scan_time > 0.5 or not s.ranges:
+            return
+        reach = float(self.cfg.get("open_ahead_m", 3.0))
+        side = float(self.cfg.get("open_side_m", 3.0))
+        half = math.radians(float(self.cfg.get("open_ahead_deg", 30.0)))
+        r = np.asarray(s.ranges, float)
+        a = s.angle_min + np.arange(len(r)) * s.angle_increment
+        a = (a + math.pi) % (2 * math.pi) - math.pi
+        near = np.isfinite(r) & (r >= s.range_min) & (r < reach)
+        if (near & (np.abs(a) <= math.radians(15.0))).any():
+            return  # something ahead
+        walls = np.isfinite(r) & (r >= s.range_min) & (r < side)
+        if not (walls & (a > math.radians(45)) & (a < math.radians(135))).any() \
+                or not (walls & (a < -math.radians(45)) & (a > -math.radians(135))).any():
+            return  # not between two walls
+        beams = a[(np.abs(a) <= half) & ~near]
+        if not len(beams):
+            return
+        info = g.info
+        w, h, res = info.width, info.height, info.resolution
+        ox, oy = info.origin.position.x, info.origin.position.y
+        d = np.arange(0.3, reach, res / 2)
+        yaw = p[2] + beams[:, None]
+        x, y = p[0] + d[None, :] * np.cos(yaw), p[1] + d[None, :] * np.sin(yaw)
+        i, j = np.floor((x - ox) / res).astype(int), np.floor((y - oy) / res).astype(int)
+        inside = (i >= 0) & (i < w) & (j >= 0) & (j < h)
+        cells = np.asarray(g.data, np.int8)
+        v = np.where(inside, cells[np.clip(j, 0, h - 1) * w + np.clip(i, 0, w - 1)], -1)
+        before_wall = np.cumsum(v >= 65, axis=1) == 0  # each beam stops at a wall SLAM saw
+        keep = before_wall & (v < 0)
+        self.open_cells.update(zip(np.floor(x[keep] / res).astype(int).tolist(),
+                                   np.floor(y[keep] / res).astype(int).tolist()))
 
     def _objects_cb(self, msg):
         self.objects = json.loads(msg.data).get("objects", [])
@@ -328,6 +397,7 @@ class Robot(Node):
 
     def _clear_cb(self, msg):
         self.start, self.trail, self.shown_marks = None, [], None
+        self.open_cells, self.patched = set(), (None, 0, None)  # a new trial's SLAM starts a new map
         if self.found:
             self.found = []
             self._publish_found()
@@ -342,6 +412,7 @@ class Robot(Node):
             self.start = p[:3]
         if not self.trail or math.hypot(p[0] - self.trail[-1][0], p[1] - self.trail[-1][1]) > 0.1:
             self.trail.append(p[:2])
+        self._open_ahead(p)
 
     def mapper_on(self):
         """object_mapper publishes /objects (this node's own publisher, for find_something, does not count)."""
@@ -1294,13 +1365,16 @@ class Robot(Node):
         width = int(self.cfg.get("watch_width", 384))
         got, infos, clouds = deque(maxlen=1), deque(maxlen=1), deque(maxlen=3)
         g = self.look_group
-        subs = [self.create_subscription(CompressedImage, f"/camera/{cam}/image_raw/compressed", got.append,
-                                         qos_profile_sensor_data, callback_group=g),
-                self.create_subscription(CameraInfo, f"/camera/{cam}/camera_info", infos.append, 2, callback_group=g),
-                self.create_subscription(PointCloud2, self.cloud_topic, clouds.append, qos_profile_sensor_data,
-                                         callback_group=g)]
-        box["frames"] = 0
+        box["frames"], subs = 0, []
         try:
+            # Lambdas, not deque.append: Jazzy's rclpy reads the callback's signature, a deque method has none, and
+            # the watcher died here on every walk of new_qwen3-8-27b-think_3 (its traceback only in the terminal).
+            subs = [self.create_subscription(CompressedImage, f"/camera/{cam}/image_raw/compressed",
+                                             lambda m: got.append(m), qos_profile_sensor_data, callback_group=g),
+                    self.create_subscription(CameraInfo, f"/camera/{cam}/camera_info", lambda m: infos.append(m), 2,
+                                             callback_group=g),
+                    self.create_subscription(PointCloud2, self.cloud_topic, lambda m: clouds.append(m),
+                                             qos_profile_sensor_data, callback_group=g)]
             while not done.is_set():
                 if self.goal is None or not got:
                     time.sleep(0.05)
@@ -1348,7 +1422,8 @@ class Robot(Node):
                     self.wait(goal.cancel_goal_async(), 2.0)
                 return
         except Exception as e:  # said in the result: a watcher that died in silence looks like one that saw nothing
-            box["error"] = f"the watcher failed: {e}"
+            box["error"] = f"the watcher failed: {type(e).__name__}: {e}"
+            self.get_logger().error(f"walk watcher: {traceback.format_exc()}")
         finally:
             for sub in subs:
                 self.destroy_subscription(sub)
