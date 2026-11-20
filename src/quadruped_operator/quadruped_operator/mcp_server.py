@@ -1135,15 +1135,18 @@ class Robot(Node):
             last = (px, py)
         return (*last, False) if math.hypot(last[0] - x, last[1] - y) >= 1.0 else None
 
-    def _vision(self, image, prompt):
+    def _vision(self, image, prompt, schema=None):
         """The vision model's answer about the photo alone (its own call: in the agent's context its boxes and
-        points miss); RuntimeError when Ollama does not answer."""
+        points miss), held to a JSON schema when given (Ollama's structured output); RuntimeError when Ollama does
+        not answer."""
         # think false: a thinking model (qwen3.8:27b) otherwise thinks first, inside num_predict: 18 s, and the
         # point cut off at '{"point_2d": [540,' (go_to_place failed, trial new_qwen3-8-27b_14); without, 1.8 s and the
         # point. A model that cannot think takes it too (qwen3-vl:2b-instruct, Ollama 0.40.16).
         body = {"model": self.cfg.get("vlm_model", "qwen3vl-2b-gpu"), "stream": False, "think": False,
                 "options": {"num_ctx": int(self.cfg.get("vlm_ctx", 8192)), "temperature": 0, "num_predict": 200},
                 "messages": [{"role": "user", "images": [image], "content": prompt}]}
+        if schema is not None:
+            body["format"] = schema
         url = self.cfg.get("ollama", "http://localhost:11434").rstrip("/") + "/api/chat"
         try:
             req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
@@ -1330,20 +1333,19 @@ class Robot(Node):
                                    interpolation=cv2.INTER_AREA) if img.shape[1] > width else img
                 small_b64 = base64.b64encode(cv2.imencode(".jpg", small)[1].tobytes()).decode()
                 try:
-                    said = self._vision(small_b64, WATCH_ASK.format(task=what))
+                    said = self._vision(small_b64, WATCH_ASK.format(task=what), WATCH_SCHEMA)
                     box["frames"] += 1
                     box["say"](f"frame {box['frames']}: " + " ".join(said.split())[:100], small_b64)
-                    if not wants_stop(said) or done.is_set():
+                    stop, why, point = watch_answer(said)
+                    if not stop or done.is_set():
                         continue
-                    found = POINT.search(said)
-                    point = [float(v) for v in found.groups()] if found else None
                     # At look's width, not the camera's: the camera's full frame took 11 s (new_qwen3-8-27b-think_6).
                     full = int(self.cfg.get("image_width", 640))
                     big = cv2.resize(img, (full, round(img.shape[0] * full / img.shape[1])),
                                      interpolation=cv2.INTER_AREA) if img.shape[1] > full else img
                     full_b64 = base64.b64encode(cv2.imencode(".jpg", big)[1].tobytes()).decode()
-                    again = self._vision(full_b64, WATCH_ASK.format(task=what))
-                    ok = wants_stop(again)
+                    again = self._vision(full_b64, WATCH_ASK.format(task=what), WATCH_SCHEMA)
+                    ok = watch_answer(again)[0]
                     box["say"](f"frame {box['frames']} on the full frame: " + " ".join(again.split())[:100])
                 except RuntimeError as e:
                     box["error"] = str(e)
@@ -1358,10 +1360,8 @@ class Robot(Node):
                         at, _ = self._seen_point(point, p)
                     except RuntimeError:
                         at = None
-                why = re.search(r'"(?:reason|why)"\s*:\s*"([^"]*)"', said, re.I)
-                said = why.group(1) if why else re.sub(r"```\w*|\{[^}]*\}|\[[^\]]*\]", " ", said)
-                said = " ".join(re.sub(r"^\W*stop\W*", "", said, flags=re.I).split())[:150]
-                box["seen"] = {"what": what, "said": said, "point": point, "at": at, "frames": box["frames"],
+                box["seen"] = {"what": what, "said": " ".join(why.split())[:150], "point": point, "at": at,
+                               "frames": box["frames"],
                                "image": base64.b64encode(data).decode()}
                 self.stopping.set()
                 goal = self.goal
@@ -1597,19 +1597,39 @@ def schema(props=None, required=()):
 TASK = {"type": "string", "description": "what you are doing now and why, in a sentence (what you look for, where "
         "you turn). A watcher checks the camera while it walks, and stops the walk when the task is done, when what "
         "you look for is in view, or when it is going wrong; you then get that photo and why"}
-def wants_stop(said):
-    """The watcher's answer: stop (True) or go on. "stop, ..." or JSON with a true stop: the 27B also answered
-    {"stop": true, "reason": ...} and {"stop": "no", "go on": "yes"} (new_qwen3-8-27b-think_6)."""
-    m = re.search(r'"stop"\s*:\s*"?(\w+)', said, re.I)
-    if m:
-        return m.group(1).lower() in ("true", "yes", "1")
-    return re.match(r"\W*stop\b", said, re.I) is not None
+def watch_answer(said):
+    """The watcher's answer as (stop, why, point_2d or None). Only a JSON object with "stop": true stops: in free
+    text the 27B also answered {"label": "stop, ..."}, {"stop": "task is done"} and {"stop": "no", "go on": "yes"}
+    (new_qwen3-8-27b-think_6 and _7); WATCH_SCHEMA holds Ollama to the form."""
+    try:
+        d = json.loads(said)
+    except ValueError:
+        found = re.search(r"\{.*\}", said, re.S)
+        try:
+            d = json.loads(found.group(0)) if found else {}
+        except ValueError:
+            d = {}
+    if not isinstance(d, dict):
+        return False, "", None
+    p = d.get("point_2d")
+    point = [float(v) for v in p] if isinstance(p, list) and len(p) == 2 \
+        and all(isinstance(v, (int, float)) for v in p) else None
+    return d.get("stop") is True, str(d.get("why") or ""), point
 
 
-# The watcher's question for each camera frame during a walk (_watch), with the agent's task.
-WATCH_ASK = ("The robot is walking. Its task now: {task}\nShould it stop because of what this photo shows: the task "
-             "is done, what it looks for is in view, or it is going wrong? If yes, answer stop, why in a few words, "
-             "and the point_2d of what it is, in JSON. If not, answer only: go on.")
+# The watcher's question for each camera frame during a walk (_watch), with the agent's task. Not "stop if what it
+# looks for is in view" alone: the 27B stopped for "door in view" on the way out of the lab, whose door it was to go
+# through (new_qwen3-8-27b-think_7).
+WATCH_ASK = ("The robot is walking. Its task now: {task}\nLook at this camera photo. Should the robot stop now? Stop "
+             "only when: the task is done here, the place or thing the task looks for is clearly in view (its sign "
+             "or number readable, the right one), or the robot is going wrong (a dead end, the wrong way). Do not "
+             "stop for what it passes through or walks along on the way (a door it goes through, the corridor it "
+             "follows, other rooms). Answer: stop (true or false), why in a few words, and the point_2d of what "
+             "made it stop.")
+WATCH_SCHEMA = {"type": "object", "properties": {
+    "stop": {"type": "boolean"}, "why": {"type": "string"},
+    "point_2d": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}},
+    "required": ["stop", "why"]}
 
 TOOLS = [
     ("get_state", "The robot's mode, posture, safety flags and position on the map.", schema()),
