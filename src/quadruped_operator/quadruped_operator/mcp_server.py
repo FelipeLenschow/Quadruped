@@ -1358,7 +1358,7 @@ class Robot(Node):
                     said = self._vision(small_b64, WATCH_ASK.format(task=what), WATCH_SCHEMA, until_go_on=True)
                     box["frames"] += 1
                     box["say"](f"frame {box['frames']}: " + " ".join(said.split())[:100], small_b64)
-                    stop, why, point = watch_answer(said)
+                    stop, why, point, kind = watch_answer(said)
                     if not stop or done.is_set():
                         continue
                     # At look's width, not the camera's: the camera's full frame took 11 s (new_qwen3-8-27b-think_6).
@@ -1382,8 +1382,8 @@ class Robot(Node):
                         at, _ = self._seen_point(point, p)
                     except RuntimeError:
                         at = None
-                box["seen"] = {"what": what, "said": " ".join(why.split())[:150], "point": point, "at": at,
-                               "frames": box["frames"],
+                box["seen"] = {"what": what, "said": " ".join(why.split())[:150], "kind": kind, "point": point,
+                               "at": at, "frames": box["frames"],
                                "image": base64.b64encode(data).decode()}
                 self.stopping.set()
                 goal = self.goal
@@ -1399,12 +1399,25 @@ class Robot(Node):
 
     def _spotted(self, at_text, s):
         """The result of a walk the watcher stopped: why, where what it pointed at is from here, and the frame that
-        stopped it (its point drawn). No turn toward it: the agent decides what next."""
+        stopped it (its point drawn). For the task done or its target, placed on the map: first walked up to it,
+        approach m in front, facing it. Stopped 5 m from the OM2780 sign it saw, the agent took "found" for done and
+        never went to the room (new_qwen3-8-27b-think_14)."""
         what, at = s["what"], s["at"]
         marked = pointed(s["image"], [(s["point"], s["said"][:40])] if s["point"] else [])  # for the person
         shown = self._note(f"the watcher stopped the walk: {s['said']}", marked)
         msg = f"{at_text}; stopped by the watcher: {s['said'].rstrip('.') or 'no reason given'}"
         p = self.pose()
+        stop = float(self.cfg.get("approach", 0.6))
+        # "task done" too: on the OM2780 frame of _14 the 27B gave that kind, 5 m from the sign (Thor, 2026-11-20).
+        if s.get("kind") in ("task done", "target in view") and at is not None and p is not None \
+                and math.hypot(at["x"] - p[0], at["y"] - p[1]) > stop + 0.3:
+            dx, dy = at["x"] - p[0], at["y"] - p[1]
+            d = math.hypot(dx, dy)
+            moved = self._motion("go to what the watcher saw", self._go_to, at["x"] - stop * dx / d,
+                                 at["y"] - stop * dy / d, math.degrees(math.atan2(dy, dx)))
+            msg += (f"; walked up to it, {stop:g} m in front, facing it" if not moved["isError"]
+                    else "; walking up to it failed: " + moved["content"][0]["text"])
+            p = self.pose()
         if at is not None and p is not None:
             d = math.hypot(at["x"] - p[0], at["y"] - p[1])
             b = math.degrees(math.atan2(at["y"] - p[1], at["x"] - p[0]) - p[2])
@@ -1413,7 +1426,14 @@ class Robot(Node):
         if p is not None:
             msg += f"; now at x={p[0]:.2f} y={p[1]:.2f}"
         msg += "; the photo is the camera frame that stopped it" + self._openings()
-        out = text(msg)
+        if "walked up to it" in msg:
+            msg = msg.replace("the photo is the camera frame that stopped it",
+                              "the first photo is the camera frame that stopped it, the second what it sees now")
+            now = self.look()
+            out = text(msg)
+            out["content"] = [c for c in now["content"] if c["type"] == "image"] + out["content"]
+        else:
+            out = text(msg)
         out["content"].insert(0, {"type": "image", "data": s["image"], "mimeType": "image/jpeg"})
         if not shown:
             out["content"].append(marked)
@@ -1644,9 +1664,9 @@ def watch_stream(url, body):
 
 
 def watch_answer(said):
-    """The watcher's answer as (stop, why, point_2d or None). Only a JSON object with "stop": true stops: in free
-    text the 27B also answered {"label": "stop, ..."}, {"stop": "task is done"} and {"stop": "no", "go on": "yes"}
-    (new_qwen3-8-27b-think_6 and _7); WATCH_SCHEMA holds Ollama to the form."""
+    """The watcher's answer as (stop, why, point_2d or None, kind: one of WATCH_KINDS or ""). Only a JSON object
+    with "stop": true stops: in free text the 27B also answered {"label": "stop, ..."}, {"stop": "task is done"} and
+    {"stop": "no", "go on": "yes"} (new_qwen3-8-27b-think_6 and _7); WATCH_SCHEMA holds Ollama to the form."""
     try:
         d = json.loads(said)
     except ValueError:
@@ -1656,11 +1676,12 @@ def watch_answer(said):
         except ValueError:
             d = {}
     if not isinstance(d, dict):
-        return False, "", None
+        return False, "", None, ""
     p = d.get("point_2d")
     point = [float(v) for v in p] if isinstance(p, list) and len(p) == 2 \
         and all(isinstance(v, (int, float)) for v in p) else None
-    return d.get("stop") is True, str(d.get("why") or ""), point
+    kind = d.get("kind") if d.get("kind") in WATCH_KINDS else ""
+    return d.get("stop") is True, str(d.get("why") or ""), point, kind
 
 
 # The watcher's question for each camera frame during a walk (_watch), with the agent's task. Not "stop if what it
@@ -1670,12 +1691,14 @@ WATCH_ASK = ("The robot is walking. Its task now: {task}\nLook at this camera ph
              "only when: the task is done here, the place or thing the task looks for is clearly in view (its sign "
              "or number readable, the right one), or the robot is going wrong (a dead end, the wrong way). Do not "
              "stop for what it passes through or walks along on the way (a door it goes through, the corridor it "
-             "follows, other rooms). Answer: stop (true or false), why in a few words, and the point_2d of what "
-             "made it stop.")
+             "follows, other rooms). Answer: stop (true or false), kind (which of the three), why in a few words, "
+             "and the point_2d of what made it stop.")
+# "task done" and "target in view": _spotted walks up to it. stop first: watch_stream cuts a go-on answer there.
+WATCH_KINDS = ["task done", "target in view", "going wrong"]
 WATCH_SCHEMA = {"type": "object", "properties": {
-    "stop": {"type": "boolean"}, "why": {"type": "string"},
+    "stop": {"type": "boolean"}, "kind": {"type": "string", "enum": WATCH_KINDS}, "why": {"type": "string"},
     "point_2d": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}},
-    "required": ["stop", "why"]}
+    "required": ["stop", "kind", "why"]}
 
 TOOLS = [
     ("get_state", "The robot's mode, posture, safety flags and position on the map.", schema()),
