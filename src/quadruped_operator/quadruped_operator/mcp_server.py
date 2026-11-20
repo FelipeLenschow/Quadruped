@@ -72,13 +72,14 @@ INSTRUCTIONS = """You control a robot dog. Positions are metres in the map frame
 radians/degrees, counter-clockwise, 0 along the map's x axis. Call skill('walk') before moving. Motions block until
 done and report the result. A human with a joystick or the phone app can always take over. The tricks are harmless dog
 poses for fun: sniff points the nose at an object, pee_left / pee_right lift a hind leg beside it (nothing is
-released), wiggle wags the body. To go to a thing or a place you see: go_to_place, with it in words (it stops in front
-of a thing). For a trick at a thing: find_something by its name, then visit the x, y that it gives. Both take their
-own photo, so call them directly; move is not for going somewhere. After each walk, call look and see_map together:
-the photo shows what is there, the map shows where the corridors and openings go, also beside and behind you, where
-the camera does not see. Go to what you see with go_to_place, and to a corridor or opening on the map with
-go_to_map_place. Give each walk its task: what you are doing now, in a sentence. A watcher checks the camera
-while it walks, and stops it when what it sees matters for that task."""
+released), wiggle wags the body. Move with the map, find with the camera: every walk through the building (out of a
+room, along a corridor, through an opening, to a turn) is go_to_map_place, to a place on see_map's drawing. The photo
+is for finding: what is there, which way a corridor goes, the sign or room you look for. go_to_place is only the last
+steps up to a thing you found in a photo (a sign, a room's door, an object). For a trick at a thing: find_something by
+its name, then visit the x, y that it gives. move is not for going somewhere. After each walk, call look and see_map
+together: the photo shows what is there, the map shows where the corridors and openings go, also beside and behind
+you, where the camera does not see. Give each walk its task: what you are doing now, in a sentence. A watcher checks
+the camera while it walks, and stops it when what it sees matters for that task."""
 # Not "to go to something you see: find_something, then visit or go_to the x, y": with that, and look's result naming
 # only find_something, the 27B agent went to a door with find_something and go_to, and Nav2 aborted (the x, y is the
 # lidar on the door: an obstacle), on the way to a room in the corridor (2026-11-18).
@@ -1782,10 +1783,10 @@ TOOLS = [
     # wall (trial new_qwen3-8-27b_15). go_to is not listed now.
     # The whole way in one walk, unlike go_to_place's 4 m: a point on the map is where it is, a floor point near the
     # camera's horizon is not (go_to_place's "middle of the corridor" was 9.6 m off, new_qwen3-8-27b_20).
-    ("go_to_map_place", "Walk to a place on the map: a corridor or an opening (also beside or behind you), an "
-     "unexplored edge, the start, or a thing find_something found. Describe it as it looks on see_map's drawing, or "
-     "give a mark's number. It finds it on the map and walks the whole way there with Nav2, however far. Look when "
-     "there. Needs walk first.",
+    ("go_to_map_place", "How to walk through the building: to a place on the map, a doorway, a corridor or an "
+     "opening (also beside or behind you), an unexplored edge, the start, or a thing find_something found. Describe "
+     "it as it looks on see_map's drawing, or give a mark's number. It finds it on the map and walks the whole way "
+     "there with Nav2, however far. Look when there. Needs walk first.",
      schema({"where": {"type": "string", "description": "the place on the map, in words, or a mark's number"},
              "task": TASK}, ["where"])),
     ("go_to", "Walk to a point on the map with Nav2, avoiding obstacles. Blocks until there.",
@@ -1825,10 +1826,12 @@ TOOLS = [
      "you can see, not a purpose. A thing already on the map comes from there, "
      "also out of view. Not found: name another thing, or turn and try again.",
      schema({"what": {"type": "string", "description": "the thing's name"}}, ["what"])),
-    ("go_to_place", "Walk to a thing or a place you can see: takes a photo, finds what you describe in it, and "
-     "walks there with Nav2 (to a thing or wall in it: stops in front; more than 4 m away: 4 m toward it, then look "
-     "and call again), arriving turned toward the most open way there, or toward what you say to face. "
-     "Needs walk first.",
+    # "Only the last steps up to a thing": the user wants the map to move the robot and the camera to find things
+    # (2026-11-20); the 9B walked to "ahead 5.9 m wide opening" with it, by the photo (new_qwen3-5-9b_3).
+    ("go_to_place", "The last steps up to a thing you found in a photo (a sign, a room's door, an object): takes a "
+     "photo, finds what you describe in it, and walks there with Nav2 (stops in front of it; more than 4 m away: 4 m "
+     "toward it, then look and call again), arriving turned toward it, or toward what you say to face. Not for "
+     "walking through the building (corridors, openings, ahead): that is go_to_map_place. Needs walk first.",
      # facing not required: required, the 2B agent called go_to_place first 0 times in 10 (10 in 10 without), as it
      # had seen nothing to face yet (2026-11-04).
      schema({"where": {"type": "string", "description": "the place, in words"},

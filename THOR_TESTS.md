@@ -36,6 +36,8 @@ model sizes), so big dense models are slow.
       From `new_qwen3-8-27b-think_7` on, that map is `map_open`'s `/map_open` (the app and Nav2's global costmap use
       it too), and SLAM adds scans while the robot stands (`minimum_travel_*: 0`), so the map at the start is not one
       sparse scan.
+      From `new_qwen3-5-9b_5` on, `INSTRUCTIONS` and the tool texts say: move with the map (`go_to_map_place`), find
+      with the camera; `go_to_place` only for the last steps up to a thing found in a photo.
 - [ ] **Vision model = agent model.** With launcher [A] this is already so. With `llm_host.py` started by hand, set
       `mcp.vlm_model` to the agent's model and `mcp.vlm_ctx` to its `--ctx`, or Ollama loads a second model.
 - [ ] **Limits:** `--ctx 16384` (the 8B needs it on the Orin NX), the same `--compact_at` (0.75), and for the ladder the same
