@@ -85,7 +85,12 @@ DONE_NOTE = "When the task is finished, or it cannot be done, call done. Do noth
 DONE_NUDGE = ("You did not call a tool. If the task is finished, or it cannot be done, call done. "
               "Else call the next tool.")
 OPERATOR = ("The operator reads your messages and may answer when you reply without a tool call. Ask only when you "
-            "cannot go on without them. Keep each message short: one line on what you do next, then the tool call.")
+            "cannot go on without them.")
+# Every run, not only with an operator (OPERATOR had "keep each message short", trials never got it): the 9B without
+# thinking wrote 1861 tokens in 12 steps, 62 of the 157 s, often paragraphs retelling the map, while the robot stood
+# (new_qwen3-5-9b_6, 2026-11-20).
+BRIEF = ("Before each tool call, write one short sentence, at most 20 words: what you do next and why. Do not retell "
+         "the task, the map or the results.")
 
 
 class Mcp:
@@ -142,11 +147,14 @@ class OllamaDown(RuntimeError):
     pass
 
 
-def chat(url, model, messages, tools, think, ctx):
+def chat(url, model, messages, tools, think, ctx, reply_tokens=0):
     """Ollama's whole answer: message, and the counts and times (prompt_eval_count is the whole context, cached or
-    not)."""
+    not). reply_tokens: at most this many tokens, without thinking (thinking counts in num_predict too); a reply cut
+    before its tool call gets the nudge to call one."""
     body = {"model": model, "messages": messages, "tools": tools, "stream": False, "think": think,
             "options": {"num_ctx": ctx}}
+    if reply_tokens and not think:
+        body["options"]["num_predict"] = int(reply_tokens)
     req = urllib.request.Request(f"{url}/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=600) as r:
@@ -278,7 +286,7 @@ class RunLog:
     def header(self, args, meta, tools):
         vision = meta.get("vision_model")
         vision = f"{vision}, context {meta.get('vision_ctx')}" if vision else "not given by the server"
-        think = "on" if args.think else "off"
+        think = "on" if args.think else f"off, replies at most {args.reply_tokens} tokens"
         history = f"history to {args.compact_at:.0%} of the context, then the older steps as text"
         with self.lock:
             self.file.write(f"# Agent run {os.path.basename(self.dir)}\n\n"
@@ -603,7 +611,7 @@ def run_chat(io, mcp, args, tools, system, task, outcome=None):
             known = 0  # nothing of it is in Ollama's cache now
         io.status("thinking")
         t = time.monotonic()
-        r = chat(args.ollama, args.model, messages, tools, args.think, args.ctx)
+        r = chat(args.ollama, args.model, messages, tools, args.think, args.ctx, args.reply_tokens)
         reply = r["message"]
         used = r.get("prompt_eval_count", 0) + r.get("eval_count", 0)
         step = {"t": round(time.time(), 2), "context": r.get("prompt_eval_count", 0),
@@ -702,6 +710,8 @@ def main():
     ap.add_argument("--minutes", type=float, default=10.0, help="keep going this long (each chat); 0 = no limit")
     ap.add_argument("--max_calls", type=int, default=200, help="tool calls in one chat")
     ap.add_argument("--think", action="store_true", help="let the model think first (slower)")
+    ap.add_argument("--reply_tokens", type=int, default=200,
+                    help="without --think: at most this many tokens per reply, tool call included (0: no limit)")
     ap.add_argument("--ctx", type=int, default=32768, help="model context in tokens")
     ap.add_argument("--compact_at", type=float, default=0.75,
                     help="when the context reaches this share of --ctx, the older steps become text (photos removed)")
@@ -749,7 +759,7 @@ def main():
             app = AppChat(stop_robot)
             serve(app, args.port)
             print(f"Waiting for a task from the app's Chat tab (http://<robot>:{args.port}/chat). Ctrl+C ends.")
-            system = instructions + "\n" + OPERATOR
+            system = instructions + "\n" + BRIEF + "\n" + OPERATOR
             while True:
                 task = app.next_task()
                 print(f"\n=== task: {task}")
@@ -764,7 +774,8 @@ def main():
                     app.show("info", "chat ended: send a new task, or New chat")
         else:
             ask = not args.auto and sys.stdin.isatty()
-            system = instructions + ("\n" + OPERATOR if ask else "") + ("\n" + DONE_NOTE if args.done_tool else "")
+            system = (instructions + "\n" + BRIEF + ("\n" + OPERATOR if ask else "")
+                      + ("\n" + DONE_NOTE if args.done_tool else ""))
             task = args.task or default_task
             log("you", task)
             io = Terminal(ask)
