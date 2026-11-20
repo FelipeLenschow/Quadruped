@@ -1135,10 +1135,10 @@ class Robot(Node):
             last = (px, py)
         return (*last, False) if math.hypot(last[0] - x, last[1] - y) >= 1.0 else None
 
-    def _vision(self, image, prompt, schema=None):
+    def _vision(self, image, prompt, schema=None, until_go_on=False):
         """The vision model's answer about the photo alone (its own call: in the agent's context its boxes and
-        points miss), held to a JSON schema when given (Ollama's structured output); RuntimeError when Ollama does
-        not answer."""
+        points miss), held to a JSON schema when given (Ollama's structured output); until_go_on: streamed, and cut
+        at '"stop": false' (watch_stream). RuntimeError when Ollama does not answer."""
         # think false: a thinking model (qwen3.8:27b) otherwise thinks first, inside num_predict: 18 s, and the
         # point cut off at '{"point_2d": [540,' (go_to_place failed, trial new_qwen3-8-27b_14); without, 1.8 s and the
         # point. A model that cannot think takes it too (qwen3-vl:2b-instruct, Ollama 0.40.16).
@@ -1148,6 +1148,8 @@ class Robot(Node):
         if schema is not None:
             body["format"] = schema
         url = self.cfg.get("ollama", "http://localhost:11434").rstrip("/") + "/api/chat"
+        if until_go_on:
+            return watch_stream(url, body)
         try:
             req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=120) as r:
@@ -1333,7 +1335,7 @@ class Robot(Node):
                                    interpolation=cv2.INTER_AREA) if img.shape[1] > width else img
                 small_b64 = base64.b64encode(cv2.imencode(".jpg", small)[1].tobytes()).decode()
                 try:
-                    said = self._vision(small_b64, WATCH_ASK.format(task=what), WATCH_SCHEMA)
+                    said = self._vision(small_b64, WATCH_ASK.format(task=what), WATCH_SCHEMA, until_go_on=True)
                     box["frames"] += 1
                     box["say"](f"frame {box['frames']}: " + " ".join(said.split())[:100], small_b64)
                     stop, why, point = watch_answer(said)
@@ -1344,7 +1346,7 @@ class Robot(Node):
                     big = cv2.resize(img, (full, round(img.shape[0] * full / img.shape[1])),
                                      interpolation=cv2.INTER_AREA) if img.shape[1] > full else img
                     full_b64 = base64.b64encode(cv2.imencode(".jpg", big)[1].tobytes()).decode()
-                    again = self._vision(full_b64, WATCH_ASK.format(task=what), WATCH_SCHEMA)
+                    again = self._vision(full_b64, WATCH_ASK.format(task=what), WATCH_SCHEMA, until_go_on=True)
                     ok = watch_answer(again)[0]
                     box["say"](f"frame {box['frames']} on the full frame: " + " ".join(again.split())[:100])
                 except RuntimeError as e:
@@ -1597,6 +1599,30 @@ def schema(props=None, required=()):
 TASK = {"type": "string", "description": "what you are doing now and why, in a sentence (what you look for, where "
         "you turn). A watcher checks the camera while it walks, and stops the walk when the task is done, when what "
         "you look for is in view, or when it is going wrong; you then get that photo and why"}
+def watch_stream(url, body):
+    """The watcher's answer, streamed from Ollama's /api/chat, cut once it starts '"stop": false': the schema puts
+    stop first, and the rest of a go-on answer (a why of ~35 tokens) took 1.4 of its 2.4 s on the Thor (27B,
+    2026-11-20). Closing the request stops Ollama's generation. A stop answer is read to its end (why, point_2d).
+    RuntimeError when Ollama does not answer."""
+    body = dict(body, stream=True)
+    said = ""
+    try:
+        req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            for line in r:
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                said += (chunk.get("message") or {}).get("content", "")
+                if re.search(r'"stop"\s*:\s*false', said):
+                    return '{"stop": false, "why": ""}'
+                if chunk.get("done"):
+                    break
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise RuntimeError(f"the vision model at {url} did not answer ({e}): is Ollama running?")
+    return said
+
+
 def watch_answer(said):
     """The watcher's answer as (stop, why, point_2d or None). Only a JSON object with "stop": true stops: in free
     text the 27B also answered {"label": "stop, ..."}, {"stop": "task is done"} and {"stop": "no", "go on": "yes"}
