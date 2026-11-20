@@ -32,7 +32,7 @@ model sizes), so big dense models are slow.
       2 s each with the 27B) and stops the walk when what it sees matters for the task, with that frame and why. The
       agent (with `--think`) plans.
       From `new_qwen3-8-27b-think_4` on (the watcher crashed on every walk before), the agent's map counts the
-      unknown cells ahead (±30°) as free up to 3 m along beams with no return in `/scan` (from `_8` on: ±90°, 5 m; from `_20` on: ±60°, 5 m).
+      unknown cells ahead (±30°) as free up to 3 m along beams with no return in `/scan` (from `_8` on: ±90°, 5 m; from `_20` on: ±60°, 6 m).
       From `new_qwen3-8-27b-think_7` on, that map is `map_open`'s `/map_open` (the app and Nav2's global costmap use
       it too), and SLAM adds scans while the robot stands (`minimum_travel_*: 0`), so the map at the start is not one
       sparse scan.
