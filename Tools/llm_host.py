@@ -86,10 +86,8 @@ DONE_NUDGE = ("You did not call a tool. If the task is finished, or it cannot be
               "Else call the next tool.")
 OPERATOR = ("The operator reads your messages and may answer when you reply without a tool call. Ask only when you "
             "cannot go on without them.")
-# Every run, not only with an operator: the 9B without thinking wrote 1861 tokens in 12 steps, 62 of the 157 s,
-# while the robot stood (new_qwen3-5-9b_6, 2026-11-20). Not "one short sentence, at most 20 words" with replies cut at
-# 200 tokens: without thinking its text is its reasoning, and runs _9 to _12 went wrong from the start.
-BRIEF = "Do not write too much."
+# No rule on how much it writes: "one short sentence, at most 20 words", then "do not write too much", both made the
+# 9B without thinking worse (its text is its reasoning; runs new_qwen3-5-9b_9 to _12, 2026-11-20).
 
 
 class Mcp:
@@ -758,7 +756,7 @@ def main():
             app = AppChat(stop_robot)
             serve(app, args.port)
             print(f"Waiting for a task from the app's Chat tab (http://<robot>:{args.port}/chat). Ctrl+C ends.")
-            system = instructions + "\n" + BRIEF + "\n" + OPERATOR
+            system = instructions + "\n" + OPERATOR
             while True:
                 task = app.next_task()
                 print(f"\n=== task: {task}")
@@ -773,8 +771,7 @@ def main():
                     app.show("info", "chat ended: send a new task, or New chat")
         else:
             ask = not args.auto and sys.stdin.isatty()
-            system = (instructions + "\n" + BRIEF + ("\n" + OPERATOR if ask else "")
-                      + ("\n" + DONE_NOTE if args.done_tool else ""))
+            system = instructions + ("\n" + OPERATOR if ask else "") + ("\n" + DONE_NOTE if args.done_tool else "")
             task = args.task or default_task
             log("you", task)
             io = Terminal(ask)
