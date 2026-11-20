@@ -302,7 +302,7 @@ class RunLog:
                 self.photos += 1
                 raw = base64.b64decode(data)
                 ext = "png" if raw[:4] == b"\x89PNG" else "jpg"  # not in the f-string: Python 3.8 on the robot
-                name = f"{self.photos:03d}_{tool or kind}.{ext}"
+                name = f"{self.photos:03d}_{'watcher' if kind == 'watcher' else tool or kind}.{ext}"
                 with open(os.path.join(self.dir, name), "wb") as f:
                     f.write(raw)
                 line += f"\n\n  ![{name}]({name})\n"
@@ -655,7 +655,10 @@ def run_chat(io, mcp, args, tools, system, task, outcome=None):
             def note(data, name=name):
                 """Before the result: go_to_place's photo with its points, before Nav2 has the goal."""
                 if isinstance(data, dict) and data.get("kind") == "watcher":
-                    log("watcher", data.get("text", ""), name)  # each walk watcher answer: the log, not the app
+                    # Each walk watcher answer and the frame it checked: the log (map_video's watcher cell),
+                    # not the app.
+                    frame = (data.get("image") or {}).get("data")
+                    log("watcher", data.get("text", ""), name, [frame] if frame else [])
                 elif isinstance(data, dict):
                     image = data.get("image") or {}
                     io.show("note", data.get("text", ""), name, [image["data"]] if image.get("data") else [])

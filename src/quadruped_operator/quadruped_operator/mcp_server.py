@@ -1273,14 +1273,17 @@ class Robot(Node):
         if not task:
             return self._motion(what, fn, *args), None
         done, box = threading.Event(), {}
-        # Each answer as a note, kind watcher: the host logs it (log.md, the video's camera panel), not the app. NOTES
-        # is this HTTP thread's.
+        # Each answer as a note, kind watcher, with the frame it checked: the host logs them (log.md, map_video's
+        # watcher cell), not the app. NOTES is this HTTP thread's.
         send = getattr(NOTES, "send", None)
 
-        def said(msg):
+        def said(msg, frame_b64=None):
             if send is not None:
+                note = {"text": msg, "kind": "watcher"}
+                if frame_b64:
+                    note["image"] = {"data": frame_b64, "mimeType": "image/jpeg"}
                 with contextlib.suppress(OSError):
-                    send({"text": msg, "kind": "watcher"})
+                    send(note)
         box["say"] = said
         t = threading.Thread(target=self._watch, args=(task, done, box), daemon=True)
         t.start()
@@ -1329,7 +1332,7 @@ class Robot(Node):
                 try:
                     said = self._vision(small_b64, WATCH_ASK.format(task=what))
                     box["frames"] += 1
-                    box["say"](f"frame {box['frames']}: " + " ".join(said.split())[:100])
+                    box["say"](f"frame {box['frames']}: " + " ".join(said.split())[:100], small_b64)
                     if not wants_stop(said) or done.is_set():
                         continue
                     found = POINT.search(said)

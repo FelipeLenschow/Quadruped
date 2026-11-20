@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Map video: the Nav2 map of a recorded run as it grows, with the robot's path, Nav2's plan, the objects, the
-camera, and the agent's photos and messages.
+"""Map video: the Nav2 map of a recorded run as it grows (/map_open when recorded, else /map), with the robot's path,
+Nav2's plan, the objects, the camera, the agent's photos and messages, and the walk watcher's frames and answers: four
+cells (map, camera / agent photo, watcher) over the agent's messages.
 
     python3 Tools/map_video.py logs/thor/t11_qwen8b_1            # a trial folder from Tools/thor_trial.py
     python3 Tools/map_video.py Mcap/Recordings/run_x --log logs/agent/2026-11-18_10-00-00/log.md
@@ -41,6 +42,7 @@ sys.path.insert(0, os.path.join(REPO, "src", "quadruped_common"))
 from quadruped_common.map_files import FREE, OCCUPIED, UNKNOWN, origin_yaw, trinary, write_map  # noqa: E402
 
 MAP, TF, PLAN, OBJECTS = "/map", "/tf", "/plan", "/objects"
+MAP_OPEN = "/map_open"  # map_open's: /map with the open space ahead, as the app, Nav2 and the agent saw it
 # The robot's own camera first: go2_camera's JPEGs as the Go2 sends them; camera_bridge's copy of them only when
 # go2_camera was not recorded. Never the small preview or the boxes drawn by the detector.
 CAMERAS = [re.compile(r"^/go2_camera/image/compressed$"), re.compile(r"^/camera/[^/]+/image_raw/compressed$")]
@@ -54,7 +56,7 @@ PATH, PLAN_C, GOAL, ROBOT, OBJ = (220, 120, 20), (40, 170, 40), (200, 40, 200), 
 KIND_COLORS = {"you": (255, 255, 255), "call": (120, 220, 255), "said": (140, 255, 140), "error": (90, 90, 255),
                "done": (255, 200, 90),
                "note": (200, 200, 200), "info": (200, 200, 200), "watcher": (80, 180, 255)}
-WATCHER_SHOWN_S = 6.0  # a walk watcher's answer stays on the camera panel this long (it checks about every 2 s)
+WATCHER_IDLE_S = 5.0  # no watcher frame this long: it is not watching (no walk with a task)
 BG, TEXT = (32, 32, 32), (235, 235, 235)
 
 
@@ -154,7 +156,8 @@ def read_bag(files, camera, frame_dt):
     mo_t, mo, ob = [], [], {b: ([], []) for b in BASES}
     plans, plan_t, objects, obj_t, cam, cam_t = [], [], [], [], [], []
     t_first, t_last = math.inf, -math.inf
-    topics = [MAP, TF, PLAN, OBJECTS] + ([camera] if camera else [])
+    open_maps, open_t = [], []
+    topics = [MAP, MAP_OPEN, TF, PLAN, OBJECTS] + ([camera] if camera else [])
     for f in files:
         for m in read_ros2_messages(f, topics=topics):
             t, topic, msg = m.log_time_ns * 1e-9, m.channel.topic, m.ros_msg
@@ -168,15 +171,20 @@ def read_bag(files, camera, frame_dt):
                     elif parent == "odom" and child in ob:
                         ob[child][0].append(t)
                         ob[child][1].append(pose2d(tr.transform))
-            elif topic == MAP:
+            elif topic in (MAP, MAP_OPEN):
                 info, data = msg.info, msg.data
                 cells = (np.frombuffer(data, np.int8) if isinstance(data, (bytes, bytearray))
                          else np.asarray(data, np.int8)).reshape(info.height, info.width)
                 if abs(origin_yaw(info)) > 1e-3:
                     print(f"warning: the map's origin is turned {origin_yaw(info):.3f} rad; drawn as not turned")
-                maps.append((info.origin.position.x, info.origin.position.y, info.resolution, trinary(cells)))
+                drawn = (info.origin.position.x, info.origin.position.y, info.resolution, trinary(cells))
+                if topic == MAP_OPEN:
+                    open_maps.append(drawn)
+                    open_t.append(t)
+                    continue
+                maps.append(drawn)
                 map_t.append(t)
-                last_grid = SimpleNamespace(info=info, data=cells.ravel())
+                last_grid = SimpleNamespace(info=info, data=cells.ravel())  # map.pgm: SLAM's own
             elif topic == PLAN:
                 plan_t.append(t)
                 plans.append(np.array([[p.pose.position.x, p.pose.position.y] for p in msg.poses]).reshape(-1, 2))
@@ -189,6 +197,8 @@ def read_bag(files, camera, frame_dt):
             elif topic == camera and (not cam_t or t - cam_t[-1] >= 0.9 * frame_dt):
                 cam_t.append(t)
                 cam.append(bytes(msg.data))
+    if open_maps:  # drawn as the app showed it
+        maps, map_t = open_maps, open_t
     base = next((b for b in BASES if ob[b][0]), None)
     ob_t, ob_p = ob[base] if base else ([], [])
     # The robot's path on the map: odom -> base with the map -> odom of its time.
@@ -272,13 +282,21 @@ class Renderer:
     def __init__(self, bag, events, photos, size, panel, speed, title):
         self.bag, self.events, self.photos, self.speed, self.title = bag, events, photos, speed, title
         self.ev_t = [e[0] for e in events]
+        # The agent's photos, and the walk watcher's frames (llm_host saves them as NNN_watcher.jpg) on their own.
+        self.watch_ph = [p for p in photos if p[2] == "watcher"]
+        self.photos = photos = [p for p in photos if p[2] != "watcher"]
         self.ph_t = [p[0] for p in photos]
-        self.S = size
-        self.P = (int(size * 0.8) // 2) * 2 if panel else 0
+        self.wph_t = [p[0] for p in self.watch_ph]
+        # Four cells of size x CH: the map | the camera, the agent's photo | the watcher; the caption under them.
         self.fs = size / 720
+        self.label = int(24 * self.fs)
+        self.CW, self.CH = size, (int(size * 9 / 16) + self.label) // 2 * 2
+        self.panel = panel
         self.line = int(26 * self.fs)
         self.CAP = (int(self.line * 4.6) // 2) * 2
-        self.W, self.H = self.S + self.P, self.S + self.CAP
+        self.W = 2 * self.CW if panel else self.CW
+        self.H = (2 * self.CH if panel else self.CH) + self.CAP
+        self.MW, self.MH = self.CW, self.CH
         # One fixed view: every map's extent and the whole path, 0.5 m around.
         xs, ys = [], []
         for ox, oy, res, img in bag.maps:
@@ -290,9 +308,9 @@ class Renderer:
         if not xs:
             xs, ys = [-5, 5], [-5, 5]
         x0, x1, y0, y1 = min(xs) - 0.5, max(xs) + 0.5, min(ys) - 0.5, max(ys) + 0.5
-        self.ppm = size / max(x1 - x0, y1 - y0)
-        self.x0 = x0 - (size / self.ppm - (x1 - x0)) / 2
-        self.y1 = y1 + (size / self.ppm - (y1 - y0)) / 2
+        self.ppm = min(self.MW / (x1 - x0), self.MH / (y1 - y0))
+        self.x0 = x0 - (self.MW / self.ppm - (x1 - x0)) / 2
+        self.y1 = y1 + (self.MH / self.ppm - (y1 - y0)) / 2
         self.lut = np.zeros((256, 3), np.uint8)
         self.lut[:] = COLORS[UNKNOWN]
         for value, color in COLORS.items():
@@ -300,8 +318,9 @@ class Renderer:
         self.map_i, self.map_img = None, None
         self.cam_i, self.cam_img = None, None
         self.ph_i, self.ph_img = None, None
+        self.wph_i, self.wph_img = None, None
         self.task = next((e[2] for e in events if e[1] == "you"), "")
-        self.watch = [e for e in events if e[1] == "watcher"]  # on the camera panel, not in the caption
+        self.watch = [e for e in events if e[1] == "watcher"]  # in the watcher's cell, not in the caption
         self.watch_t = [e[0] for e in self.watch]
 
     def px(self, x, y):
@@ -312,13 +331,13 @@ class Renderer:
             return self.map_img
         self.map_i = i
         if i < 0:
-            self.map_img = np.full((self.S, self.S, 3), COLORS[UNKNOWN], np.uint8)
+            self.map_img = np.full((self.MH, self.MW, 3), COLORS[UNKNOWN], np.uint8)
             return self.map_img
         ox, oy, res, img = self.bag.maps[i]
         colored = self.lut[np.flipud(img)]
         a = res * self.ppm
         m = np.float32([[a, 0, (ox - self.x0) * self.ppm], [0, a, (self.y1 - oy - img.shape[0] * res) * self.ppm]])
-        self.map_img = cv2.warpAffine(colored, m, (self.S, self.S), flags=cv2.INTER_NEAREST,
+        self.map_img = cv2.warpAffine(colored, m, (self.MW, self.MH), flags=cv2.INTER_NEAREST,
                                       borderMode=cv2.BORDER_CONSTANT, borderValue=COLORS[UNKNOWN])
         return self.map_img
 
@@ -350,28 +369,28 @@ class Renderer:
             cv2.circle(img, p, int(7 * fs), ROBOT, -1, cv2.LINE_AA)
             cv2.arrowedLine(img, p, q, ROBOT, max(1, int(3 * fs)), cv2.LINE_AA, tipLength=0.35)
         # 1 m scale bar
-        x0, y0 = int(12 * fs), self.S - int(14 * fs)
+        x0, y0 = int(12 * fs), self.MH - int(14 * fs)
         cv2.line(img, (x0, y0), (x0 + int(self.ppm), y0), (0, 0, 0), max(1, int(3 * fs)))
         put(img, "1 m", (x0, y0 - int(6 * fs)), 0.45 * fs, (0, 0, 0))
         return img
 
-    def side_panel(self, t):
-        b, P, S, fs = self.bag, self.P, self.S, self.fs
-        panel = np.full((S, P, 3), BG, np.uint8)
-        label = int(24 * fs)
-        h = S // 2 - label
+    def cell(self, title, img, color=TEXT):
+        """One cell: a title line, then img fitted under it."""
+        out = np.full((self.CH, self.CW, 3), BG, np.uint8)
+        put(out, title, (int(6 * self.fs), int(17 * self.fs)), 0.5 * self.fs, color, self.CW - int(12 * self.fs))
+        out[self.label:] = fit(img, self.CW, self.CH - self.label)
+        return out
+
+    def camera_cell(self, t):
+        b = self.bag
         i = latest(b.cam_t, t)
         if i != self.cam_i:
             self.cam_i = i
             self.cam_img = (cv2.imdecode(np.frombuffer(b.cam[i], np.uint8), cv2.IMREAD_REDUCED_COLOR_2)
                             if i >= 0 else None)
-        put(panel, "camera" if b.cam else "camera: not recorded", (int(6 * fs), int(17 * fs)), 0.5 * fs, TEXT)
-        w = latest(self.watch_t, t)
-        if w >= 0 and t - self.watch_t[w] < WATCHER_SHOWN_S:
-            said = self.watch[w][2].split(":", 1)[-1].strip()  # "watcher go_to_place: frame 3: go on"
-            put(panel, f"watcher: {said}", (int(70 * fs), int(17 * fs)), 0.5 * fs, KIND_COLORS["watcher"],
-                P - int(76 * fs))
-        panel[label:label + h] = fit(self.cam_img, P, h)
+        return self.cell("camera" if b.cam else "camera: not recorded", self.cam_img)
+
+    def photo_cell(self, t):
         i = latest(self.ph_t, t)
         if i != self.ph_i:
             self.ph_i = i
@@ -379,9 +398,23 @@ class Renderer:
         text = "agent photo"
         if i >= 0:
             text += f": {self.photos[i][2]} at {self.clock(self.photos[i][0])}"
-        put(panel, text, (int(6 * fs), S // 2 + int(17 * fs)), 0.5 * fs, TEXT, P - int(12 * fs))
-        panel[S // 2 + label:S // 2 + label + h] = fit(self.ph_img, P, h)
-        return panel
+        return self.cell(text, self.ph_img)
+
+    def watcher_cell(self, t):
+        """The frames the walk watcher checked, each until the next (its own rate), with its latest answer: green
+        go on, red stop."""
+        i = latest(self.wph_t, t)
+        if i != self.wph_i:
+            self.wph_i = i
+            self.wph_img = cv2.imread(self.watch_ph[i][1]) if i >= 0 else None
+        w = latest(self.watch_t, t)
+        if i < 0 or t - self.wph_t[i] > WATCHER_IDLE_S:
+            img = None if self.wph_img is None else (self.wph_img // 3)  # the last frame, dimmed
+            return self.cell("watcher: not watching (no walk with a task)", img, (150, 150, 150))
+        said = self.watch[w][2].split(":", 1)[-1].strip() if w >= 0 else ""  # "watcher go_to_place: frame 3: go on"
+        stop = re.search(r":\s*\W*stop\b|\"stop\"\s*:\s*\"?(true|yes)", said, re.I) is not None
+        return self.cell(f"watcher {self.clock(self.wph_t[i])}  {said}", self.wph_img,
+                         (80, 80, 255) if stop else (120, 230, 120))
 
     def clock(self, t):
         s = max(0, int(t - self.bag.t0))
@@ -403,10 +436,13 @@ class Renderer:
 
     def frame(self, t):
         out = np.empty((self.H, self.W, 3), np.uint8)
-        out[:self.S, :self.S] = self.map_panel(t)
-        if self.P:
-            out[:self.S, self.S:] = self.side_panel(t)
-        out[self.S:] = self.caption(t)
+        CW, CH = self.CW, self.CH
+        out[:CH, :CW] = self.map_panel(t)
+        if self.panel:
+            out[:CH, CW:] = self.camera_cell(t)
+            out[CH:2 * CH, :CW] = self.photo_cell(t)
+            out[CH:2 * CH, CW:] = self.watcher_cell(t)
+        out[self.H - self.CAP:] = self.caption(t)
         return out
 
 
@@ -448,8 +484,8 @@ def main():
     ap.add_argument("--no_camera_video", action="store_true", help="no camera.mp4")
     ap.add_argument("--speed", type=float, default=4.0, help="run seconds per video second")
     ap.add_argument("--fps", type=int, default=10)
-    ap.add_argument("--size", type=int, default=720, help="map panel size in pixels (even)")
-    ap.add_argument("--no_panel", action="store_true", help="no camera and agent photo panel")
+    ap.add_argument("--size", type=int, default=720, help="width of each of the four cells in pixels (even)")
+    ap.add_argument("--no_panel", action="store_true", help="the map alone: no camera, agent photo and watcher cells")
     ap.add_argument("--hold", type=float, default=3.0, help="seconds the last frame stays")
     ap.add_argument("--out_dir", default=None)
     args = ap.parse_args()
