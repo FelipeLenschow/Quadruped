@@ -257,6 +257,7 @@ mcp:
   frontier_min_m: 0.6
   frontier_clearance: 0.2
   frontier_width_m: 0.6   # frontiers (see_map's marks, openings near) only on free space this wide: not a beam's strip
+  frontier_gap_m: 0.25    # after unknown gaps this wide inside free space are closed (a missing beam's line)
   frontiers_max: 8
   openings_m: 6.0       # go_to_place / go_to_map_place results: the unexplored edges within this, at least
   openings_min_m: 1.0   # this wide, the widest openings_max of them, nearest first, with direction words

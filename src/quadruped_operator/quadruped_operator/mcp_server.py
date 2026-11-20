@@ -510,18 +510,29 @@ class Robot(Node):
                         return True
             return False
 
-        # Only free space as wide as the robot has edges: one beam's strip of free cells through a doorway (map_open,
-        # SLAM) made an "unexplored" mark at its end, which the agent took for the opening to turn left at, 2 m before
-        # the crossing (new_qwen3-8-27b-think_11). Morphological opening: what a frontier_width_m disc cannot cover
-        # goes.
+        # Free space narrower than the robot counts as unknown here: one beam's strip of free cells through a doorway
+        # (map_open, SLAM) made an "unexplored" mark at its end, which the agent took for the opening to turn left
+        # at, 2 m before the crossing (new_qwen3-8-27b-think_11). Not dropped alone: then a corridor ending in
+        # separate beam stripes lost its mark ahead, its edge cut into pieces under frontier_min_m between the stripes
+        # (new_qwen3-8-27b-think_12). Wide: what a frontier_width_m disc covers (morphological opening), after
+        # unknown gaps up to frontier_gap_m inside free space are closed: a corridor seen ahead, split along by one
+        # missing beam, was two strips too narrow each (_12 too).
         k = max(1, int(round(float(self.cfg.get("frontier_width_m", 0.6)) / res))) | 1
-        wide = cv2.morphologyEx(((np.asarray(d, np.int8) >= 0) & (np.asarray(d, np.int8) < 25)).astype(np.uint8)
-                                .reshape(h, w), cv2.MORPH_OPEN,
+        kg = max(1, int(round(float(self.cfg.get("frontier_gap_m", 0.25)) / res))) | 1
+        cells = np.asarray(d, np.int8).reshape(h, w)
+        free_ = ((cells >= 0) & (cells < 25)).astype(np.uint8)
+        closed = cv2.morphologyEx(free_, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kg, kg)))
+        closed[cells >= 65] = 0  # never through a wall
+        wide = cv2.morphologyEx(closed, cv2.MORPH_OPEN,
                                 cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))).ravel().tolist()
+
+        def beyond(n):  # unknown, or free but not wide: never a wall
+            return not wide[n] and d[n] < 65
+
         edge = set()
         for i in range(w, w * (h - 1)):
             x = i % w
-            if 0 < x < w - 1 and wide[i] and free(i) and -1 in (d[i - 1], d[i + 1], d[i - w], d[i + w]) \
+            if 0 < x < w - 1 and wide[i] and (beyond(i - 1) or beyond(i + 1) or beyond(i - w) or beyond(i + w)) \
                     and not near_wall(i):
                 edge.add(i)
         min_cells = float(self.cfg.get("frontier_min_m", 0.6)) / res
