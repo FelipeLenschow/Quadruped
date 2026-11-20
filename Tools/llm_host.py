@@ -86,11 +86,10 @@ DONE_NUDGE = ("You did not call a tool. If the task is finished, or it cannot be
               "Else call the next tool.")
 OPERATOR = ("The operator reads your messages and may answer when you reply without a tool call. Ask only when you "
             "cannot go on without them.")
-# Every run, not only with an operator (OPERATOR had "keep each message short", trials never got it): the 9B without
-# thinking wrote 1861 tokens in 12 steps, 62 of the 157 s, often paragraphs retelling the map, while the robot stood
-# (new_qwen3-5-9b_6, 2026-11-20).
-BRIEF = ("Before each tool call, write one short sentence, at most 20 words: what you do next and why. Do not retell "
-         "the task, the map or the results.")
+# Every run, not only with an operator: the 9B without thinking wrote 1861 tokens in 12 steps, 62 of the 157 s,
+# while the robot stood (new_qwen3-5-9b_6, 2026-11-20). Not "one short sentence, at most 20 words" with replies cut at
+# 200 tokens: without thinking its text is its reasoning, and runs _9 to _12 went wrong from the start.
+BRIEF = "Do not write too much."
 
 
 class Mcp:
@@ -710,7 +709,7 @@ def main():
     ap.add_argument("--minutes", type=float, default=10.0, help="keep going this long (each chat); 0 = no limit")
     ap.add_argument("--max_calls", type=int, default=200, help="tool calls in one chat")
     ap.add_argument("--think", action="store_true", help="let the model think first (slower)")
-    ap.add_argument("--reply_tokens", type=int, default=200,
+    ap.add_argument("--reply_tokens", type=int, default=0,
                     help="without --think: at most this many tokens per reply, tool call included (0: no limit)")
     ap.add_argument("--ctx", type=int, default=32768, help="model context in tokens")
     ap.add_argument("--compact_at", type=float, default=0.75,
