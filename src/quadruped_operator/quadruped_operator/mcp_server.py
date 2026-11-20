@@ -196,6 +196,39 @@ def draw_map(grid, pose, radius, size, marks, trail):
     return img, drawn
 
 
+def stand_near(grid, start, target, approach, room_m):
+    """(x, y, metres from target) of where to stand to face target: a free cell with room_m to the nearest wall,
+    reachable from start (the robot) through such cells, as near approach m from target as there is; when nothing
+    near target is mapped yet, the reachable cell nearest it. None with no such cell near start. Not approach m
+    back along the line from the robot: for the OM2780 sign on a side wall, seen 8 m down a corridor at a shallow
+    angle, that point was against the wall where the map was not seen yet; Nav2 found no plan and drove the robot
+    back to the lab door (new_qwen3-8-27b-think_20)."""
+    info = grid.info
+    res, w, h = info.resolution, info.width, info.height
+    oyaw, o = origin_yaw(info), info.origin.position
+    c, s = math.cos(oyaw), math.sin(oyaw)
+    cells = np.asarray(grid.data, np.int8).reshape(h, w)
+    room = cv2.distanceTransform((cells < 65).astype(np.uint8), cv2.DIST_L2, 3) * res
+    ok = ((cells >= 0) & (cells < 25) & (room >= room_m)).astype(np.uint8)
+    n, labels = cv2.connectedComponents(ok, connectivity=8)
+    ii, jj = np.nonzero(ok)
+    if not len(ii):
+        return None
+    xs = o.x + c * (jj + 0.5) * res - s * (ii + 0.5) * res  # each ok cell's centre on the map
+    ys = o.y + s * (jj + 0.5) * res + c * (ii + 0.5) * res
+    to_robot = np.hypot(xs - start[0], ys - start[1])
+    k = int(np.argmin(to_robot))
+    if to_robot[k] > 1.0:  # the robot is not near free floor with room
+        return None
+    mine = labels[ii, jj] == labels[ii[k], jj[k]]
+    xs, ys, to_robot = xs[mine], ys[mine], to_robot[mine]
+    to_target = np.hypot(xs - target[0], ys - target[1])
+    near = (to_target >= approach - 0.05) & (to_target <= approach + 1.0)
+    k = int(np.argmin(np.abs(to_target - approach) + 0.05 * to_robot + np.where(near, 0.0, 1e3))) if near.any() \
+        else int(np.argmin(to_target))
+    return float(xs[k]), float(ys[k]), float(to_target[k])
+
+
 def reachable_goal(grid, start, goal, clearance):
     """goal (map x, y), or, when it is in a wall or nearer one than clearance m, the first point back along the line
     to start (the robot) that is not: in front of the wall, on the robot's side. Free floor and space not seen yet
@@ -1411,19 +1444,22 @@ class Robot(Node):
         # "task done" too: on the OM2780 frame of _14 the 27B gave that kind, 5 m from the sign (Thor, 2026-11-20).
         if s.get("kind") in ("task done", "target in view") and at is not None and p is not None \
                 and math.hypot(at["x"] - p[0], at["y"] - p[1]) > stop + 0.3:
-            dx, dy = at["x"] - p[0], at["y"] - p[1]
-            d = math.hypot(dx, dy)
-            # At most place_max_m, as go_to_place: the OM2780 sign 8 m away was where the map was not seen yet, Nav2
-            # found no plan and drove the robot back to the lab door before it gave up (new_qwen3-8-27b-think_20).
-            go = min(d - stop, float(self.cfg.get("place_max_m", 4.0)))
-            moved = self._motion("go to what the watcher saw", self._go_to, p[0] + go * dx / d, p[1] + go * dy / d,
-                                 math.degrees(math.atan2(dy, dx)))
-            if moved["isError"]:
-                msg += "; walking up to it failed: " + moved["content"][0]["text"]
-            elif go < d - stop:
-                msg += f"; walked {go:.1f} m of the {d:.1f} m toward it, facing it: look again there"
+            g = self.grid
+            spot = stand_near(g, p[:2], (at["x"], at["y"]), stop, float(self.cfg.get("stand_room_m", 0.3))) \
+                if g is not None else None
+            if spot is None:
+                msg += "; not walked up to it: no free floor with room for the robot near it on the map"
             else:
-                msg += f"; walked up to it, {stop:g} m in front, facing it"
+                sx, sy, left = spot
+                moved = self._motion("go to what the watcher saw", self._go_to, sx, sy,
+                                     math.degrees(math.atan2(at["y"] - sy, at["x"] - sx)))
+                if moved["isError"]:
+                    msg += "; walking up to it failed: " + moved["content"][0]["text"]
+                elif left > stop + 0.5:
+                    msg += (f"; walked toward it as far as the mapped floor goes, {left:.1f} m from it, facing it: "
+                            "look again there")
+                else:
+                    msg += f"; walked up to it, {left:.1f} m in front, facing it"
             p = self.pose()
         if at is not None and p is not None:
             d = math.hypot(at["x"] - p[0], at["y"] - p[1])
@@ -1433,7 +1469,7 @@ class Robot(Node):
         if p is not None:
             msg += f"; now at x={p[0]:.2f} y={p[1]:.2f}"
         msg += "; the photo is the camera frame that stopped it" + self._openings()
-        if "walked up to it" in msg or "toward it, facing it" in msg:
+        if "walked up to it" in msg or "walked toward it" in msg:
             msg = msg.replace("the photo is the camera frame that stopped it",
                               "the first photo is the camera frame that stopped it, the second what it sees now")
             now = self.look()

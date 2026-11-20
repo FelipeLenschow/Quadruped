@@ -240,6 +240,7 @@ mcp:
   image_width: 640
   goal_timeout: 120
   approach: 0.6
+  stand_room_m: 0.3      # the watcher's walk-up: where it stands has this much room to the nearest wall
   visit_radius: 1.0
   max_move_m: 2.0
   map_ray_m: 15.0
