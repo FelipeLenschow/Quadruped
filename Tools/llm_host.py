@@ -85,9 +85,9 @@ DONE_NOTE = "When the task is finished, or it cannot be done, call done. Do noth
 DONE_NUDGE = ("You did not call a tool. If the task is finished, or it cannot be done, call done. "
               "Else call the next tool.")
 OPERATOR = ("The operator reads your messages and may answer when you reply without a tool call. Ask only when you "
-            "cannot go on without them.")
-# No rule on how much it writes: "one short sentence, at most 20 words", then "do not write too much", both made the
-# 9B without thinking worse (its text is its reasoning; runs new_qwen3-5-9b_9 to _12, 2026-11-20).
+            "cannot go on without them. Keep each message short: one line on what you do next, then the tool call.")
+# Trials have no rule on how much it writes: "one short sentence, at most 20 words", then "do not write too much",
+# both made the 9B without thinking worse (its text is its reasoning; runs new_qwen3-5-9b_9 to _12, 2026-11-20).
 
 
 class Mcp:
@@ -283,7 +283,8 @@ class RunLog:
     def header(self, args, meta, tools):
         vision = meta.get("vision_model")
         vision = f"{vision}, context {meta.get('vision_ctx')}" if vision else "not given by the server"
-        think = "on" if args.think else f"off, replies at most {args.reply_tokens} tokens"
+        think = "on" if args.think else "off" + (f", replies at most {args.reply_tokens} tokens" if args.reply_tokens
+                                                  else "")
         history = f"history to {args.compact_at:.0%} of the context, then the older steps as text"
         with self.lock:
             self.file.write(f"# Agent run {os.path.basename(self.dir)}\n\n"
